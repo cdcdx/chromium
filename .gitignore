@@ -10,6 +10,7 @@
 # mac
 .DS_Store
 __pycache__
+.env
 
 # google
 _bad_scm/
