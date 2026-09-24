@@ -1,0 +1,23 @@
+# ide
+.codex/
+.cursor/
+.github/
+.idea/
+.trae/
+.vscode/
+.workbuddy/
+
+# mac
+.DS_Store
+__pycache__
+
+# google
+_bad_scm/
+.cipd/
+
+# custom
+.arupa-delivery-compile/
+backup/
+dist/
+docs/
+arupa_desktop/
