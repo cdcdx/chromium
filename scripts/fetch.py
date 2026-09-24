@@ -171,10 +171,39 @@ def chromium_url(cfg: dict, proxy: str) -> str:
     return url
 
 
+PROXY_ENV_KEYS = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
+PROXY_GIT_KEYS = ("http.proxy", "https.proxy")
+
+
+def craw(cfg: dict, *keys):
+    """按键取值，区分"未设置"(None) 与"显式置空"('')—— cget() 会把两者混为一谈。"""
+    for k in keys:
+        if k in cfg:
+            return cfg[k]
+        for e in (k, k.upper()):
+            if e in os.environ:
+                return os.environ[e]
+    return None
+
+
 def apply_proxy(cfg: dict, proxy: str):
-    p = proxy or cget(cfg, "https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY")
+    """https_proxy 为空（未设置或显式置空）= 不需要 HTTP 代理：
+    主动清掉环境变量与 git 全局代理，避免上一轮带代理跑留下的残留。"""
+    if proxy:
+        p = proxy
+    elif (craw(cfg, "https_proxy", "HTTPS_PROXY") or "") == "":
+        # https_proxy 显式置空 = 明确不用代理，不再回退 http_proxy / HTTP_PROXY
+        p = ""
+    else:
+        p = cget(cfg, "https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY")
     if not p:
-        warn("未配置代理，直连（拉 chromium / cipd 通常需要在 .env 设 https_proxy）")
+        for k in PROXY_ENV_KEYS:
+            os.environ.pop(k, None)
+        for k in PROXY_GIT_KEYS:
+            if out(["git", "config", "--global", "--get", k]):
+                git(["config", "--global", "--unset", k], check=False)
+                log(f"已清除 git 全局 {k}")
+        log("https_proxy 为空 —— 直连，不使用 HTTP 代理（如需代理在 .env 设 https_proxy 或加 --proxy URL）")
         return ""
     for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
         os.environ[k] = p
@@ -717,7 +746,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("targets", nargs="*", metavar="目标",
                    help=" / ".join(TARGETS) + "（默认 all）")
     p.add_argument("--ver", dest="ver", default="", help="chromium 版本标签")
-    p.add_argument("--proxy", default="", help="HTTP 代理 URL")
+    p.add_argument("--proxy", default="", help="HTTP 代理 URL（为空=不使用代理）")
     p.add_argument("--jobs", type=int, default=8, help="gclient 并行度（默认 8）")
     p.add_argument("--nohooks", action="store_true", help="deps 只同步依赖，不跑 hooks")
     p.add_argument("--shallow", dest="shallow", action="store_const", const=True, default=None,
