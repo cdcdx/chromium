@@ -6,7 +6,6 @@
 #    目标（可多选，默认 all）:
 #      depot_tools   depot_tools 工具集（gclient / gn / autoninja）
 #      chromium      src/，pin 到 --ver（默认浅克隆，只拉一个版本）
-#      v8            src/v8（通常由 DEPS 带出，需单独拉时才用）
 #      deps          gclient sync（第三方依赖 + hooks）
 #      hooks         gclient runhooks（只补工具链；配 deps --nohooks 用）
 #      android       Android 依赖（.gclient 加 target_os=android 后 sync；宿主须 Linux）
@@ -14,7 +13,7 @@
 #      kernel        nomadbrowser.kernel/
 #      pc            nomadbrowser.pc/
 #      link          内核挂载到 src/chrome/browser/arupa_desktop
-#      all           depot_tools + chromium + v8 + kernel + pc + link（默认）
+#      all           depot_tools + chromium + kernel + pc + link（默认）
 #    选项:
 #      --ver X.Y.Z.W      版本标签（默认取 .env chromium_ver）
 #      --proxy URL        HTTP 代理（默认取 .env https_proxy）
@@ -59,7 +58,6 @@ from pathlib import Path
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 CHROMIUM_SRC = WORKSPACE_ROOT / "src"
-V8_SRC = CHROMIUM_SRC / "v8"
 KERNEL_DIR = WORKSPACE_ROOT / "nomadbrowser.kernel"
 PC_DIR = WORKSPACE_ROOT / "nomadbrowser.pc"
 MODULE_RELDIR = "chrome/browser/arupa_desktop"
@@ -701,8 +699,7 @@ def do_link():
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
-TARGETS = ("depot_tools", "chromium", "v8", "deps", "hooks", "android", "sysdeps",
-           "kernel", "pc", "link", "all")
+TARGETS = ("depot_tools", "chromium", "deps", "hooks", "android", "sysdeps", "kernel", "pc", "link", "all")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -775,7 +772,7 @@ def main(argv=None) -> int:
     expanded: list = []
     for t in targets:
         if t == "all":
-            expanded += ["depot_tools", "chromium", "v8", "kernel", "pc"]
+            expanded += ["depot_tools", "chromium", "kernel", "pc"]
             if not args.no_link:
                 expanded.append("link")
         else:
