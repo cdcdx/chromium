@@ -570,6 +570,25 @@ def has_target_android() -> bool:
     return bool(m and "android" in m.group(1))
 
 
+def ensure_gclient_target_android():
+    """确保 .gclient 带 target_os=android（只加 target_os，不动版本 pin）。
+
+    build 侧也要用: 直接从 build.py 跑 kernel down 时，若 .gclient 没有 target_os=android，
+    gclient sync 根本不会拉 NDK / SDK / JDK，gn 会甩出几十屏"找不到 android 工具链"。"""
+    if not GCLIENT_FILE.exists():
+        err(f"缺少 {GCLIENT_FILE} —— 先跑: python3 scripts/fetch.py chromium")
+    text = GCLIENT_FILE.read_text(encoding="utf-8", errors="replace")
+    new = merge_target_os(text, ["android"])
+    if new == text:
+        return False
+    log(".gclient 加入 target_os=android（保留宿主 OS，免得删掉它的依赖）")
+    if DRY_RUN:
+        log(f"(dry-run) 写入 {GCLIENT_FILE}")
+        return True
+    GCLIENT_FILE.write_text(new, encoding="utf-8")
+    return True
+
+
 # ── 同步状态（DEPS 指纹）────────────────────────────────────────────────────
 def deps_hash() -> str:
     f = CHROMIUM_SRC / "DEPS"
@@ -791,8 +810,9 @@ def do_sysdeps(android: bool):
         if not script.exists():
             err(f"缺少 {script} —— 先跑: python3 scripts/fetch.py chromium")
         sudo = setup_sudo()
-        if not android:
-            ensure_apt_suites(sudo)
+        # Android 同样要补 updates 套件：install-build-deps.sh --android 装的 openjdk /
+        # libc6-dev 等来自 main+updates，缺了会"找不到包"而不是报错后继续。
+        ensure_apt_suites(sudo)
         log("运行 install-build-deps.sh（十几到几十分钟，视网速）")
         cmd = [*sudo, "env", "DEBIAN_FRONTEND=noninteractive", "bash", str(script), "--no-prompt"]
         if android:
@@ -817,6 +837,65 @@ def do_sysdeps(android: bool):
             log(f"Visual Studio: {vs}")
         else:
             warn("未找到 Visual Studio 2022+，编译大概率失败")
+
+
+# ── Android SDK（编 APK 用；Chromium 自带的 third_party/android_sdk 不够）──────
+ANDROID_CLI_TOOLS_URL = ("https://dl.google.com/android/repository/"
+                         "commandlinetools-linux-11076708_latest.zip")
+
+# 与 nomadbrowser.android/app/build.gradle 对齐: compileSdk 37 / targetSdk 37 / minSdk 26
+ANDROID_SDK_PACKAGES = ["platform-tools", "platforms;android-37", "build-tools;37.0.0"]
+
+
+def android_sdk_dir(cfg: dict) -> Path:
+    v = cget(cfg, "android_sdk_dir", default="")
+    return Path(v) if v else WORKSPACE_ROOT / "android-sdk"
+
+
+def do_android_sdk(cfg: dict) -> Path:
+    """自备一份完整 Android SDK（commandlinetools + platform + build-tools）。
+
+    坑: 别指望 Chromium 的 src/third_party/android_sdk —— 那是给 gn/ninja 编 native
+    用的精简包，没有 sdkmanager、缺 build-tools，AGP / Gradle 不认它。"""
+    d = android_sdk_dir(cfg)
+    sdkmanager = d / "cmdline-tools" / "latest" / "bin" / "sdkmanager"
+    if not sdkmanager.exists():
+        d.mkdir(parents=True, exist_ok=True)
+        zip_path = d / "commandlinetools.zip"
+        if not zip_path.exists():
+            log(f"下载 Android commandlinetools -> {zip_path}")
+            if not run(["curl", "-fSL", "-o", str(zip_path), ANDROID_CLI_TOOLS_URL], check=False):
+                zip_path.unlink(missing_ok=True)
+                err(f"下载失败: {ANDROID_CLI_TOOLS_URL}（检查代理；或手动下好放到 {zip_path}）")
+        log(f"解压 commandlinetools -> {d}")
+        run(["unzip", "-q", "-o", str(zip_path), "-d", str(d)])
+        # 官方 zip 解出 cmdline-tools/{bin,lib}，sdkmanager 只认 cmdline-tools/latest/
+        ct = d / "cmdline-tools"
+        if (ct / "bin" / "sdkmanager").exists() and not (ct / "latest").exists():
+            latest = ct / "latest"
+            latest.mkdir(parents=True, exist_ok=True)
+            for sub in ("bin", "lib"):
+                if (ct / sub).is_dir():
+                    shutil.move(str(ct / sub), str(latest / sub))
+        zip_path.unlink(missing_ok=True)
+    if not sdkmanager.exists():
+        if DRY_RUN:      # 计划已打印完，别拿"文件还没下"当失败
+            log(f"(dry-run) 将装 SDK 包: {' '.join(ANDROID_SDK_PACKAGES)} -> {d}")
+            return d
+        err(f"sdkmanager 未就位: {sdkmanager}\n"
+            f"  手动: 下载 commandlinetools-linux 解压到 {d}/cmdline-tools/latest/")
+    if not shutil.which("java") and not os.environ.get("JAVA_HOME"):
+        err("sdkmanager 需要 JDK —— 先装 JDK 17（AGP 尚不支持 JDK 24 这类超前版本）")
+    os.environ["ANDROID_HOME"] = str(d)
+    os.environ["ANDROID_SDK_ROOT"] = str(d)
+    log("接受 SDK 许可")
+    run(["bash", "-c", f"yes | {shlex.quote(str(sdkmanager))} "
+                       f"--sdk_root={shlex.quote(str(d))} --licenses > /dev/null"], check=False)
+    for pkg in ANDROID_SDK_PACKAGES:
+        log(f"安装 SDK 包: {pkg}")
+        run([str(sdkmanager), f"--sdk_root={d}", "--install", pkg])
+    log(f"Android SDK 就绪: {d}")
+    return d
 
 
 # ── 各目标 ──────────────────────────────────────────────────────────────────
@@ -902,8 +981,8 @@ def do_link():
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
-TARGETS = ("depot_tools", "chromium", "deps", "hooks", "android", "sysdeps", "kernel", "pc", "link",
-           "update", "all")
+TARGETS = ("depot_tools", "chromium", "deps", "hooks", "android", "android-sdk", "sysdeps",
+           "kernel", "pc", "link", "update", "all")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -918,6 +997,8 @@ def build_parser() -> argparse.ArgumentParser:
                "  python3 scripts/fetch.py deps --nohooks --jobs 8   只同步依赖\n"
                "  python3 scripts/fetch.py hooks           gclient runhooks\n"
                "  python3 scripts/fetch.py android         Android 依赖（宿主须 Linux）\n"
+               "  python3 scripts/fetch.py android --sysdeps  顺带装 Android 系统依赖\n"
+               "  python3 scripts/fetch.py android-sdk     装 Android SDK（编 APK 用）\n"
                "  python3 scripts/fetch.py sysdeps         Linux: install-build-deps.sh\n",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("targets", nargs="*", metavar="目标",
@@ -1020,6 +1101,11 @@ def main(argv=None) -> int:
             if args.sysdeps:
                 do_sysdeps(True)
             gclient_sync(True, args.nohooks, args.jobs, True, args.force)
+            if not args.sysdeps:
+                log("Android 系统级依赖没装的话编译会缺头文件/库 —— 补装: "
+                    "python3 scripts/fetch.py android --sysdeps")
+        elif t == "android-sdk":
+            do_android_sdk(CFG)
         elif t == "sysdeps":
             do_sysdeps(False)
         elif t == "kernel":

@@ -22,7 +22,8 @@ from pathlib import Path
 from .common import (SRC, KERNEL_REPO, DIST_ROOT, TOOLS_DIR, Ctx, build_cmd, cget,
                      err, gn_gen, git, log, out, probe_steps, purge_previous_deliveries,
                      run, warn, write_args_gn, write_sha256sums, zip_dir, extra_gn_args,
-                     ensure_depot_tools, next_delivery_no, record_delivery, human_size)
+                     ensure_depot_tools, next_delivery_no, record_delivery, human_size,
+                     ensure_android_native_deps)
 from . import common
 
 MODULE_RELDIR = "chrome/browser/arupa_desktop"
@@ -145,6 +146,12 @@ def ensure_build_graph(c: Ctx):
 
 def do_down(c: Ctx):
     ensure_depot_tools(c.cfg)
+    if c.os == "android":
+        # 从 build 侧直接 down 时 .gclient 常常还没加 target_os=android —— 不加的话
+        # gclient sync 不会拉 NDK/SDK/JDK，后面全是"找不到 android 工具链"的噪音。
+        import fetch
+        fetch.DRY_RUN = common.DRY_RUN      # 两边各有一份 DRY_RUN，不同步就真写了
+        fetch.ensure_gclient_target_android()
     from .common import gclient_bin
     cmd = [gclient_bin(), "sync", "--nohooks"]
     if c.os == "android":
@@ -159,6 +166,8 @@ def do_gen(c: Ctx):
     preflight(c)
     patch_gn_all()
     ensure_depot_tools(c.cfg)
+    if c.os == "android":
+        ensure_android_native_deps()
     comp = "false" if c.link == "static" else "true"
     dcheck = "false" if c.link == "static" else "true"
     args = [("use_siso", "false"),
@@ -172,7 +181,11 @@ def do_gen(c: Ctx):
     if c.os == "win":
         args += [("enable_nacl", "false")]
     if c.os == "android":
-        args += [("target_os", '"android"')]
+        # 内核用 //extensions/*（MV3），而 Android 上 enable_extensions 默认假、
+        # //extensions/renderer 会 assert(enable_extensions_core) 失败；只有
+        # desktop-android 变体才开 enable_desktop_android_extensions ⇒
+        # enable_extensions_core（现有官方 AAR 的 .so 含 chrome-extension://，是同一路线）
+        args += [("target_os", '"android"'), ("is_desktop_android", "true")]
     write_args_gn(c.out_dir / "args.gn",
                   f"# nomad kernel — {c.os} {c.arch} {c.link}", args, extra_gn_args(c))
     gn_gen(c, c.out_dir / "args.gn")
@@ -202,6 +215,8 @@ def resolve_targets(c: Ctx):
 def do_build(c: Ctx):
     preflight(c)
     ensure_depot_tools(c.cfg)
+    if c.os == "android":
+        ensure_android_native_deps()
     if not (c.out_dir / "build.ninja").exists():
         do_gen(c)
     else:

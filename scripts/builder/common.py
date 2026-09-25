@@ -29,6 +29,7 @@ SCRIPTS_DIR = WORKSPACE_ROOT / "scripts"
 SRC = WORKSPACE_ROOT / "src"
 KERNEL_REPO = WORKSPACE_ROOT / "nomadbrowser.kernel"
 PC_REPO = WORKSPACE_ROOT / "nomadbrowser.pc"
+ANDROID_REPO = WORKSPACE_ROOT / "nomadbrowser.android"
 OUT_ROOT = WORKSPACE_ROOT / "out"
 DIST_ROOT = WORKSPACE_ROOT / "dist"
 STATE_DIR = WORKSPACE_ROOT / ".build"
@@ -122,6 +123,21 @@ def ensure_depot_tools(cfg: dict):
     return d
 
 
+def android_native_deps():
+    """编 Chromium Android 必需的三件（DEPS 里带，靠 .gclient 的 target_os=android 拉下来）。"""
+    return [SRC / "third_party/android_toolchain/ndk",
+            SRC / "third_party/android_sdk",
+            SRC / "third_party/jdk"]
+
+
+def ensure_android_native_deps():
+    """缺任一件都别开编 —— 缺 NDK/SDK 时 gn/ninja 甩的是几十屏噪音，不如先说清。"""
+    miss = [p for p in android_native_deps() if not p.exists()]
+    if miss:
+        err("Android 依赖缺失:\n  " + "\n  ".join(str(p.relative_to(SRC)) for p in miss) +
+            "\n  修: python3 scripts/fetch.py android")
+
+
 def gclient_bin() -> str:
     for d in os.environ.get("PATH", "").split(os.pathsep):
         if not d:
@@ -134,10 +150,11 @@ def gclient_bin() -> str:
 
 
 # ── 平台 / 架构 ─────────────────────────────────────────────────────────────
-PROJECTS = ("chromium", "kernel", "browser")
+PROJECTS = ("chromium", "kernel", "browser", "android")
 PROJECT_ALIAS = {"baseline": "chromium", "chrome": "chromium",
                  "pc": "browser", "nomad": "browser", "browser": "browser",
-                 "arupa": "kernel", "nomad_kernel": "kernel"}
+                 "arupa": "kernel", "nomad_kernel": "kernel",
+                 "apk": "android", "nomad_android": "android", "android": "android"}
 OSES = ("win", "mac", "linux", "android")
 ARCHS = ("x86", "x64", "arm64")
 LINK_MODES = ("static", "dynamic")
@@ -177,6 +194,8 @@ def host_arch() -> str:
 def check_project(project: str, os_name: str, arch: str):
     """交叉编译的现实约束：Chromium 只能在本宿主编本宿主（macOS 目标必须 macOS 宿主，
     Windows 目标必须 Windows 宿主），Android 目标需要 Linux 宿主。"""
+    if project == "android" and os_name != "android":
+        err(f"android 项目只出 Android 包（当前目标系统: {os_name}）—— 加 --os android")
     if os_name not in OSES:
         err(f"不支持的系统: {os_name}（可选: {' / '.join(OSES)}）")
     if arch not in ARCHS:
@@ -210,6 +229,7 @@ class Ctx:
     arch: str
     ver: str
     link: str
+    variant: str = "debug"          # android 项目: debug / release（Gradle variant）
     jobs: int = 0
     cfg: dict = field(default_factory=dict)
     no_link: bool = False
@@ -307,8 +327,10 @@ def purge_previous_deliveries(c: Ctx, keep: str):
 
 # ── 工具链路径 ──────────────────────────────────────────────────────────────
 def gn_path(os_name: str) -> Path:
+    # gn 是主机工具：android 是交叉编译目标，没有 buildtools/android/gn，按宿主机取
+    key = os_name if os_name in ("win", "mac", "linux") else HOST_OS
     rel = {"win": "buildtools/win/gn.exe", "mac": "buildtools/mac/gn",
-           "linux": "buildtools/linux64/gn"}.get(os_name, f"buildtools/{os_name}/gn")
+           "linux": "buildtools/linux64/gn"}.get(key, f"buildtools/{key}/gn")
     return SRC / rel
 
 

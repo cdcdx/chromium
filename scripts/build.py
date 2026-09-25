@@ -7,6 +7,7 @@
 #      chromium   Chromium 官方基线（对照用，不带内核）
 #      kernel     nomad 内核（编进 Chromium 树的那个模块）
 #      browser    nomad 浏览器（PC 外壳，消费内核交付包）
+#      android    nomad 浏览器 APK（Gradle，消费内核 AAR）
 #      all        kernel -> browser（完整交付链路）
 #      print-delivery  打印当前已验收的内核交付包根（给上层脚本/PC 编译用）
 #    动作（可多选，按顺序执行；默认 build）:
@@ -40,6 +41,8 @@
 #    python3 scripts/build.py kernel gen build --arch arm64 --link static
 #    python3 scripts/build.py kernel package            # 出交付包（自动递增编号）
 #    python3 scripts/build.py browser package           # PC 出包（自动取最新内核交付包）
+#    python3 scripts/build.py android build --arch arm64 --variant debug
+#    python3 scripts/build.py android build --arch x64 --variant release
 #    python3 scripts/build.py chromium all --link dynamic
 # =============================================================================
 from __future__ import annotations
@@ -58,10 +61,12 @@ from builder.common import (ARCHS, Ctx, apply_proxy, chromium_version, check_pro
 import builder.chromium as chromium  # noqa: E402
 import builder.kernel as kernel  # noqa: E402
 import builder.browser as browser  # noqa: E402
+import builder.android as android  # noqa: E402
 
 ACTION_ALIASES = {"zip": "package", "pack": "package", "sync": "down", "compile": "build"}
 ACTIONS = ("down", "gen", "build", "test", "package")
-DEFAULT_LINK = {"chromium": "dynamic", "kernel": "static", "browser": "static"}
+DEFAULT_LINK = {"chromium": "dynamic", "kernel": "static", "browser": "static",
+                "android": "static"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--arch", default="", help="x86 / x64 / arm64（apple = arm64）")
     p.add_argument("--ver", default="", help="版本号（默认取自 src/chrome/VERSION）")
     p.add_argument("--link", default="", help="static / dynamic")
+    p.add_argument("--variant", default="", help="android: debug / release（默认 debug）")
     p.add_argument("--jobs", type=int, default=0, help="并行度")
     p.add_argument("--delivery", default="", help="显式指定内核交付包根（browser）")
     p.add_argument("--delivery-n", dest="delivery_n", type=int, default=0, help="指定交付次数")
@@ -107,8 +113,8 @@ def main(argv=None) -> int:
         return kernel.print_delivery(c)
 
     proj = normalize_project(proj_raw)
-    if proj not in ("chromium", "kernel", "browser", "all"):
-        err(f"未知项目: {args.project}（可选: chromium / kernel / browser / all / print-delivery）")
+    if proj not in ("chromium", "kernel", "browser", "android", "all"):
+        err(f"未知项目: {args.project}（可选: chromium / kernel / browser / android / all / print-delivery）")
 
     actions = [ACTION_ALIASES.get(a.lower(), a.lower()) for a in args.actions] or ["build"]
     if "all" in actions:
@@ -131,6 +137,8 @@ def main(argv=None) -> int:
             chromium.run_chromium(c, [a for a in acts if a in chromium.ACTIONS])
         elif p == "kernel":
             kernel.run_kernel(c, [a for a in acts if a in kernel.ACTIONS])
+        elif p == "android":
+            android.run_android(c, [a for a in acts if a in android.ACTIONS])
         else:
             browser.run_browser(c, [a for a in acts if a in browser.ACTIONS])
 
@@ -149,7 +157,11 @@ def make_ctx(cfg: dict, project: str, args) -> Ctx:
                           cfg.get("link_mode") or DEFAULT_LINK[project])
     if link not in ("static", "dynamic"):
         err(f"未知链接模式: {link}（static / dynamic）")
-    return Ctx(project=project, os=os_name, arch=arch, ver=ver, link=link,
+    variant = (args.variant or os.environ.get("VARIANT") or cfg.get("variant") or
+               "debug").lower()
+    if variant not in ("debug", "release"):
+        err(f"未知 variant: {variant}（debug / release）")
+    return Ctx(project=project, os=os_name, arch=arch, ver=ver, link=link, variant=variant,
                jobs=args.jobs or int(cfg.get("jobs", "0") or 0), cfg=cfg,
                no_link=args.no_link, keep_history=args.keep_history,
                delivery_no=args.delivery_n, gate=not args.no_gate,
