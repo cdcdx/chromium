@@ -7,6 +7,7 @@
 #      depot_tools   depot_tools 工具集（gclient / gn / autoninja）
 #      chromium      src/，pin 到 --ver（默认浅克隆，只拉一个版本）
 #      deps          gclient sync（第三方依赖 + hooks）
+#      update        切到 --ver 并同步依赖（chromium + deps + link；更新版本就用这个）
 #      hooks         gclient runhooks（只补工具链；配 deps --nohooks 用）
 #      android       Android 依赖（.gclient 加 target_os=android 后 sync；宿主须 Linux）
 #      sysdeps       系统级依赖（Linux: install-build-deps.sh；mac/win: 体检提示）
@@ -16,12 +17,13 @@
 #      all           depot_tools + chromium + kernel + pc + link（默认）
 #    选项:
 #      --ver X.Y.Z.W      版本标签（默认取 .env chromium_ver）
+#      --save             把 --ver 写回 .env 的 chromium_ver（固定为后续默认版本）
 #      --proxy URL        HTTP 代理（默认取 .env https_proxy）
 #      --jobs N           gclient 并行度（默认 8）
 #      --nohooks          deps 只同步依赖，不跑 hooks
 #      --shallow          浅克隆 / gclient --no-history（默认开）
 #      --full-history     拉全历史（关掉浅克隆）
-#      --force            强制 sync / 覆盖 .gclient
+#      --force            强制 sync（即便 DEPS/版本没变也重跑一遍）
 #      --no-link          all 时跳过挂载
 #      -y, --yes          非交互
 #      --dry-run          只打印命令，不执行
@@ -34,8 +36,11 @@
 #      python3 scripts/fetch.py --sysdeps          # Linux 首次：系统依赖
 #      python3 scripts/fetch.py                    # 拉 5 份源码 + 挂载
 #      python3 scripts/fetch.py deps               # gclient sync + hooks
-#      python3 scripts/fetch.py deps --nohooks && python3 scripts/fetch.py hooks
-#      python3 scripts/fetch.py android            # Android 依赖
+#
+#  更新到指定版本（src 切 tag + 重钉 .gclient + 按新 DEPS 同步第三方依赖）:
+#      python3 scripts/fetch.py update --ver 155.0.8059.20 --save
+#      python3 scripts/fetch.py update --ver 155.0.8059.20 --nohooks   # 依赖与工具链分开跑
+#      python3 scripts/fetch.py hooks                                  # 再补工具链
 # =============================================================================
 from __future__ import annotations
 
@@ -116,8 +121,11 @@ def run(cmd, cwd=None, check=True) -> bool:
     try:
         r = subprocess.run(cmd, cwd=str(cwd) if cwd else None)
     except OSError as e:
+        # 多半是命令不在 PATH 上（典型: 单独跑 deps 时 depot_tools 没进 PATH，gclient 找不到）。
+        # 静默返回会让上层只看到"失败"却无从下手 —— 必须留一句话。
         if check:
             err(f"命令无法执行: {cmd[0]} ({e})")
+        warn(f"命令无法执行: {cmd[0]} ({e}) —— 它是否在 PATH 上？")
         return False
     if r.returncode != 0 and check:
         err(f"命令失败（exit {r.returncode}）: {' '.join(shlex.quote(c) for c in cmd)}")
@@ -156,6 +164,25 @@ def cget(cfg: dict, *keys, default: str = "") -> str:
         if v:
             return v
     return default
+
+
+def save_env_ver(ver: str):
+    """把 --ver 写回 .env 的 chromium_ver —— 之后不传 --ver 也默认用它。"""
+    f = WORKSPACE_ROOT / ".env"
+    if not ver or not f.exists():
+        return
+    text = f.read_text(encoding="utf-8", errors="replace")
+    new, n = re.subn(r"(?m)^chromium_ver=.*$", f"chromium_ver={ver}", text)
+    if n == 0:
+        new = text.rstrip("\n") + f"\nchromium_ver={ver}\n"
+    if new == text:
+        return
+    if DRY_RUN:
+        log(f"(dry-run) 写回 {f.name}: chromium_ver={ver}")
+        return
+    shutil.copyfile(f, f.with_suffix(f".bak.{time.strftime('%Y%m%d%H%M%S')}"))
+    f.write_text(new, encoding="utf-8")
+    log(f"已写回 {f.name}: chromium_ver={ver}（原文件备份为 {f.name}.bak.*）")
 
 
 def chromium_url(cfg: dict, proxy: str) -> str:
@@ -228,6 +255,24 @@ def resolve_depot_tools_dir(cfg: dict) -> Path:
     return WORKSPACE_ROOT / "depot_tools"
 
 
+def ensure_depot_tools(cfg: dict) -> bool:
+    """把已有的 depot_tools 放进 PATH 并设好环境变量（不联网）。目录里没有 gclient 返回 False。
+
+    坑: 只跑 deps / update 时不会经过 depot_tools 步骤，PATH 上没有 gclient，
+    subprocess 抛 OSError 被 run() 兜成"失败"，表现为 sync 连败 3 次却没有任何报错。"""
+    d = resolve_depot_tools_dir(cfg)
+    if not any((d / n).exists() for n in ("gclient", "gclient.bat", "gclient.cmd")):
+        return False
+    os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
+    os.environ["DEPOT_TOOLS_UPDATE"] = "0"
+    os.environ["DEPOT_TOOLS_METRICS"] = "0"
+    if IS_WIN:
+        os.environ["DEPOT_TOOLS_WIN_TOOLCHAIN"] = "0"   # 用本机 VS 工具链
+    for k in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"):
+        os.environ.pop(k, None)
+    return True
+
+
 def setup_depot_tools(cfg: dict):
     d = resolve_depot_tools_dir(cfg)
     url = cget(cfg, "depot_tools_src", default=URL_DEPOT_TOOLS)
@@ -240,13 +285,8 @@ def setup_depot_tools(cfg: dict):
         log(f"克隆 depot_tools: {url} -> {d}")
         d.parent.mkdir(parents=True, exist_ok=True)
         git(["clone", url, str(d)])
-    os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
-    os.environ["DEPOT_TOOLS_UPDATE"] = "0"
-    os.environ["DEPOT_TOOLS_METRICS"] = "0"
-    if IS_WIN:
-        os.environ["DEPOT_TOOLS_WIN_TOOLCHAIN"] = "0"   # 用本机 VS 工具链
-    for k in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"):
-        os.environ.pop(k, None)
+    if not ensure_depot_tools(cfg):
+        err(f"{d} 里没有 gclient —— depot_tools 不完整，请手动检查")
     log(f"depot_tools 就绪: {d}")
 
 
@@ -338,11 +378,23 @@ def fetch_ref(name: str, dest: Path, ref: str, shallow: bool):
     warn(f"{name}: fetch {ref} 连续 3 次失败（保留现有检出）")
 
 
+def is_user_dirty(dest: Path) -> bool:
+    """切版本前判脏：只认"用户改动"，gclient 自己制造的状态不算。
+    排除两类: 子模块指针（DEPS 未同步的预期状态）、gclient 下载依赖时的 _gclient_* 临时目录
+    （sync 中断会残留，留着同样会把下一次切版本挡死）。"""
+    lines = git(["status", "--porcelain", "--ignore-submodules=all"], cwd=dest, capture=True).splitlines()
+    return any("_gclient_" not in line for line in lines)
+
+
 def checkout_ref(name: str, dest: Path, ref: str):
-    """切到目标 ref；工作区脏时只警告不切（绝不丢改动）。"""
+    """切到目标 ref；工作区脏时只警告不切（绝不丢改动）。
+
+    坑: 切完 src 版本后，gclient 管的子模块（third_party/* 、v8 ...）指针会整片变 M
+    —— 那是新 DEPS 还没同步的预期状态，不是用户改动。判脏必须 --ignore-submodules=all，
+    否则下一次切版本会被上一轮自己的残留挡住，静默停在旧版本上。"""
     if not ref:
         return
-    if git(["status", "--porcelain"], cwd=dest, capture=True):
+    if is_user_dirty(dest):
         warn(f"{name} 工作区有未提交改动，保持当前 HEAD（提交/暂存后再跑会自动切到 {ref}）")
         return
     if not git(["checkout", ref], cwd=dest, check=False):
@@ -356,6 +408,9 @@ def checkout_ref(name: str, dest: Path, ref: str):
         else:
             git(["pull", "--ff-only", "origin", ref], cwd=dest, check=False)
     log(f"{name} 已切到 {ref} ({git(['rev-parse', '--short', 'HEAD'], cwd=dest, capture=True)})")
+    if (git(["status", "--porcelain"], cwd=dest, capture=True)
+            and not git(["status", "--porcelain", "--ignore-submodules=all"], cwd=dest, capture=True)):
+        log(f"{name}: 子模块指针待 gclient sync 按新 DEPS 对齐（预期内，非用户改动）")
 
 
 def assert_checkout_ok(name: str, dest: Path, ref: str):
@@ -414,9 +469,9 @@ def clone_or_update(name: str, dest: Path, url: str, ref: str, shallow: bool):
 
 
 # ── .gclient ────────────────────────────────────────────────────────────────
-def render_gclient(url: str, ver: str) -> str:
+def render_gclient(url: str, ver: str, target_os=None) -> str:
     pinned = url if "@" in url else (f"{url}@refs/tags/{ver}" if ver else url)
-    return (
+    text = (
         "solutions = [\n"
         "  {\n"
         f'    "name": "src",\n'
@@ -430,6 +485,20 @@ def render_gclient(url: str, ver: str) -> str:
         "]\n"
         "cache_dir = None\n"
     )
+    if target_os:
+        text += "target_os = [ " + ", ".join(f'"{x}"' for x in target_os) + " ]\n"
+    return text
+
+
+def pinned_ver(text: str) -> str:
+    """.gclient 里已 pin 的版本（solution url 中 @ 后面的部分）。"""
+    m = re.search(r'"url"\s*:\s*"[^"@]+@(?:refs/tags/)?([^"]+)"', text)
+    return m.group(1) if m else ""
+
+
+def current_target_os(text: str):
+    m = re.search(r"(?m)^[ \t]*target_os[ \t]*=\s*\[(.*?)\]", text, re.S)
+    return re.findall(r'"([^"]+)"', m.group(1)) if m else None
 
 
 def merge_target_os(text: str, extras) -> str:
@@ -442,16 +511,24 @@ def merge_target_os(text: str, extras) -> str:
 
 
 def sync_gclient(cfg: dict, url: str, ver: str, want_android: bool, force: bool):
-    text = GCLIENT_FILE.read_text(encoding="utf-8", errors="replace") if GCLIENT_FILE.exists() else None
-    if text is None:
+    old = GCLIENT_FILE.read_text(encoding="utf-8", errors="replace") if GCLIENT_FILE.exists() else None
+    if old is None:
         log(f"生成 .gclient（pin 到 {ver or '默认分支'}）: {GCLIENT_FILE}")
         text = render_gclient(url, ver)
-    elif ver and ver not in text:
-        if force:
+    else:
+        cur = pinned_ver(old)
+        if not ver or cur == ver:
+            text = old
+        elif cur:
+            # 版本切换是重钉的正当理由，不该要求 --force；target_os 等自定义项原样带过去
+            log(f".gclient 重新 pin: {cur} → {ver}（保留 target_os 等自定义项）")
+            text = render_gclient(url, ver, current_target_os(old))
+        elif force:
             warn(f"--force: 覆盖 {GCLIENT_FILE}（重新 pin 到 {ver}）")
-            text = render_gclient(url, ver)
+            text = render_gclient(url, ver, current_target_os(old))
         else:
             warn(f".gclient 已存在但未 pin 到 {ver} —— 保留现有配置（覆盖重跑加 --force）")
+            text = old
     if want_android:
         new = merge_target_os(text, ["android"])
         if new != text:
@@ -514,6 +591,8 @@ def sync_reason(variant: str, want_hooks: bool, force: bool) -> str:
     st = load_state().get(variant)
     if not st:
         return "首次同步"
+    if VER and st.get("ver") and st.get("ver") != VER:
+        return f"版本已切换 {st.get('ver')} → {VER}"
     h = deps_hash()
     if h and st.get("deps_hash") != h:
         return "DEPS 已变更"
@@ -556,7 +635,7 @@ def gclient_sync(android: bool, nohooks: bool, jobs: int, shallow: bool, force: 
         time.sleep(30)
 
     state = load_state()
-    state[variant] = {"deps_hash": deps_hash(), "hooks": not nohooks,
+    state[variant] = {"deps_hash": deps_hash(), "hooks": not nohooks, "ver": VER,
                       "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
     save_state(state)
 
@@ -723,8 +802,16 @@ def do_sysdeps(android: bool):
 def do_chromium(shallow: bool):
     if not VER:
         warn("未指定版本（--ver / .env chromium_ver）—— 拉默认分支")
+    # 坑: 内核挂载点是 src 里的未跟踪项，只要它存在，git status 就脏、切版本就会被
+    # 自己的挂载挡住。link 排在 chromium 之后，所以这里先补上排除，再判脏。
+    if CHROMIUM_SRC.is_dir():
+        exclude_from_git(CHROMIUM_SRC, MODULE_RELDIR)
+    old = git(["describe", "--tags"], cwd=CHROMIUM_SRC, capture=True) if (CHROMIUM_SRC / ".git").exists() else ""
     clone_or_update("chromium/src", CHROMIUM_SRC, CHROMIUM_URL, VER, shallow)
     sync_gclient(CFG, CHROMIUM_URL, VER, False, FORCE)
+    now = git(["describe", "--tags"], cwd=CHROMIUM_SRC, capture=True)
+    if old and now and old != now:
+        log(f"chromium/src: {old} → {now}")
 
 
 def do_kernel(cfg: dict):
@@ -794,7 +881,8 @@ def do_link():
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
-TARGETS = ("depot_tools", "chromium", "deps", "hooks", "android", "sysdeps", "kernel", "pc", "link", "all")
+TARGETS = ("depot_tools", "chromium", "deps", "hooks", "android", "sysdeps", "kernel", "pc", "link",
+           "update", "all")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -804,6 +892,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="示例:\n"
                "  python3 scripts/fetch.py                 拉全部源码 + 挂载\n"
                "  python3 scripts/fetch.py deps            gclient sync + hooks\n"
+               "  python3 scripts/fetch.py update --ver 155.0.8059.20 --save\n"
+               "                                          切版本 + 重钉 .gclient + 同步依赖\n"
                "  python3 scripts/fetch.py deps --nohooks --jobs 8   只同步依赖\n"
                "  python3 scripts/fetch.py hooks           gclient runhooks\n"
                "  python3 scripts/fetch.py android         Android 依赖（宿主须 Linux）\n"
@@ -812,6 +902,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("targets", nargs="*", metavar="目标",
                    help=" / ".join(TARGETS) + "（默认 all）")
     p.add_argument("--ver", dest="ver", default="", help="chromium 版本标签")
+    p.add_argument("--save", action="store_true", help="把 --ver 写回 .env 的 chromium_ver")
     p.add_argument("--proxy", default="", help="HTTP 代理 URL（为空=不使用代理）")
     p.add_argument("--jobs", type=int, default=8, help="gclient 并行度（默认 8）")
     p.add_argument("--nohooks", action="store_true", help="deps 只同步依赖，不跑 hooks")
@@ -852,6 +943,8 @@ def main(argv=None) -> int:
     if not targets:
         targets = ["all"]
 
+    if args.save:
+        save_env_ver(args.ver)
     proxy = apply_proxy(CFG, args.proxy)
     CHROMIUM_URL = chromium_url(CFG, proxy)
     shallow = True if args.shallow is None else args.shallow
@@ -870,6 +963,11 @@ def main(argv=None) -> int:
             expanded += ["depot_tools", "chromium", "kernel", "pc"]
             if not args.no_link:
                 expanded.append("link")
+        elif t == "update":
+            # 更新版本 = src 切 tag（顺带重钉 .gclient）+ 按新 DEPS 同步依赖
+            expanded += ["chromium", "deps"]
+            if not args.no_link:
+                expanded.append("link")
         else:
             expanded.append(t)
     if args.sysdeps and "sysdeps" not in expanded:
@@ -877,6 +975,14 @@ def main(argv=None) -> int:
 
     seen = set()
     targets = [t for t in expanded if not (t in seen or seen.add(t))]
+
+    # 用到 gclient 的目标必须先让 depot_tools 进 PATH（目录已有时不联网，缺了才去克隆）
+    if any(t in targets for t in ("deps", "hooks", "android")):
+        if ensure_depot_tools(CFG):
+            log(f"depot_tools 就绪: {resolve_depot_tools_dir(CFG)}")
+        else:
+            step("depot_tools")
+            setup_depot_tools(CFG)
 
     done = []
     for t in targets:

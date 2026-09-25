@@ -11,10 +11,12 @@
 .DS_Store
 __pycache__
 .env
+.env.bak.*
 
 # google
 _bad_scm/
 .cipd/
+.fetch/
 
 # custom
 .arupa-delivery-compile/
