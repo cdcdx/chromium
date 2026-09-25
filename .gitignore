@@ -20,7 +20,9 @@ _bad_scm/
 
 # custom
 .arupa-delivery-compile/
+.build/
 backup/
 dist/
+out/
 docs/
 arupa_desktop/
