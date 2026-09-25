@@ -271,13 +271,55 @@ def refspec_candidates(ref: str):
             else [f"refs/tags/{ref}", f"refs/heads/{ref}"])
 
 
+def ls_remote_probe(dest: Path, spec: str):
+    """返回 (found, reachable)。reachable=False = ls-remote 自己失败了（网络/代理/认证），
+    必须和"远端确实没这个 ref"分开 —— 否则断网会被误报成 ref 不存在。"""
+    if DRY_RUN:
+        return True, True
+    try:
+        r = subprocess.run(["git", "ls-remote", "--exit-code", "origin", spec], cwd=str(dest),
+                           text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return False, False
+    if r.returncode == 0:
+        return bool(r.stdout.strip()), True
+    return False, r.returncode == 2          # 2 = 无匹配 ref；128 等 = 连不上/认证失败
+
+
 def resolve_refspec(name: str, dest: Path, ref: str) -> str:
     """先 ls-remote 探一次（便宜），再决定拉哪个 refspec —— 避免为试错打一堆 fatal。"""
+    unreachable = False
     for spec in refspec_candidates(ref):
-        if out(["git", "ls-remote", "--exit-code", "origin", spec], cwd=dest):
-            return spec
-    warn(f"{name}: 远端既无 refs/tags/{ref} 也无 refs/heads/{ref}")
+        for attempt in range(1, 4):
+            found, reachable = ls_remote_probe(dest, spec)
+            if found:
+                return spec
+            if reachable:                    # 确认远端没有，换下一个候选，不必重试
+                break
+            unreachable = True
+            if attempt < 3:
+                warn(f"{name}: ls-remote {spec} 第 {attempt}/3 次失败（连不上 origin），20 秒后重试")
+                time.sleep(20)
+        if unreachable:               # 连不上是全局的，其余候选没必要再各试 3 次
+            break
+    if unreachable:
+        url = out(["git", "remote", "get-url", "origin"], cwd=dest) or "?"
+        warn(f"{name}: ls-remote 连不上 origin（{url}）—— 是网络/代理问题，不是 ref 不存在；"
+             f"修好网络后重跑即可（连通时 --ver 才可能切过去）")
+    else:
+        warn(f"{name}: 远端既无 refs/tags/{ref} 也无 refs/heads/{ref}")
     return ""
+
+
+def safe_fetch_refspec(dest: Path, spec: str) -> str:
+    """git 不允许 fetch 进"当前已检出的分支"（fatal: refusing to fetch into branch ...）。
+    目标 ref 正好是当前分支时改写到远端跟踪分支（它永不会是检出分支），
+    后续 checkout + merge --ff-only 照样能跟上。"""
+    local = spec.split(":", 1)[1] if ":" in spec else ""
+    cur = out(["git", "symbolic-ref", "--short", "-q", "HEAD"], cwd=dest)
+    if cur and local == f"refs/heads/{cur}":
+        return f"{spec.split(':', 1)[0]}:refs/remotes/origin/{cur}"
+    return spec
 
 
 def fetch_ref(name: str, dest: Path, ref: str, shallow: bool):
@@ -289,7 +331,7 @@ def fetch_ref(name: str, dest: Path, ref: str, shallow: bool):
     if not spec:
         return
     for attempt in range(1, 4):
-        if git(["fetch", *depth, "origin", f"+{spec}:{spec}"], cwd=dest, check=False):
+        if git(["fetch", *depth, "origin", safe_fetch_refspec(dest, f"+{spec}:{spec}")], cwd=dest, check=False):
             return
         warn(f"{name}: fetch {spec} 第 {attempt}/3 次失败，20 秒后重试（大仓经代理常被中途掐断）")
         time.sleep(20)
@@ -307,7 +349,12 @@ def checkout_ref(name: str, dest: Path, ref: str):
         warn(f"{name} 切不到 {ref}（保留 HEAD={git(['rev-parse', '--short', 'HEAD'], cwd=dest, capture=True) or '?'}）")
         return
     if git(["show-ref", "--verify", "--quiet", f"refs/heads/{ref}"], cwd=dest, check=False):
-        git(["pull", "--ff-only", "origin", ref], cwd=dest, check=False)
+        remote_ref = f"refs/remotes/origin/{ref}"
+        # 前面已 fetch 到远端跟踪分支，直接合并，省掉 pull 的第二次联网
+        if git(["show-ref", "--verify", "--quiet", remote_ref], cwd=dest, check=False):
+            git(["merge", "--ff-only", remote_ref], cwd=dest, check=False)
+        else:
+            git(["pull", "--ff-only", "origin", ref], cwd=dest, check=False)
     log(f"{name} 已切到 {ref} ({git(['rev-parse', '--short', 'HEAD'], cwd=dest, capture=True)})")
 
 
@@ -695,6 +742,24 @@ def do_pc(cfg: dict):
     clone_or_update("nomadbrowser.pc", PC_DIR, url, cget(cfg, "pc_ref", "nomad_pc_ver"), False)
 
 
+def exclude_from_git(dest: Path, relpath: str):
+    """挂载点在 src 里是未跟踪项，会让它永远"脏"、永远切不了版本 —— 写进 .git/info/exclude。"""
+    p = out(["git", "rev-parse", "--git-path", "info/exclude"], cwd=dest)
+    if not p:
+        return
+    f = Path(p) if os.path.isabs(p) else dest / p
+    line = "/" + relpath.lstrip("/")
+    cur = f.read_text(encoding="utf-8", errors="replace") if f.exists() else ""
+    if line in cur.splitlines():
+        return
+    if DRY_RUN:
+        log(f"(dry-run) {dest.name}: {line} -> .git/info/exclude")
+        return
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(cur.rstrip("\n") + "\n# fetch.py: 内核挂载点\n" + line + "\n", encoding="utf-8")
+    log(f"{dest.name}: 已把 {line} 写进 .git/info/exclude（免得挂载点让工作区一直脏）")
+
+
 def do_link():
     """编进产物的是挂载点那份代码：挂载错 = 编错树，故拉取收尾必做。"""
     link = CHROMIUM_SRC / MODULE_RELDIR
@@ -702,6 +767,7 @@ def do_link():
         err(f"src/ 不存在，无法挂载: {CHROMIUM_SRC}")
     if not KERNEL_DIR.is_dir():
         err(f"内核仓不存在，无法挂载: {KERNEL_DIR}")
+    exclude_from_git(CHROMIUM_SRC, MODULE_RELDIR)
 
     if link.is_symlink():
         if os.readlink(link) == str(KERNEL_DIR):
