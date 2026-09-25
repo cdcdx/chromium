@@ -106,12 +106,40 @@ apply_proxy = fetch.apply_proxy
 resolve_depot_tools_dir = fetch.resolve_depot_tools_dir
 
 
+def apply_developer_dir(cfg: dict, *keys):
+    """macOS 上一台机器常并存多个 Xcode，而不同项目要求的 Swift/SDK 版本并不一样：
+    Chromium 树随版本绑定某个 SDK（换一个数小时全量重编），PC 的 macOS 原生 helper
+    却只能用 Swift 版本对得上的那份，否则
+        this SDK is not supported by the compiler ... Please select a toolchain
+        which matches the SDK.
+    按项目各取所需，互不干扰。
+    优先级: 外部已 export 的 DEVELOPER_DIR > .env <keys> > 不动（沿用 xcode-select）。"""
+    if HOST_OS != "mac" or os.environ.get("DEVELOPER_DIR"):
+        return
+    d = cget(cfg, *keys)
+    if not d:
+        return
+    if not Path(d).is_dir():
+        warn(f"配置的 DEVELOPER_DIR 不存在，忽略: {d}")
+        return
+    os.environ["DEVELOPER_DIR"] = d
+    log(f"DEVELOPER_DIR（{keys[0]}）: {d}")
+
+
 def ensure_depot_tools(cfg: dict):
     """depot_tools 进 PATH（不更新它 —— 构建阶段不该顺手拉仓库）。"""
     d = resolve_depot_tools_dir(cfg)
     if not d.is_dir():
         err(f"depot_tools 不存在: {d}（先跑: python3 scripts/fetch.py depot_tools）")
     os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
+    # out/ 在工作区根（不在 src/ 下）时，depot_tools 的 ninja.py 靠 gclient_paths
+    # .FindGclientRoot(out_dir) 反推源码根，而该函数会用 .gclient_entries 校验
+    # out_dir 是否落在某个 entry（src）之下 —— out/ 不在，于是返回 None，
+    # autoninja 报 "Could not find Ninja in the third_party..."。
+    # 把树内 ninja 挂进 PATH，ninja.py 的 fallback 就能找到它（扫描时会跳过 depot_tools）。
+    ninja_dir = ninja_path().parent
+    if ninja_dir.is_dir():
+        os.environ["PATH"] = str(ninja_dir) + os.pathsep + os.environ.get("PATH", "")
     os.environ["DEPOT_TOOLS_UPDATE"] = "0"
     os.environ["DEPOT_TOOLS_METRICS"] = "0"
     if IS_WIN:

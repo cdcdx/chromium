@@ -16,9 +16,9 @@ import re
 import shutil
 from pathlib import Path
 
-from .common import (PC_REPO, DIST_ROOT, Ctx, cget, err, log, out, run, warn,
-                     human_size, next_delivery_no, purge_previous_deliveries,
-                     record_delivery)
+from .common import (PC_REPO, DIST_ROOT, Ctx, apply_developer_dir, cget, err, log,
+                     out, run, warn, human_size, next_delivery_no,
+                     purge_previous_deliveries, record_delivery)
 from . import common
 
 RIDS = {
@@ -96,6 +96,18 @@ def project_paths(c: Ctx):
     return proj, proj
 
 
+def ensure_node_modules(web: Path):
+    """node_modules 不存在时先把前端依赖装上 —— 否则 prebuild 里的 i18n 校验脚本
+    会以 'Cannot find module esbuild' 挂掉，看着像源码坏了，其实只是没装依赖。"""
+    if (web / "node_modules").is_dir():
+        return
+    lock = web / "package-lock.json"
+    log("首次构建 WebUI —— 安装前端依赖（node_modules 不存在）")
+    if lock.exists() and run(["npm", "ci"], cwd=web, check=False):
+        return
+    run(["npm", "install"], cwd=web)
+
+
 def build_webui(c: Ctx):
     """WebUI 是 .app 里的 Resources；不编会用上一份（调试快，交付别用）。"""
     if not c.webui:
@@ -108,10 +120,20 @@ def build_webui(c: Ctx):
     if not shutil.which("npm"):
         warn("未找到 npm —— 跳过 WebUI 构建")
         return
-    run(["npm", "run", "build"], cwd=web)
+    ensure_node_modules(web)
+    if run(["npm", "run", "build"], cwd=web, check=False):
+        return
+    # IDE / 沙箱注入的 NODE_OPTIONS --require shim 会拦住 vite 清空 outDir 的 rmSync，
+    # 失败信息看着像前端坏了，实际是外层拦截 —— 去掉注入重试一次，并把原因说清楚。
+    if os.environ.pop("NODE_OPTIONS", None) is not None:
+        warn("npm run build 失败：检测到 NODE_OPTIONS 注入（外层 node shim 会拦 vite 清 outDir）—— 去掉后重试")
+        run(["npm", "run", "build"], cwd=web)
+        return
+    err("WebUI 构建失败（npm run build）—— 交付前需要它产出 Resources；只编 C# 侧请加 --no-web")
 
 
 def do_build(c: Ctx):
+    apply_developer_dir(c.cfg, "pc_developer_dir", "developer_dir")
     sln, main_proj = project_paths(c)
     cfg = cget(c.cfg, "pc_config", "PC_CONFIG", default="Release")
     env_api = os.environ.get("NOMAD_API_ENV", "Production")
@@ -131,6 +153,7 @@ def do_build(c: Ctx):
 
 
 def do_package(c: Ctx):
+    apply_developer_dir(c.cfg, "pc_developer_dir", "developer_dir")
     sln, main_proj = project_paths(c)
     cfg = cget(c.cfg, "pc_config", "PC_CONFIG", default="Release")
     env_api = os.environ.get("NOMAD_API_ENV", "Production")
@@ -148,12 +171,27 @@ def do_package(c: Ctx):
     payload.mkdir(parents=True)
 
     if c.os == "mac":
-        # RID 只在工程级传（NETSDK1134 禁止解决方案级 RID），app bundle 由 Mac 目标产出
-        run([dn, "build", str(main_proj), "-c", cfg, "-r", rid(c),
+        # 必须是 publish 而不是 build：mac-bundle.targets 里 BuildAppBundle 挂在
+        # AfterTargets="Publish" 上（-t:BuildAppBundle 也可），光 build 只会得到中间产物，
+        # 最后 dist/macos/ 下不会有 .app。
+        # RID 只在工程级传（NETSDK1134 禁止解决方案级 RID）；MacRuntimeIdentifier 默认跟随 -r。
+        # 中间产物默认落在 $(HOME)/Desktop/dist —— Desktop 受 TCC 保护，文件会被贴
+        # com.apple.provenance，随后 codesign 间歇性 Operation not permitted（xattr -cr 也清不掉）。
+        # 改指到工作区自己的 out/ 下（本地普通卷且已被 .gitignore 覆盖），并清掉上次的发布
+        # 暂存，避免把还带着 provenance 的旧件再拷进 bundle。
+        local_out = c.out_dir / "dotnet-local"
+        local_out.mkdir(parents=True, exist_ok=True)
+        for stale in ("main-publish", "kernelhost-publish", "mac-updater"):
+            shutil.rmtree(PC_REPO / "dist" / "macos" / stale, ignore_errors=True)
+        run([dn, "publish", str(main_proj), "-c", cfg, "-r", rid(c),
              "-p:BuildMac=true", f"-p:MacConfiguration={cfg}",
+             f"-p:LocalDebugOutputRoot={local_out}",
              f"-p:NomadApiEnvironment={env_api}", f"-p:ArupaDeliveryRoot={delivery}"],
             cwd=PC_REPO)
+        # mac-bundle-props.props: MacDistRoot = <repo>/dist/macos（x64 时再套一层 osx-x64）
         app = PC_REPO / "dist" / "macos" / "逐风浏览器.app"
+        if not app.is_dir() and c.arch == "x64":
+            app = PC_REPO / "dist" / "macos" / "osx-x64" / "逐风浏览器.app"
         if not app.is_dir():
             err(f"未找到 .app: {app}（Mac 目标没产出 bundle）")
     elif c.os == "linux":

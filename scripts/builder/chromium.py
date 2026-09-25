@@ -14,9 +14,9 @@ import os
 import re
 from pathlib import Path
 
-from .common import (SRC, HOST_OS, IS_WIN, Ctx, cget, err, gn_gen, log, out, run,
-                     warn, write_args_gn, extra_gn_args, ensure_depot_tools,
-                     gclient_bin, human_size)
+from .common import (SRC, HOST_OS, IS_WIN, Ctx, apply_developer_dir, cget, err,
+                     gn_gen, log, out, run, warn, write_args_gn, extra_gn_args,
+                     ensure_depot_tools, gclient_bin, human_size)
 
 TARGET = "chrome"
 
@@ -58,9 +58,19 @@ def _mac_sdk_guard(c: Ctx):
         f"          (c) 确认接受全量重编: ALLOW_SDK_SWITCH=1 ...")
 
 
-def xcode_prepare():
+def xcode_prepare(c: Ctx):
+    """Chromium 树与 SDK 版本强绑定（换一个数小时全量重编）：并存安装时优先
+    Xcode-26.5*（本树配套 MacOSX26.5 SDK），可由 .env chromium_developer_dir 覆盖；
+    外部已 export 的 DEVELOPER_DIR 最优先。"""
     if HOST_OS != "mac":
         return
+    apply_developer_dir(c.cfg, "chromium_developer_dir", "developer_dir")
+    if not os.environ.get("DEVELOPER_DIR"):
+        for xc in sorted(Path("/Applications").glob("Xcode-26.5*.app/Contents/Developer")):
+            if xc.is_dir():
+                os.environ["DEVELOPER_DIR"] = str(xc)
+                log(f"DEVELOPER_DIR（Chromium 配套 Xcode）: {xc}")
+                break
     dev = out(["xcode-select", "-p"])
     if not dev or "Xcode" not in dev:
         warn("xcode-select 未指向完整 Xcode: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer")
@@ -70,7 +80,7 @@ def xcode_prepare():
 
 def do_gen(c: Ctx):
     ensure_depot_tools(c.cfg)
-    xcode_prepare()
+    xcode_prepare(c)
     _mac_sdk_guard(c)
 
     comp = "false" if c.link == "static" else "true"

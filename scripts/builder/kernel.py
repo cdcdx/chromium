@@ -19,7 +19,7 @@ import shutil
 import time
 from pathlib import Path
 
-from .common import (SRC, KERNEL_REPO, DIST_ROOT, TOOLS_DIR, Ctx, build_cmd, cget,
+from .common import (SRC, KERNEL_REPO, PC_REPO, DIST_ROOT, TOOLS_DIR, Ctx, build_cmd, cget,
                      err, gn_gen, git, log, out, probe_steps, purge_previous_deliveries,
                      run, warn, write_args_gn, write_sha256sums, zip_dir, extra_gn_args,
                      ensure_depot_tools, next_delivery_no, record_delivery, human_size,
@@ -51,7 +51,8 @@ ARTIFACTS = {
                      "libvulkan.dylib", "vk_swiftshader_icd.json",
                      "angledata/VkICD_mock_icd.json", "angledata/VkLayer_khronos_validation.json",
                      "hyphen-data/manifest.json", "resources/inspector_overlay/main.js",
-                     "resources/inspector_overlay/inspector_overlay_resources.grd"],
+                     "resources/inspector_overlay/inspector_overlay_resources.grd",
+                     "Libraries/libtest_trace_processor.dylib"],
     },
     "win": {
         "required": ["arupa_kernel.dll", "arupa_render.exe"],
@@ -326,6 +327,37 @@ def copy_assets(c: Ctx, stage: Path, kernel_dir: Path):
             log("  软链 macKernel -> kernel（PC 侧按此名取内核）")
 
 
+def write_delivery_markers(c: Ctx, kernel_dir: Path, n: int):
+    """宿主硬校验项 —— 缺了 PC 编译第一步就炸：
+      kernel/.arupa-version       PC 的内核版本单一真值（UA/UA-CH/引擎三者必须同源，
+                                   Directory.Build.targets 取它为版本号，不许手抄）
+      kernel/.arupa-delivery-id   Mac/ArupaDelivery.props 用它证明 wrapper(dotnet/)
+                                   与 macKernel(kernel/) 来自同一完整交付包
+    （macKernel/ 是 kernel/ 的软链，写在 kernel/ 下即等于写在 macKernel/ 下）"""
+    (kernel_dir / ".arupa-delivery-id").write_text(f"{c.ver}+{n}\n", encoding="utf-8")
+    (kernel_dir / ".arupa-version").write_text(f"{c.ver}\n", encoding="utf-8")
+    log(f"  标记: .arupa-delivery-id={c.ver}+{n}   .arupa-version={c.ver}")
+
+
+def verify_pc_requirements(c: Ctx, stage: Path):
+    """按 PC 仓的必需件清单逐件自查 —— PC 编译第一步就会因为缺件报错，
+    与其让它把包编到一半再报，不如出包时就拦下。清单直接从 props 读，不复制副本。"""
+    props = {"mac": PC_REPO / "Mac" / "ArupaDelivery.props"}.get(c.os)
+    if not props or not props.exists():
+        return
+    rel = re.findall(r'RelativePath="([^"$]+)"',
+                     props.read_text(encoding="utf-8", errors="replace"))
+    missing = []
+    for r in rel:
+        probe = ("kernel/" + r[len("macKernel/"):]) if r.startswith("macKernel/") else r
+        if not (stage / probe).exists():
+            missing.append(r)
+    if missing:
+        err("交付包缺 PC 侧必需件（PC 编译第一步就会失败）:\n  " + "\n  ".join(missing)
+            + f"\n  清单来源: {props}")
+    log(f"PC 必需件校验通过（{len(rel)} 件，清单来自 {props.name}）")
+
+
 def write_manifest(c: Ctx, stage: Path, n: int, kernel_dir: Path):
     files = sorted(p.relative_to(stage).as_posix() for p in stage.rglob("*") if p.is_file())
     kernel_head = out(["git", "rev-parse", "--short", "HEAD"], cwd=KERNEL_REPO) or "?"
@@ -396,7 +428,9 @@ def do_package(c: Ctx):
             shutil.copy2(src, dst)
             log(f"  可选: {f} ({human_size(dst)})")
 
+    write_delivery_markers(c, kernel_dir, n)   # PC 宿主硬校验项
     copy_assets(c, stage, kernel_dir)
+    verify_pc_requirements(c, stage)
     write_manifest(c, stage, n, kernel_dir)
     write_sha256sums(stage)
 
