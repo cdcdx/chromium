@@ -118,6 +118,7 @@ def ensure_depot_tools(cfg: dict):
     for k in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"):
         os.environ.pop(k, None)
     log(f"depot_tools: {d}")
+    fetch.bootstrap_depot_tools(d)   # 缺自举产物时 autoninja 会 exit 1（幂等，只下一回）
     return d
 
 

@@ -21,9 +21,11 @@ from .common import (PC_REPO, DIST_ROOT, Ctx, cget, err, log, out, run, warn,
                      record_delivery)
 from . import common
 
-RIDS = {"win": {"x64": "win-x64", "x86": "win-x86", "arm64": "win-arm64"},
-        "mac": {"x64": "osx-x64", "arm64": "osx-arm64"},
-        "linux": {"x64": "linux-x64", "arm64": "linux-arm64"}}
+RIDS = {
+    "win": {"x64": "win-x64", "x86": "win-x86", "arm64": "win-arm64"},
+    "mac": {"x64": "osx-x64", "arm64": "osx-arm64"},
+    "linux": {"x64": "linux-x64", "arm64": "linux-arm64"}
+}
 
 
 def rid(c: Ctx) -> str:

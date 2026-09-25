@@ -255,6 +255,26 @@ def resolve_depot_tools_dir(cfg: dict) -> Path:
     return WORKSPACE_ROOT / "depot_tools"
 
 
+def bootstrap_depot_tools(d: Path) -> bool:
+    """补一次 depot_tools 自举（幂等）—— 缺了它 autoninja 直接 exit 1。
+
+    坑: autoninja 经 depot_tools/python-bin/python3 启动，该 shim 硬性要求
+    python3_bin_reldir.txt（指向 hermetic CPython）。而自举只发生在
+    update_depot_tools 里，DEPOT_TOOLS_UPDATE=0 会跳过它，且 update_depot_tools
+    自身开头就拒绝 root —— 所以只能直接调 bootstrap_python3。"""
+    if (d / "python3_bin_reldir.txt").exists():
+        return True
+    script = d / "bootstrap_python3"
+    if IS_WIN or not script.exists():
+        return False
+    log("depot_tools 未自举（缺 python3_bin_reldir.txt）—— 下载 hermetic CPython")
+    if not run(["bash", "-c", f"source {shlex.quote(str(script))} && bootstrap_python3"], check=False):
+        warn(f"自举失败，autoninja 仍不可用。修好网络后重跑，或手动:\n"
+             f"  cd {d} && source ./bootstrap_python3 && bootstrap_python3")
+        return False
+    return (d / "python3_bin_reldir.txt").exists()
+
+
 def ensure_depot_tools(cfg: dict) -> bool:
     """把已有的 depot_tools 放进 PATH 并设好环境变量（不联网）。目录里没有 gclient 返回 False。
 
@@ -270,6 +290,7 @@ def ensure_depot_tools(cfg: dict) -> bool:
         os.environ["DEPOT_TOOLS_WIN_TOOLCHAIN"] = "0"   # 用本机 VS 工具链
     for k in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"):
         os.environ.pop(k, None)
+    bootstrap_depot_tools(d)     # 不自举的话 gclient 照样能用，autoninja 却会挂
     return True
 
 
