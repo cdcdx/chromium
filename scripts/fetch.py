@@ -844,7 +844,10 @@ ANDROID_CLI_TOOLS_URL = ("https://dl.google.com/android/repository/"
                          "commandlinetools-linux-11076708_latest.zip")
 
 # 与 nomadbrowser.android/app/build.gradle 对齐: compileSdk 37 / targetSdk 37 / minSdk 26
-ANDROID_SDK_PACKAGES = ["platform-tools", "platforms;android-37", "build-tools;37.0.0"]
+# build-tools 必须跟 AGP 的默认版本对齐 —— 当前 AGP 要 36.0.0，装成 37.0.0 它照样报
+# 缺包（"Failed to install ... as some licences have not been accepted"，误导性极强）。
+# platform 对齐 app/build.gradle 的 compileSdk 37。
+ANDROID_SDK_PACKAGES = ["platform-tools", "platforms;android-37.0", "build-tools;36.0.0"]
 
 
 def android_sdk_dir(cfg: dict) -> Path:
@@ -852,13 +855,44 @@ def android_sdk_dir(cfg: dict) -> Path:
     return Path(v) if v else WORKSPACE_ROOT / "android-sdk"
 
 
+def _sdk_packages_ready(d: Path) -> bool:
+    """包名 -> 安装目录: platforms;android-37.0 => d/platforms/android-37.0。
+    新 SDK 的 platform 包名带 .0，落盘目录却可能不带，两种都算装好。"""
+    for p in ANDROID_SDK_PACKAGES:
+        rel = p.replace(";", "/")
+        cands = [rel] + ([rel.rsplit(".", 1)[0]] if re.search(r"\.\d+$", rel) else [])
+        if not any((d / c).exists() for c in cands):
+            return False
+    return True
+
+
+def _sdkmanager_proxy_args() -> list:
+    """sdkmanager 也是 Java 程序 —— 和 Gradle 一样不认 http_proxy 环境变量，
+    不给 --proxy_host 它就直连 dl.google.com，超时后只说下载失败。"""
+    p = (os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
+         or os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY") or "")
+    if not p:
+        return []
+    m = re.match(r"(?:https?://)?(?:(?:[^:@/]+)(?::[^@/]*)?@)?([^:/]+)(?::(\d+))?", p.strip())
+    if not m:
+        return []
+    return ["--proxy=http", f"--proxy_host={m.group(1)}", f"--proxy_port={m.group(2) or '80'}"]
+
+
 def do_android_sdk(cfg: dict) -> Path:
     """自备一份完整 Android SDK（commandlinetools + platform + build-tools）。
 
     坑: 别指望 Chromium 的 src/third_party/android_sdk —— 那是给 gn/ninja 编 native
-    用的精简包，没有 sdkmanager、缺 build-tools，AGP / Gradle 不认它。"""
+    用的精简包，没有 sdkmanager、缺 build-tools，AGP / Gradle 不认它。
+
+    幂等: 装好了就直接返回 —— --licenses / --install 都要联网，每次 build 都跑太慢。"""
     d = android_sdk_dir(cfg)
     sdkmanager = d / "cmdline-tools" / "latest" / "bin" / "sdkmanager"
+    if sdkmanager.exists() and _sdk_packages_ready(d):
+        os.environ["ANDROID_HOME"] = str(d)
+        os.environ["ANDROID_SDK_ROOT"] = str(d)
+        log(f"Android SDK 已就绪: {d}")
+        return d
     if not sdkmanager.exists():
         d.mkdir(parents=True, exist_ok=True)
         zip_path = d / "commandlinetools.zip"
@@ -888,12 +922,14 @@ def do_android_sdk(cfg: dict) -> Path:
         err("sdkmanager 需要 JDK —— 先装 JDK 17（AGP 尚不支持 JDK 24 这类超前版本）")
     os.environ["ANDROID_HOME"] = str(d)
     os.environ["ANDROID_SDK_ROOT"] = str(d)
+    pa = _sdkmanager_proxy_args()
     log("接受 SDK 许可")
     run(["bash", "-c", f"yes | {shlex.quote(str(sdkmanager))} "
-                       f"--sdk_root={shlex.quote(str(d))} --licenses > /dev/null"], check=False)
+                       f"--sdk_root={shlex.quote(str(d))} {' '.join(pa)} --licenses > /dev/null"],
+        check=False)
     for pkg in ANDROID_SDK_PACKAGES:
         log(f"安装 SDK 包: {pkg}")
-        run([str(sdkmanager), f"--sdk_root={d}", "--install", pkg])
+        run([str(sdkmanager), f"--sdk_root={d}", *pa, "--install", pkg])
     log(f"Android SDK 就绪: {d}")
     return d
 

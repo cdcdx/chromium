@@ -64,7 +64,7 @@ import builder.browser as browser  # noqa: E402
 import builder.android as android  # noqa: E402
 
 ACTION_ALIASES = {"zip": "package", "pack": "package", "sync": "down", "compile": "build"}
-ACTIONS = ("down", "gen", "build", "test", "package")
+ACTIONS = ("down", "gen", "build", "test", "package", "manifest")
 DEFAULT_LINK = {"chromium": "dynamic", "kernel": "static", "browser": "static",
                 "android": "static"}
 

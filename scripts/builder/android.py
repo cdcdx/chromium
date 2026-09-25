@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 from pathlib import Path
 
@@ -26,7 +27,7 @@ from . import common
 
 GRADLEW = ANDROID_REPO / "gradlew"
 RUNTIME_MANIFEST = ANDROID_REPO / "tools" / "ci" / "runtime-manifest.json"
-ACTIONS = ("down", "build", "package")
+ACTIONS = ("down", "build", "package", "manifest")
 
 # 本层 arch -> Gradle 的 -PkernelAbi（app/build.gradle 只认 arm64 / x64）
 KERNEL_ABI = {"arm64": "arm64", "x64": "x64", "x86": "x64"}
@@ -45,18 +46,47 @@ def java_major() -> int:
     return int(m.group(1)) if m else 0
 
 
+def jdk_major_at(p: Path) -> int:
+    """目录级版本探测。java -version 写 stderr，必须重定向才抓得到。"""
+    java = p / "bin" / "java"
+    if not java.exists():
+        return 0
+    txt = out(["bash", "-c", f"{shlex.quote(str(java))} -version 2>&1 | head -1"])
+    m = re.search(r'"(\d+)', txt)
+    return int(m.group(1)) if m else 0
+
+
+def is_full_jdk21(p: Path) -> bool:
+    """Gradle 要的是能编译的 JDK：只装了 JRE（缺 javac）会被判成 JRE 拒收，
+    转头按 toolchainUrl 去 foojay / github 下载。"""
+    return (p / "bin" / "javac").exists() and jdk_major_at(p) == 21
+
+
 def ensure_jdk():
-    """gradle/gradle-daemon-jvm.properties 锁 toolchainVersion=21 —— JDK 24 这类超前
-    版本 Gradle 不认。没有 21 就先找系统里装过的，再退一步让 Gradle 按 toolchainUrl 自取。"""
-    v = java_major()
-    if v == 21:
+    """gradle/gradle-daemon-jvm.properties 锁 toolchainVersion=21，且必须是完整 JDK。
+    系统只装了 openjdk-21-jre 时，光看目录名 java-21* 会挑到 JRE —— Gradle 拒收后
+    去外网下载，不通就失败；所以这里按 javac 是否存在筛选，并认 Gradle 自己供应过的那份。"""
+    jh = os.environ.get("JAVA_HOME", "")
+    if jh and is_full_jdk21(Path(jh)):
         return
+    cands = []
     jvm = Path("/usr/lib/jvm")
-    hits = sorted(jvm.glob("java-21*")) if jvm.is_dir() else []
+    if jvm.is_dir():
+        cands += sorted(jvm.glob("java-21*"))
+    # Gradle 按 toolchainUrl 自动供应过的 JDK（~/.gradle/jdks）—— 系统只有 JRE 时靠它兜底
+    gd = Path(os.environ.get("GRADLE_USER_HOME", str(Path.home() / ".gradle"))) / "jdks"
+    if gd.is_dir():
+        cands += sorted(p for p in gd.iterdir() if p.is_dir() and "21" in p.name)
+    hits = [p for p in cands if is_full_jdk21(p)]
     if hits:
         os.environ["JAVA_HOME"] = str(hits[0])
         os.environ["PATH"] = str(hits[0] / "bin") + os.pathsep + os.environ.get("PATH", "")
-        log(f"JDK: 切到 {hits[0]}（Gradle 要求 21，默认还是 {v}）")
+        log(f"JDK: 切到 {hits[0]}（Gradle 要求 21，且必须是带 javac 的完整 JDK）")
+        return
+    v = java_major()
+    if v == 21:
+        warn(f"当前 java 是 21，但没找到带 javac 的完整 JDK —— Gradle 可能转头去外网下载 JDK\n"
+             f"  装完整包: apt install -y openjdk-21-jdk")
         return
     warn(f"当前 JDK {v}，Gradle 要求 21 —— 大概率起不来。装: apt install -y openjdk-21-jdk\n"
          f"  （或让 Gradle 按 gradle/gradle-daemon-jvm.properties 的 toolchainUrl 自己下）")
@@ -64,6 +94,14 @@ def ensure_jdk():
 
 def kernel_aar(c: Ctx) -> Path:
     return ANDROID_REPO / "app" / "libs" / "kernel" / KERNEL_ABI.get(c.arch, c.arch) / "arupa-kernel.aar"
+
+
+def _sha256(p: Path) -> str:
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def check_kernel_aar(c: Ctx):
@@ -80,23 +118,50 @@ def check_kernel_aar(c: Ctx):
     want = (man.get("files") or {}).get(rel)
     if not want:
         return
-    h = hashlib.sha256()
-    with p.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    if h.hexdigest() != want:
+    if _sha256(p) != want:
         warn(f"内核 AAR 指纹与 {RUNTIME_MANIFEST.name} 不符（清单记录交付 "
              f"{man.get('kernelDeliveryId')}）:\n  {rel}\n"
              f"  换内核后必须同步更新该清单的 sha256，否则 Gradle 拒绝构建")
 
 
-def do_down(c: Ctx):
-    """装 Android SDK，并把 local.properties 指过去（仓库里那份是 Windows 路径 D:\\Android\\sdk）。"""
+def do_manifest(c: Ctx):
+    """把本机 AAR 的实际 sha256 写回 runtime-manifest.json。
+
+    Gradle 的 verifyMv3KernelDelivery 在配置期就比对指纹，不符直接失败并甩一句
+    expected=.../actual=... —— 换内核后必须同步这里，否则 APK 根本起不来。
+    注意只改指纹: kernelDeliveryId 描述的是"清单声称的内核交付"，真换内核时它也要跟着改。"""
     _require_repo()
-    import fetch
-    fetch.DRY_RUN = common.DRY_RUN
-    d = fetch.do_android_sdk(c.cfg)
-    ensure_jdk()
+    if not RUNTIME_MANIFEST.exists():
+        err(f"清单不存在: {RUNTIME_MANIFEST}")
+    man = json.loads(RUNTIME_MANIFEST.read_text(encoding="utf-8", errors="replace"))
+    files = man.setdefault("files", {})
+    changed = []
+    for abi in ("arm64", "x64"):
+        p = ANDROID_REPO / "app" / "libs" / "kernel" / abi / "arupa-kernel.aar"
+        rel = p.relative_to(ANDROID_REPO).as_posix()
+        if not p.exists() or rel not in files:
+            continue
+        got = _sha256(p)
+        if files[rel] == got:
+            continue
+        changed.append(f"  {rel}\n    - {files[rel]}\n    + {got}")
+        files[rel] = got
+    if not changed:
+        log(f"{RUNTIME_MANIFEST.name} 指纹已与本机 AAR 一致，无需改动")
+        return
+    if common.DRY_RUN:
+        log(f"(dry-run) 将更新 {RUNTIME_MANIFEST.name}:\n" + "\n".join(changed))
+        return
+    RUNTIME_MANIFEST.write_text(json.dumps(man, indent=2, ensure_ascii=False) + "\n",
+                                encoding="utf-8")
+    log(f"{RUNTIME_MANIFEST.name} 已同步为本机 AAR 的实际指纹:\n" + "\n".join(changed))
+    warn(f"kernelDeliveryId 仍是 {man.get('kernelDeliveryId')} —— 真换内核时它要一起改，"
+         f"否则清单声称的交付与实际 AAR 对不上")
+
+
+def ensure_local_properties(d: Path):
+    """仓库里那份 local.properties 是 Windows 路径（D:\\Android\\sdk）。不指到本机 SDK
+    AGP 只丢一句 "Directory does not exist"，接着甩 license 未接受 —— 根因被掩盖。"""
     lp = ANDROID_REPO / "local.properties"
     cur = lp.read_text(encoding="utf-8", errors="replace") if lp.exists() else ""
     lines = [l for l in cur.splitlines() if not l.startswith("sdk.dir=")]
@@ -112,12 +177,46 @@ def do_down(c: Ctx):
     log(f"local.properties 已指向: {d}")
 
 
+def do_down(c: Ctx):
+    """装 Android SDK，并把 local.properties 指过去。"""
+    _require_repo()
+    import fetch
+    fetch.DRY_RUN = common.DRY_RUN
+    ensure_jdk()      # sdkmanager 本身要 java，先备好
+    d = fetch.do_android_sdk(c.cfg)
+    ensure_local_properties(d)
+
+
+def _apply_gradle_proxy():
+    """Gradle 是 JVM 进程，不认 http_proxy 环境变量 —— 不显式给 -D，wrapper 下
+    gradle-*.zip 和 Gradle 拉 Maven 依赖都会连外网超时（10s 就放弃）。"""
+    p = (os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
+         or os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY") or "")
+    if not p:
+        return
+    m = re.match(r"(?:https?://)?(?:(?:[^:@/]+)(?::[^@/]*)?@)?([^:/]+)(?::(\d+))?",
+                 p.strip())
+    if not m:
+        warn(f"代理地址解析不了（{p}）—— Gradle 直连，可能下载超时")
+        return
+    host, port = m.group(1), m.group(2) or "80"
+    opts = (f"-Dhttp.proxyHost={host} -Dhttp.proxyPort={port} "
+            f"-Dhttps.proxyHost={host} -Dhttps.proxyPort={port} "
+            f"-Dhttp.nonProxyHosts=localhost|127.0.0.1")
+    os.environ["GRADLE_OPTS"] = (os.environ.get("GRADLE_OPTS", "") + " " + opts).strip()
+    log(f"Gradle 走代理 {host}:{port}（JVM 不读 http_proxy，需显式传 -D）")
+
+
 def do_build(c: Ctx):
     _require_repo()
     ensure_jdk()
+    _apply_gradle_proxy()
     import fetch
     fetch.DRY_RUN = common.DRY_RUN
-    sdk = fetch.android_sdk_dir(c.cfg)
+    # 幂等: 没装就现装。原来只取路径不装 —— 用户直接跑 build（没跑 down）时 SDK 是
+    # 空目录，AGP 会先报 "Directory does not exist" 再报 license，看不出是没装。
+    sdk = fetch.do_android_sdk(c.cfg)
+    ensure_local_properties(sdk)
     os.environ.setdefault("ANDROID_HOME", str(sdk))
     os.environ.setdefault("ANDROID_SDK_ROOT", str(sdk))
     check_kernel_aar(c)
@@ -169,3 +268,5 @@ def run_android(c: Ctx, actions: list):
             do_build(c)
         elif a == "package":
             do_package(c)
+        elif a == "manifest":
+            do_manifest(c)
