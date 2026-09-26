@@ -13,10 +13,12 @@
 # =============================================================================
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import time
+import zipfile
 from pathlib import Path
 
 from .common import (SRC, KERNEL_REPO, PC_REPO, DIST_ROOT, TOOLS_DIR, Ctx, build_cmd, cget,
@@ -29,6 +31,10 @@ from . import common
 MODULE_RELDIR = "chrome/browser/arupa_desktop"
 KERNEL_TARGET = f"{MODULE_RELDIR}:arupa_kernel"
 RENDER_TARGET = f"{MODULE_RELDIR}:render"
+# Android 交付件需要 v8_context_snapshot_64.bin（v8 上下文快照）。
+# 注意：ninja 目标名不带 gn 的前导 "//"（build.ninja 里写作
+# tools/v8_context_snapshot$:generate_v8_context_snapshot）
+V8_SNAPSHOT_TARGET = "tools/v8_context_snapshot:generate_v8_context_snapshot"
 
 # 测试可执行目标（全部 testonly，BUILD.gn 定义；按图里是否存在的实际过滤）
 TEST_TARGETS = [
@@ -74,6 +80,20 @@ ARTIFACTS = {
                      "content_shell.pak", "devtools_resources.pak", "shell_resources.pak"],
     },
 }
+
+# AAR 内 jni 目录名（Android ABI 名 ≠ gn 的 target_cpu 名）
+AAR_JNI_DIR = {"arm64": "arm64-v8a", "x64": "x86_64", "x86": "x86"}
+
+
+def v8_snapshot_name(c: Ctx) -> str:
+    """v8 上下文快照文件名 —— 各平台命名规则不同：
+    Android 用 _64/_32 后缀（tools/v8_context_snapshot/v8_context_snapshot.gni），
+    macOS 用 .<arch>.bin（与 x64 并存），其余平台就是 .bin。"""
+    if c.os == "android":
+        return "v8_context_snapshot_32.bin" if c.arch == "x86" else "v8_context_snapshot_64.bin"
+    if c.os == "mac":
+        return f"v8_context_snapshot.{V8_ARCH.get(c.arch, c.arch)}.bin"
+    return "v8_context_snapshot.bin"
 
 
 # ── 前置检查 ────────────────────────────────────────────────────────────────
@@ -187,6 +207,12 @@ def do_gen(c: Ctx):
         # desktop-android 变体才开 enable_desktop_android_extensions ⇒
         # enable_extensions_core（现有官方 AAR 的 .so 含 chrome-extension://，是同一路线）
         args += [("target_os", '"android"'), ("is_desktop_android", "true")]
+        # v8 上下文快照（v8_context_snapshot_64.bin，交付件必备）：
+        # use_v8_context_snapshot 的默认值显式排除 is_android，故 Android 上默认关；
+        # 且 target_os=android 且 v8_current_cpu != v8_target_cpu 时，它会被
+        # use_v8_context_snapshot_android_secondary_abi 二次覆盖，必须一并开启。
+        args += [("use_v8_context_snapshot", "true"),
+                 ("use_v8_context_snapshot_android_secondary_abi", "true")]
     write_args_gn(c.out_dir / "args.gn",
                   f"# nomad kernel — {c.os} {c.arch} {c.link}", args, extra_gn_args(c))
     gn_gen(c, c.out_dir / "args.gn")
@@ -209,6 +235,13 @@ def resolve_targets(c: Ctx):
     else:
         warn(f"构建图里没有 {RENDER_TARGET}（子进程薄壳）—— 只编内核本体，"
              f"打包时若缺 render 会直接拦下")
+    if c.os == "android":
+        # 交付件需要 v8_context_snapshot_64.bin；开关未开时该目标不在图里
+        if target_in_graph(c, V8_SNAPSHOT_TARGET):
+            targets.append(V8_SNAPSHOT_TARGET)
+        else:
+            warn(f"构建图里没有 {V8_SNAPSHOT_TARGET}（use_v8_context_snapshot 未生效）"
+                 f" —— 交付件将缺少 v8 上下文快照")
     return targets
 
 
@@ -320,11 +353,118 @@ def copy_assets(c: Ctx, stage: Path, kernel_dir: Path):
         log("  收录 include/arupa_kernel_capi.h")
     else:
         warn(f"缺 C ABI 头: {capi}")
+    if c.os == "android":
+        probe = pkg / "android" / "probe-plugin"
+        if probe.is_dir():
+            shutil.copytree(probe, stage / "probe-plugin", dirs_exist_ok=True)
+            log("  收录 probe-plugin/")
+        else:
+            warn(f"内核仓缺 {probe}（Android 探针插件），跳过")
     if c.os == "mac":
         alias = stage / "macKernel"
         if not alias.exists():
             alias.symlink_to("kernel", target_is_directory=True)   # PC 侧按 macKernel 取件
             log("  软链 macKernel -> kernel（PC 侧按此名取内核）")
+
+
+# ── Android 交付件：AAR 组装 ──────────────────────────────────────────────────
+#
+# 工作区里既无源码也无 gn 目标、因而无法自编的四件上游私有件：
+#   classes.jar（co.arupa.kernel.* Java 层）/ arupa_kernel_resources.apk /
+#   arupa_kernel.pak / jni/<abi>/libarupapluginhost.so
+# 故 Android 交付件以「同版本参考交付件」的框架层为骨架，只把
+# jni/<abi>/libarupakernel.so 换成自编产物 —— 结构与上游平替，内核是自编的。
+
+SKELETON_GLOB = "arupa-android-*"      # 参考交付件（上游官方 android 交付包）
+
+
+def find_reference_delivery(c: Ctx) -> Path | None:
+    """找参考交付件 —— 只取框架层，不取它的内核 .so。"""
+    if not DIST_ROOT.is_dir():
+        return None
+    cands = [p for p in sorted(DIST_ROOT.glob(SKELETON_GLOB))
+             if (p / "kernel" / c.arch / "arupa-kernel.aar").is_file()]
+    return cands[-1] if cands else None
+
+
+def aar_replace_jni(skeleton: Path, so: Path, jni_entry: str, out: Path) -> None:
+    """以骨架 AAR 为底替换 jni 条目：其余条目（classes.jar /
+    arupa_kernel_resources.apk / libarupapluginhost.so）原样保留，
+    compress_type 与时间戳一并照搬，避免改写 AAR 结构。"""
+    with zipfile.ZipFile(skeleton) as zin, zipfile.ZipFile(out, "w") as zout:
+        hit = False
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == jni_entry:
+                data = so.read_bytes()
+                hit = True
+            zi = zipfile.ZipInfo(item.filename, date_time=item.date_time)
+            zi.compress_type = item.compress_type
+            zi.external_attr = item.external_attr
+            zout.writestr(zi, data)
+    if not hit:
+        err(f"骨架 AAR 内没有 {jni_entry}: {skeleton}")
+
+
+def stage_android_delivery(c: Ctx, kernel_dir: Path) -> Path:
+    """Android 平台专属补齐：组装 AAR + 带入无法自编的框架层件。"""
+    so = kernel_dir / "libarupa_kernel.so"
+    if not so.is_file():
+        err(f"缺自编内核 .so: {so}")
+    ref = find_reference_delivery(c)
+    if ref is None:
+        err(f"找不到参考交付件（dist/{SKELETON_GLOB}/kernel/{c.arch}/arupa-kernel.aar）——"
+            f" 框架层无法自编，必须有一份同版本官方交付件作骨架")
+    log(f"参考交付件（仅取其框架层）: {ref.name}")
+
+    jni_dir = AAR_JNI_DIR.get(c.arch, c.arch)
+    aar_replace_jni(ref / "kernel" / c.arch / "arupa-kernel.aar", so,
+                    f"jni/{jni_dir}/libarupakernel.so", kernel_dir / "arupa-kernel.aar")
+    log(f"  组装: arupa-kernel.aar（jni/{jni_dir}/libarupakernel.so <- 自编 {human_size(so)}，"
+        f"框架层沿用 {ref.name}）")
+
+    for name in ("arupa_kernel.pak", "arupa_kernel_resources.apk"):
+        src = ref / "kernel" / c.arch / name
+        if src.is_file():
+            shutil.copy2(src, kernel_dir / name)
+            log(f"  随骨架带入: {name} ({human_size(src)})")
+        else:
+            warn(f"参考交付件缺 {name}，跳过")
+    return ref
+
+
+def write_capability_manifest(c: Ctx, stage: Path, n: int, ref: Path) -> None:
+    """能力清单 —— 与上游 capability-manifest.json 同 schema，locked_sha256 填本次产物。"""
+    import hashlib
+
+    def sha(p: Path) -> str:
+        h = hashlib.sha256()
+        with p.open("rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    locked = {p.relative_to(stage / "kernel").as_posix(): sha(p)
+              for p in sorted((stage / "kernel").rglob("*")) if p.is_file()}
+    abi = {"major": 1, "minor": 24}
+    ref_cap = ref / "capability-manifest.json"
+    if ref_cap.is_file():                      # ABI 版本随上游，不自创
+        try:
+            abi = json.loads(ref_cap.read_text(encoding="utf-8")).get("abi", abi)
+        except json.JSONDecodeError:
+            warn(f"参考交付件的 {ref_cap.name} 解析失败，ABI 版本用默认值")
+    data = {
+        "schema": "arupa.capability-manifest/1",
+        "generated": time.strftime("%Y-%m-%d"),
+        "platform": "android",
+        "kernel_version": c.ver,
+        "delivery_id": f"{c.ver}+{n}",
+        "abi": abi,
+        "locked_sha256": locked,
+    }
+    (stage / "capability-manifest.json").write_text(
+        json.dumps(data, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    log(f"  生成: capability-manifest.json（锁定 {len(locked)} 件）")
 
 
 def write_delivery_markers(c: Ctx, kernel_dir: Path, n: int):
@@ -392,8 +532,15 @@ def do_package(c: Ctx):
     if not c.out_dir.is_dir():
         err(f"构建目录不存在: {c.out_dir}（先跑: python3 scripts/build.py kernel build）")
 
-    required = [r.format(v8=V8_ARCH.get(c.arch, c.arch)) for r in ARTIFACTS[c.os]["required"]]
-    optional = [o.format(v8=V8_ARCH.get(c.arch, c.arch)) for o in ARTIFACTS[c.os]["optional"]]
+    # v8 快照文件名各平台不同（Android 是 _64/_32），不能用统一的 {v8} 展开
+    snap = v8_snapshot_name(c)
+
+    def _fmt(items):
+        return [snap if "{v8}" in i else i.format(v8=V8_ARCH.get(c.arch, c.arch))
+                for i in items]
+
+    required = _fmt(ARTIFACTS[c.os]["required"])
+    optional = _fmt(ARTIFACTS[c.os]["optional"])
 
     # 门禁先于编号消耗：被拦下的误跑不该白跳一个号
     verify_freshness(c, required)
@@ -410,6 +557,8 @@ def do_package(c: Ctx):
         return None
     DIST_ROOT.mkdir(parents=True, exist_ok=True)
     kernel_dir = stage / "kernel"
+    if c.os == "android":
+        kernel_dir = kernel_dir / c.arch      # 与上游一致：kernel/<abi>/...
     kernel_dir.mkdir(parents=True, exist_ok=True)
 
     for f in required:
@@ -430,6 +579,10 @@ def do_package(c: Ctx):
 
     write_delivery_markers(c, kernel_dir, n)   # PC 宿主硬校验项
     copy_assets(c, stage, kernel_dir)
+    if c.os == "android":
+        # AAR 组装 + 无法自编的框架层件（要赶在 write_manifest 前，好让清单收录）
+        ref = stage_android_delivery(c, kernel_dir)
+        write_capability_manifest(c, stage, n, ref)
     verify_pc_requirements(c, stage)
     write_manifest(c, stage, n, kernel_dir)
     write_sha256sums(stage)
