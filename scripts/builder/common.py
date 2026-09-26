@@ -366,9 +366,36 @@ def ninja_path() -> Path:
     return SRC / ("third_party/ninja/ninja.exe" if IS_WIN else "third_party/ninja/ninja")
 
 
+def autoninja_cmd(c: Ctx) -> list:
+    """autoninja 启动前缀（depot_tools 包装: 按 args.gn 的 use_siso 派发 ninja/siso，并自动选 -j）。
+
+    Windows 上两个连环坑，踩中的表现都是"命令无法执行 / exit 1":
+      1. autoninja 落地是 autoninja.bat —— subprocess 走 CreateProcess，不补 .bat 扩展名
+         （gclient 同理，见 fetch.gclient_bin），直接 [WinError 2] 系统找不到指定的文件。
+      2. autoninja.bat 内部是 python-bin\\python3.bat autoninja.py，而 python3.bat 硬性要求
+         python3_bin_reldir.txt（depot_tools 自举产物，未自举时没有）—— 光解决 1 会得到
+         exit 1: python3_bin_reldir.txt not found。gclient.bat 用的是 vpython3（自带
+         hermetic CPython，不依赖自举），所以未自举时走 vpython3 + autoninja.py，
+         与 autoninja.bat 完全等价（它跑的就是 autoninja.py）。
+    """
+    if not IS_WIN:
+        return ["autoninja"]
+    d = resolve_depot_tools_dir(c.cfg)
+    if (d / "python3_bin_reldir.txt").exists():
+        for n in ("autoninja.bat", "autoninja.cmd"):
+            if (d / n).exists():
+                return [str(d / n)]
+    vpy = next((d / n for n in ("vpython3.bat", "vpython3.cmd", "vpython3.exe")
+                if (d / n).exists()), None)
+    if vpy and (d / "autoninja.py").exists():
+        log("depot_tools 未自举（缺 python3_bin_reldir.txt）—— 改用 vpython3 跑 autoninja.py")
+        return [str(vpy), str(d / "autoninja.py")]
+    return ["autoninja"]
+
+
 def build_cmd(c: Ctx, targets) -> list:
     """autoninja（depot_tools 包装，能按 args.gn 的 use_siso 派发后端）。"""
-    cmd = ["autoninja", "-C", str(c.out_dir)]
+    cmd = [*autoninja_cmd(c), "-C", str(c.out_dir)]
     if c.jobs:
         cmd += ["-j", str(c.jobs)]
     cmd += list(targets)

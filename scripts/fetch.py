@@ -657,22 +657,24 @@ def gclient_sync(android: bool, nohooks: bool, jobs: int, shallow: bool, force: 
         warn(f"Chromium 的 Android 交叉编译只在 Linux 宿主上支持（当前: {HOST}）—— 继续拉依赖，但编译须换 Linux")
     sync_gclient(CFG, CHROMIUM_URL, VER, android, force)
 
-    cmd = [gclient_bin(), "sync"]
-    cmd += ["--no-history", "--shallow"] if android or shallow else ["--with_branch_heads", "--with_tags"]
+    flags = ["--no-history", "--shallow"] if android or shallow else ["--with_branch_heads", "--with_tags"]
     if nohooks:
-        cmd += ["--nohooks"]
-    cmd += ["--jobs", str(jobs)]
+        flags += ["--nohooks"]
 
     bad = WORKSPACE_ROOT / "_bad_scm"
     for attempt in range(1, 4):
-        log(f"第 {attempt}/3 次同步（--jobs {jobs}）")
-        if run(cmd, cwd=WORKSPACE_ROOT, check=False):
+        # 坑: 经代理并发拉十几个第三方仓时，对端常在传输中途 RST（SSL_read: unexpected eof），
+        # 原速原并发重试照样被掐。逐轮砍半并发 + 线性退避，比硬重试更容易跑完。
+        j = max(1, jobs // (2 ** (attempt - 1)))
+        log(f"第 {attempt}/3 次同步（--jobs {j}）")
+        if run([gclient_bin(), "sync", *flags, "--jobs", str(j)], cwd=WORKSPACE_ROOT, check=False):
             break
-        warn("同步失败，清理 _bad_scm 后 30 秒重试（多为 googlesource 连接被切断）")
+        warn(f"同步失败（--jobs {j}），清理 _bad_scm 后 {30 * attempt} 秒重试"
+             f"（多为 googlesource 传输被掐断，下轮并发降到 {max(1, jobs // (2 ** attempt))}）")
         shutil.rmtree(bad, ignore_errors=True)
         if attempt == 3:
-            err("gclient sync 连续 3 次失败 —— 检查代理与网络")
-        time.sleep(30)
+            err("gclient sync 连续 3 次失败 —— 检查代理与网络（可再试 --jobs 1 或换代理出口）")
+        time.sleep(30 * attempt)
 
     state = load_state()
     state[variant] = {"deps_hash": deps_hash(), "hooks": not nohooks, "ver": VER,
@@ -1130,7 +1132,9 @@ def main(argv=None) -> int:
         elif t == "chromium":
             do_chromium(shallow)
         elif t == "deps":
-            gclient_sync(False, args.nohooks, args.jobs, args.shallow is True, args.force)
+            # 与 --shallow 帮助文本一致（默认开）: 不显式加 --full-history 就按 --no-history 拉依赖。
+            # 走代理时带全历史/branch heads 的传输量是浅拉的十几倍，几乎必然被中途掐断。
+            gclient_sync(False, args.nohooks, args.jobs, shallow, args.force)
         elif t == "hooks":
             gclient_runhooks()
         elif t == "android":
