@@ -30,6 +30,9 @@ SRC = WORKSPACE_ROOT / "src"
 KERNEL_REPO = WORKSPACE_ROOT / "nomadbrowser.kernel"
 PC_REPO = WORKSPACE_ROOT / "nomadbrowser.pc"
 ANDROID_REPO = WORKSPACE_ROOT / "nomadbrowser.android"
+# 坑: 编译目录在 src/ 之外时，Windows 的 midl ACTION 会集体失败（midl.exe 把 GN rebase
+# 出来的 ../../src/... 写进注释，与按 src/out/<name> 布局生成的 checked-in 基线比对不上）。
+# 由 ensure_midl_out_of_tree_patch() 打补丁解决，目录位置保持工作区根的 out/。
 OUT_ROOT = WORKSPACE_ROOT / "out"
 DIST_ROOT = WORKSPACE_ROOT / "dist"
 STATE_DIR = WORKSPACE_ROOT / ".build"
@@ -132,11 +135,9 @@ def ensure_depot_tools(cfg: dict):
     if not d.is_dir():
         err(f"depot_tools 不存在: {d}（先跑: python3 scripts/fetch.py depot_tools）")
     os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
-    # out/ 在工作区根（不在 src/ 下）时，depot_tools 的 ninja.py 靠 gclient_paths
-    # .FindGclientRoot(out_dir) 反推源码根，而该函数会用 .gclient_entries 校验
-    # out_dir 是否落在某个 entry（src）之下 —— out/ 不在，于是返回 None，
-    # autoninja 报 "Could not find Ninja in the third_party..."。
-    # 把树内 ninja 挂进 PATH，ninja.py 的 fallback 就能找到它（扫描时会跳过 depot_tools）。
+    # depot_tools 的 ninja.py 用 gclient_paths.FindGclientRoot(out_dir) 反推源码根：
+    # out/ 不在 src 下时它返回 None，autoninja 会报 "Could not find Ninja in the
+    # third_party..."。把树内 ninja 挂进 PATH，fallback 就能找到它（扫描时跳过 depot_tools）。
     ninja_dir = ninja_path().parent
     if ninja_dir.is_dir():
         os.environ["PATH"] = str(ninja_dir) + os.pathsep + os.environ.get("PATH", "")
@@ -148,7 +149,68 @@ def ensure_depot_tools(cfg: dict):
         os.environ.pop(k, None)
     log(f"depot_tools: {d}")
     fetch.bootstrap_depot_tools(d)   # 缺自举产物时 autoninja 会 exit 1（幂等，只下一回）
+    ensure_midl_out_of_tree_patch()  # Windows + 编译目录在 src 外: midl 基线比对补丁
     return d
+
+
+MIDL_PY = SRC / "build" / "toolchain" / "win" / "midl.py"
+MIDL_MARKER = "nomad: normalize_idl_path_comment"
+MIDL_HELPER = (
+    "# " + MIDL_MARKER + "\n"
+    "def normalize_idl_path_comment(filename):\n"
+    '    """抹掉 midl 注释里多出来的 src/ 层级（只改参与比对的两份临时副本）。"""\n'
+    "    contents = open(filename, 'rb').read()\n"
+    "    contents = re.sub(rb'(Compiler settings for (?:\\.\\./)+)src/', rb'\\1', contents)\n"
+    "    open(filename, 'wb').write(contents)\n"
+    "\n\n"
+)
+
+
+def ensure_midl_out_of_tree_patch() -> bool:
+    """编译目录不在 src/ 下时，让 Windows 的 midl ACTION 仍能通过基线比对。
+
+    midl.exe 把传给它的 idl 路径原样写进生成文件注释:
+        /* Compiler settings for ../../src/third_party/.../X.idl:     ← out/ 在工作区根
+    而 src/third_party/win_build_output/midl/ 下的 checked-in 基线是按上游布局（编译目录
+    src/out/<name>）生成的 ../../third_party/...，midl.py 拿 filecmp 逐字节比对 →
+    全线 FAILED: "midl.exe output different from files in ..."（差异只有这行注释）。
+
+    把参与比对的两侧（midl 输出 + 从基线拷到 out 的那份副本）各规范化一次，抹掉多出来的
+    src/ 层级即可对齐：仓库里的基线原件一个字节都不动（不像 rebaseline 那样污染 src），
+    产物内容也只差注释。幂等：按标记判断是否已打过，切版本/重拉源码后重跑会自动补上。
+    """
+    if not IS_WIN:
+        return False
+    if not MIDL_PY.exists():
+        return False
+    text = MIDL_PY.read_text(encoding="utf-8", errors="replace")
+    if MIDL_MARKER in text:
+        return False
+    if DRY_RUN:                       # 改源码树的操作，dry-run 下只看不做
+        log(f"(dry-run) 打 midl 基线补丁: {MIDL_PY}")
+        return False
+    edits = [
+        # 1) midl 输出（ZapTimestamp 之后）
+        ("            ZapTimestamp(os.path.join(midl_output_dir, f))\n",
+         "            ZapTimestamp(os.path.join(midl_output_dir, f))\n"
+         "            normalize_idl_path_comment(os.path.join(midl_output_dir, f))\n"),
+        # 2) 从 checked-in 基线拷进 outdir 的那份副本
+        ("        shutil.copy(file_path, outdir)\n",
+         "        shutil.copy(file_path, outdir)\n"
+         "        normalize_idl_path_comment(os.path.join(outdir, source_file))\n"),
+        # 3) 辅助函数本体
+        ("def main(\n    arch,", MIDL_HELPER + "def main(\n    arch,"),
+    ]
+    for old, new in edits:
+        if text.count(old) != 1:
+            warn(f"{MIDL_PY.name} 结构变了（锚点不唯一: {old.strip()[:48]}）—— 跳过补丁；"
+                 f"若 midl ACTION 仍报输出与基线不一致，需手动处理 {MIDL_PY}")
+            return False
+        text = text.replace(old, new)
+    MIDL_PY.write_text(text, encoding="utf-8")
+    log(f"已给 {MIDL_PY.relative_to(SRC)} 打补丁: 比对前规范化 idl 路径注释"
+        f"（编译目录在 src 外时的 midl 基线差异）")
+    return True
 
 
 def android_native_deps():
