@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # 源码 / 依赖拉取更新入口（Windows）—— 转发到 scripts/fetch.py
 # 用法见: .\fetch.ps1 -h
 $ErrorActionPreference = 'Stop'
