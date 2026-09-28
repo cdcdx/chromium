@@ -15,11 +15,12 @@
 #      gen      gn gen（写 args.gn + 生成构建图）
 #      build    编译
 #      test     编译并运行测试目标（仅 kernel）
-#      package  出交付包到 dist/（kernel: 仅 static 允许）
+#      package  出交付包到 dist/（kernel: 仅 static 允许；android AAR 结构由脚本
+#               定义，无法自编的框架件就地从源码树/产品内取，不落骨架目录）
 #      all      down + gen + build（+ kernel: test/package 需显式指定）
 #    选项:
 #      --os win|mac|linux|android      目标系统（默认宿主）
-#      --arch x86|x64|arm64|apple      目标架构（默认宿主；apple=arm64）
+#      --arch x86|x64|arm64|apple|all  目标架构（默认宿主；apple=arm64，all=Android 合并包）
 #      --ver X.Y.Z.W                   版本号（默认取 src/chrome/VERSION）
 #      --link static|dynamic           静态/组件构建（默认: kernel/browser=static, chromium=dynamic）
 #      --jobs N                        并行度（默认 autoninja 自行决定）
@@ -36,9 +37,11 @@
 #  目录规范:
 #    编译  out/<project>-<os>-<arch>-<ver>-<static|dynamic>
 #    交付  dist/<project>-<os>-<arch>-<ver>-<n>
+#          dist/<project>-<os>-<ver>-<n>               Android 合并包（--arch all）
 #
 #  例:
 #    python3 scripts/build.py kernel gen build --arch arm64 --link static
+#    python3 scripts/build.py kernel package --os android   # arm64+x64 合并成一个包
 #    python3 scripts/build.py kernel package            # 出交付包（自动递增编号）
 #    python3 scripts/build.py browser package           # PC 出包（自动取最新内核交付包）
 #    python3 scripts/build.py android build --arch arm64 --variant debug
@@ -57,7 +60,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import builder.common as C  # noqa: E402
 from builder.common import (ARCHS, Ctx, apply_proxy, chromium_version, check_project,
                             err, log, normalize_arch, normalize_link, normalize_project,
-                            step, warn, host_arch, HOST_OS, OUT_ROOT, DIST_ROOT)  # noqa: E402
+                            step, warn, host_arch, HOST_OS, OUT_ROOT, DIST_ROOT,
+                            MULTI_ARCH, ANDROID_MULTI_ARCHS)  # noqa: E402
 import builder.chromium as chromium  # noqa: E402
 import builder.kernel as kernel  # noqa: E402
 import builder.browser as browser  # noqa: E402
@@ -82,7 +86,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="chromium / kernel / browser / all / print-delivery")
     p.add_argument("actions", nargs="*", metavar="动作", help=" / ".join(ACTIONS) + "（默认 build）")
     p.add_argument("--os", dest="os_name", default="", help="win / mac / linux / android")
-    p.add_argument("--arch", default="", help="x86 / x64 / arm64（apple = arm64）")
+    p.add_argument("--arch", default="",
+                   help="x86 / x64 / arm64（apple = arm64）；all = Android 合并包（arm64+x64）")
     p.add_argument("--ver", default="", help="版本号（默认取自 src/chrome/VERSION）")
     p.add_argument("--link", default="", help="static / dynamic")
     p.add_argument("--variant", default="", help="android: debug / release（默认 debug）")
@@ -130,8 +135,14 @@ def main(argv=None) -> int:
         if p == "chromium" and any(a in ("test", "package") for a in actions):
             warn(f"chromium 基线不支持 {'/'.join(a for a in actions if a in ('test', 'package'))}，跳过")
         c = make_ctx(cfg, p, args)
-        step(f"{p} [{c.os}/{c.arch}/{c.link}] {c.ver}")
-        log(f"编译目录: {c.out_dir}")
+        arch_label = ("+".join(ANDROID_MULTI_ARCHS) if c.arch == MULTI_ARCH else c.arch)
+        step(f"{p} [{c.os}/{arch_label}/{c.link}] {c.ver}")
+        if c.arch == MULTI_ARCH:
+            log("合并交付包（arm64 + x64 打成一个包）")
+            for a in ANDROID_MULTI_ARCHS:
+                log(f"  构建目录({a}): {C.OUT_ROOT / C.build_dir_name(p, c.os, a, c.ver, c.link)}")
+        else:
+            log(f"编译目录: {c.out_dir}")
         acts = [a for a in actions if not (p == "chromium" and a in ("test", "package"))]
         if p == "chromium":
             chromium.run_chromium(c, [a for a in acts if a in chromium.ACTIONS])
@@ -149,8 +160,12 @@ def main(argv=None) -> int:
 def make_ctx(cfg: dict, project: str, args) -> Ctx:
     os_name = (args.os_name or os.environ.get("TARGET_OS") or
                cfg.get("target_os") or HOST_OS).lower()
-    arch = normalize_arch(args.arch or os.environ.get("TARGET_ARCH") or
-                          cfg.get("target_arch") or host_arch())
+    acts = [ACTION_ALIASES.get(a.lower(), a.lower()) for a in (args.actions or [])]
+    raw_arch = args.arch or os.environ.get("TARGET_ARCH") or cfg.get("target_arch") or ""
+    if not raw_arch and project == "kernel" and os_name == "android" and "package" in acts:
+        # Android 内核交付包是 arm64 + x64 合并包（kernel/<abi>/ 并列），不必指定架构
+        raw_arch = MULTI_ARCH
+    arch = normalize_arch(raw_arch or host_arch())
     check_project(project, os_name, arch)
     ver = args.ver or os.environ.get("CHROMIUM_VERSION") or chromium_version(cfg)
     link = normalize_link(args.link or os.environ.get("LINK_MODE") or

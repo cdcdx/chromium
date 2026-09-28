@@ -249,8 +249,14 @@ OSES = ("win", "mac", "linux", "android")
 ARCHS = ("x86", "x64", "arm64")
 LINK_MODES = ("static", "dynamic")
 
+# Android 合并交付包：arm64 与 x64 打进同一个包（kernel/<abi>/ 并列，与上游
+# arupa-android-* 同构）—— 不再按架构各出一个包。目录名里不带架构段。
+MULTI_ARCH = "all"
+ANDROID_MULTI_ARCHS = ("arm64", "x64")
+
 ARCH_ALIAS = {"apple": "arm64", "aarch64": "arm64", "arm": "arm64",
-              "x86_64": "x64", "amd64": "x64", "i386": "x86", "i686": "x86"}
+              "x86_64": "x64", "amd64": "x64", "i386": "x86", "i686": "x86",
+              "multi": MULTI_ARCH, "universal": MULTI_ARCH, "both": MULTI_ARCH}
 
 # os -> 该平台允许的架构
 OS_ARCHS = {
@@ -284,6 +290,13 @@ def host_arch() -> str:
 def check_project(project: str, os_name: str, arch: str):
     """交叉编译的现实约束：Chromium 只能在本宿主编本宿主（macOS 目标必须 macOS 宿主，
     Windows 目标必须 Windows 宿主），Android 目标需要 Linux 宿主。"""
+    if arch == MULTI_ARCH:      # 合并包：不属于任何单一架构，单独放行
+        if project != "kernel" or os_name != "android":
+            err(f"--arch {MULTI_ARCH}（{'+'.join(ANDROID_MULTI_ARCHS)} 合并包）只用于 "
+                f"kernel + android（当前: {project} / {os_name}）")
+        if HOST_OS != "linux":
+            warn(f"Android 交叉编译只在 Linux 宿主上成立（当前: {HOST_OS}）—— 继续但大概率失败")
+        return
     if project == "android" and os_name != "android":
         err(f"android 项目只出 Android 包（当前目标系统: {os_name}）—— 加 --os android")
     if os_name not in OSES:
@@ -308,7 +321,11 @@ def build_dir_name(project: str, os_name: str, arch: str, ver: str, link: str) -
 
 
 def dist_prefix(project: str, os_name: str, arch: str, ver: str) -> str:
-    """dist/<project>-<os>-<arch>-<ver>-<n> 的前缀（不含 n）"""
+    """dist/<project>-<os>-<arch>-<ver>-<n> 的前缀（不含 n）
+
+    合并包（arch == all）目录名里不带架构: dist/<project>-<os>-<ver>-<n>。"""
+    if arch == MULTI_ARCH:
+        return f"{project}-{os_name}-{ver}"
     return f"{project}-{os_name}-{arch}-{ver}"
 
 
@@ -456,11 +473,22 @@ def autoninja_cmd(c: Ctx) -> list:
 
 
 def build_cmd(c: Ctx, targets) -> list:
-    """autoninja（depot_tools 包装，能按 args.gn 的 use_siso 派发后端）。"""
+    """autoninja（depot_tools 包装，能按 args.gn 的 use_siso 派发后端）。
+
+    POSIX 下套一层 shell 抬高栈上限：v8/src/roots/roots.h 里
+    COUNT_ROOT 宏展开出上千项 "+1" 的巨型常量表达式，clang 解析它是递归下降，
+    默认 8MB 栈正好卡在边缘 —— 实测同一个 snapshot-external.cc 会偶发
+    "clang frontend command failed due to signal"（SIGSEGV 爆栈），加到
+    unlimited（失败则 64MB）后稳定通过。mold/ld 与 ninja 都不受影响。
+    """
     cmd = [*autoninja_cmd(c), "-C", str(c.out_dir)]
     if c.jobs:
         cmd += ["-j", str(c.jobs)]
     cmd += list(targets)
+    if not IS_WIN:
+        quoted = " ".join(shlex.quote(str(x)) for x in cmd)
+        return ["bash", "-c",
+                f"ulimit -s unlimited 2>/dev/null || ulimit -s 65536; exec {quoted}"]
     return cmd
 
 

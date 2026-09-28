@@ -84,12 +84,28 @@ def project_paths(c: Ctx):
         return sln if sln.exists() else mac_proj, mac_proj
     if c.os == "linux":
         for cand in sorted((PC_REPO / "NomadBrowser.Avalonia.Linux").glob("*.csproj")):
-            return PC_REPO / "NomadBrowser.Linux.slnx", cand
+            slnx = PC_REPO / "NomadBrowser.Linux.slnx"
+            return slnx if slnx.exists() else cand, cand
         proj = PC_REPO / "NomadBrowser.Avalonia" / "NomadBrowser.Avalonia.csproj"
         if not proj.exists():
             err("找不到 Linux 主工程（期望 NomadBrowser.Avalonia.Linux/*.csproj 或 "
                 "NomadBrowser.Avalonia/NomadBrowser.Avalonia.csproj）")
-        return PC_REPO / "NomadBrowser.sln", proj
+        # 不用 NomadBrowser.sln：它挂着 ..\Arupa\shells\dotnet\ArupaKernel\
+        # ArupaKernel.csproj（Windows 同工作区那份内核仓，见 PC 仓 project.md
+        # "内核强依赖外部仓"）。Linux 工作区没有 Arupa/ 这个目录，还原整张 sln 必然
+        # MSB3202。没有任何工程用 ProjectReference 指它（只有 Test 工程按
+        # HintPath 引已编译的 ArupaKernel.dll），所以拿主工程当还原入口即可 ——
+        # 它的 ProjectReference 图就是实际要编的东西。
+        # 没有 Linux 专用入口工程时只能回落到 NomadBrowser.Avalonia（Windows 入口）
+        # + net10.0 TFM，而那份 TFM 的共享源码按 #if MAC 分叉（MAC 只有
+        # NomadBrowser.Avalonia.Mac/NomadBrowser.Avalonia.Mac.csproj 定义），
+        # Linux 上必然报 MacViewCreation/MacTabOptions 等未定义 —— 真要出 Linux 包
+        # 得先有 NomadBrowser.Avalonia.Linux（上面的 glob 会优先选它）。
+        warn("PC 仓没有 NomadBrowser.Avalonia.Linux —— 回落到 NomadBrowser.Avalonia "
+             "(Windows 入口) 的 net10.0 TFM；该 TFM 的入口源码走 #if MAC 分叉，"
+             "Linux 上需要专用入口工程才能编过")
+        slnx = PC_REPO / "NomadBrowser.Linux.slnx"
+        return slnx if slnx.exists() else proj, proj
     proj = PC_REPO / "NomadBrowser.Avalonia" / "NomadBrowser.Avalonia.csproj"
     if not proj.exists():
         err(f"缺 Windows 主工程: {proj}")
@@ -140,15 +156,25 @@ def do_build(c: Ctx):
     delivery = resolve_delivery(c)
 
     dn = dotnet()
-    run([dn, "restore", str(sln)], cwd=PC_REPO)
-    if c.os == "mac":
-        # -p:BuildMac=true 必须显式给：slnx 直含的 Core/PluginContracts 等工程
-        # 与 Avalonia.Mac 引用链全局属性不一致时，MSBuild 会把同一工程编两次。
-        run([dn, "build", str(sln), "-c", cfg, "--no-restore",
-             "-p:BuildMac=true", f"-p:ArupaDeliveryRoot={delivery}"], cwd=PC_REPO)
+    if c.os == "linux":
+        # Directory.Build.props 在非 Windows 上把 BuildMac 置 true → 主工程双 TFM
+        # （net10.0-windows7.0;net10.0），还原/编译 windows TFM 需要
+        # EnableWindowsTargeting，否则 NETSDK1100；编出来也不能在 Linux 上跑，
+        # 故显式只编 net10.0。
+        run([dn, "restore", str(sln), "-p:EnableWindowsTargeting=true"], cwd=PC_REPO)
+        run([dn, "build", str(main_proj), "-c", cfg, "--no-restore", "-f", "net10.0",
+             "-p:EnableWindowsTargeting=true", f"-p:ArupaDeliveryRoot={delivery}"],
+            cwd=PC_REPO)
     else:
-        run([dn, "build", str(main_proj), "-c", cfg, "--no-restore",
-             f"-p:ArupaDeliveryRoot={delivery}"], cwd=PC_REPO)
+        run([dn, "restore", str(sln)], cwd=PC_REPO)
+        if c.os == "mac":
+            # -p:BuildMac=true 必须显式给：slnx 直含的 Core/PluginContracts 等工程
+            # 与 Avalonia.Mac 引用链全局属性不一致时，MSBuild 会把同一工程编两次。
+            run([dn, "build", str(sln), "-c", cfg, "--no-restore",
+                 "-p:BuildMac=true", f"-p:ArupaDeliveryRoot={delivery}"], cwd=PC_REPO)
+        else:
+            run([dn, "build", str(main_proj), "-c", cfg, "--no-restore",
+                 f"-p:ArupaDeliveryRoot={delivery}"], cwd=PC_REPO)
     log("PC 编译完成")
 
 
@@ -195,9 +221,11 @@ def do_package(c: Ctx):
         if not app.is_dir():
             err(f"未找到 .app: {app}（Mac 目标没产出 bundle）")
     elif c.os == "linux":
-        run([dn, "publish", str(main_proj), "-c", cfg, "-r", rid(c),
-             "--no-restore", "-o", str(payload), f"-p:ArupaDeliveryRoot={delivery}"],
-            cwd=PC_REPO)
+        # 同 do_build：-f net10.0（多 TFM 工程 publish 不带 -f 会 NETSDK1047）
+        # + EnableWindowsTargeting（还原 windows7.0 TFM 需要）。
+        run([dn, "publish", str(main_proj), "-c", cfg, "-r", rid(c), "-f", "net10.0",
+             "--no-restore", "-o", str(payload), "-p:EnableWindowsTargeting=true",
+             f"-p:ArupaDeliveryRoot={delivery}"], cwd=PC_REPO)
     else:
         run([dn, "publish", str(main_proj), "-c", cfg, "-r", rid(c),
              "--self-contained", "true", "--no-restore", "-o", str(payload),
