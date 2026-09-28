@@ -7,13 +7,19 @@
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-$py = $null
-foreach ($c in @('python3', 'python', 'py')) {
-    $cmd = Get-Command $c -ErrorAction SilentlyContinue
-    if ($cmd) { $py = $cmd.Source; break }
+. (Join-Path $Root 'scripts\_find_python.ps1')
+$py = Find-Python3
+if (-not $py) {
+    Write-Host "[ERROR] 未找到可用的 Python 3" -ForegroundColor Red
+    Write-Host "        （若已安装：多半是 PATH 里只有 WindowsApps 的 python 存根，" -ForegroundColor DarkGray
+    Write-Host "         在 设置 > 应用 > 高级应用设置 > 应用执行别名 里关掉 python.exe/python3.exe）" -ForegroundColor DarkGray
+    exit 1
 }
-if (-not $py) { Write-Host "[ERROR] 未找到 python3" -ForegroundColor Red; exit 1 }
 
 $ErrorActionPreference = 'Continue'
-& $py "$Root\scripts\build.py" @args
+$pyArgs = @()
+if ($py.Pre) { $pyArgs += $py.Pre }
+$pyArgs += (Join-Path $Root 'scripts\build.py')
+if ($args) { $pyArgs += $args }
+& $py.Exe @pyArgs
 exit $LASTEXITCODE
