@@ -14,5 +14,7 @@ if (-not $Py) {
     exit 1
 }
 
+# 同上（build.ps1）: 原生命令的 stderr 不该终止脚本，失败看退出码。
+$ErrorActionPreference = 'Continue'
 & $Py "$Root\scripts\fetch.py" @args
 exit $LASTEXITCODE

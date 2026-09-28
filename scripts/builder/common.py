@@ -44,6 +44,8 @@ IS_WIN = HOST == "Windows"
 
 DRY_RUN = False
 YES = False
+KEEP_GOING = False      # ninja -k 0: 单条失败不中断
+RETRIES = 0             # 编译失败后重跑次数
 
 
 # ── 输出 ────────────────────────────────────────────────────────────────────
@@ -482,6 +484,8 @@ def build_cmd(c: Ctx, targets) -> list:
     unlimited（失败则 64MB）后稳定通过。mold/ld 与 ninja 都不受影响。
     """
     cmd = [*autoninja_cmd(c), "-C", str(c.out_dir)]
+    if KEEP_GOING:
+        cmd += ["-k", "0"]          # 单条失败不中断，先跑完能跑的
     if c.jobs:
         cmd += ["-j", str(c.jobs)]
     cmd += list(targets)
@@ -490,6 +494,25 @@ def build_cmd(c: Ctx, targets) -> list:
         return ["bash", "-c",
                 f"ulimit -s unlimited 2>/dev/null || ulimit -s 65536; exec {quoted}"]
     return cmd
+
+
+def run_build(c: Ctx, targets) -> bool:
+    """跑编译，失败按 RETRIES 重跑。
+
+    坑: Windows 上偶发 clang-cl 被信号打死（Exception 0xC000001D —— 非法指令，随机 TU、
+    随机阶段，栈顶的崩溃处理帧却总一样；像是内存/执行层面偶发翻页，不是代码问题）。
+    ninja 默认一失败就停，几万步的活儿就被一个随机 crash 打断；配合 -k 0 先跑完能跑的，
+    剩下的下一轮补（增量，已完成的产物不会重编），几轮下来就能收敛。
+    """
+    total = RETRIES + 1
+    for attempt in range(1, total + 1):
+        if run(build_cmd(c, targets), cwd=SRC, check=False):
+            return True
+        if attempt < total:
+            warn(f"编译第 {attempt}/{total} 次未跑完（ninja 非 0 退出）—— 30 秒后重跑；"
+                 f"已编好的产物会保留，只补剩下的（偶发 clang 崩溃时 -k 能一路推进）")
+            time.sleep(30)
+    return False
 
 
 def probe_steps(c: Ctx, targets, timeout: int = 90):

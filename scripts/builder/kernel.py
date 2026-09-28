@@ -26,8 +26,8 @@ from .common import (SRC, KERNEL_REPO, PC_REPO, DIST_ROOT, TOOLS_DIR, Ctx, build
                      err, gn_gen, git, log, out, probe_steps, purge_previous_deliveries,
                      run, warn, write_args_gn, write_sha256sums, zip_dir, extra_gn_args,
                      ensure_depot_tools, next_delivery_no, record_delivery, human_size,
-                     ensure_android_native_deps, MULTI_ARCH, ANDROID_MULTI_ARCHS,
-                     SCRIPTS_DIR, WORKSPACE_ROOT)
+                     run_build, ensure_android_native_deps, MULTI_ARCH,
+                     ANDROID_MULTI_ARCHS, SCRIPTS_DIR, WORKSPACE_ROOT)
 from . import common
 
 MODULE_RELDIR = "chrome/browser/arupa_desktop"
@@ -348,7 +348,7 @@ def do_build(c: Ctx):
             warn(f"本次要编 {steps} 步 —— 不像一次小改动，多半是级联（sysroot/args.gn/版本变了），"
                  f"先确认再等几小时")
         log(f"编译目标: {' '.join(targets)}")
-        if not run(build_cmd(c, targets), cwd=SRC):
+        if not run_build(c, targets):
             err("编译失败")
 
     required = [r.format(v8=V8_ARCH.get(c.arch, c.arch)) for r in ARTIFACTS[c.os]["required"]]
@@ -457,6 +457,36 @@ def _copy_stage_assets(c: Ctx, stage: Path):
 
     Android 交付包不带 dotnet/ 与 include/（dotnet 是 PC 侧 C# 绑定、include 是
     C ABI 头，都只服务 PC 宿主）—— 参照上游 arupa-android-* 的包结构。"""
+
+
+def copy_gen_paks(c: Ctx, kernel_dir: Path) -> int:
+    """把构建树里 gen/ 下的 *.pak 按相对路径收进交付包的 kernel/gen/。
+
+    坑: 内核的资源加载（arupa_content_main_delegate.cc:270-305）先找 <dir>/xxx.pak，
+    再回退 <dir>/gen/extensions/.../xxx.pak。只带根目录那三个 pak 的话，
+    extensions_strings_*、extensions_renderer_generated_resources、
+    chrome/browser_resources、ui/webui/resources、components/strings/* 全都不在包里
+    —— 渲染进程起来先打一串 [arupa][res] WARNING，随后在初始化里命中内核 CHECK，
+    Windows 上表现为 arupa_render.exe 崩在 arupa_kernel.dll、异常码 0x80000003
+    (STATUS_BREAKPOINT)，从崩溃表象完全看不出是"缺资源"。
+    """
+    if c.os == "android":
+        return 0        # Android 的资源走 AAR/骨架里的 arupa_kernel.pak，不吃 gen/ 树
+    gen = c.out_dir / "gen"
+    if not gen.is_dir():
+        warn(f"构建目录没有 gen/（{gen}）—— 运行时资源不会随包，宿主起渲染进程会缺 pak")
+        return 0
+    n = 0
+    total = 0
+    for src in gen.rglob("*.pak"):
+        dst = kernel_dir / "gen" / src.relative_to(gen)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        n += 1
+        total += src.stat().st_size
+    if n:
+        log(f"  资源: gen/**/*.pak {n} 个 / {total / 1048576:.1f} MB -> kernel/gen/")
+    return n
     pkg = KERNEL_REPO / "package"
     subs = ["docs"] if c.os == "android" else ["docs", "dotnet"]
     for sub in subs:
@@ -1194,6 +1224,7 @@ def do_package(c: Ctx):
 
     stage_kernel_files(c, kernel_dir)
 
+    copy_gen_paks(c, kernel_dir)        # gen/ 下的运行时资源（pak）—— 缺了渲染进程会崩
     write_delivery_markers(c, kernel_dir, n)   # PC 宿主硬校验项
     copy_assets(c, stage, kernel_dir)
     if c.os == "android":

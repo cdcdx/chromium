@@ -24,6 +24,8 @@
 #      --ver X.Y.Z.W                   版本号（默认取 src/chrome/VERSION）
 #      --link static|dynamic           静态/组件构建（默认: kernel/browser=static, chromium=dynamic）
 #      --jobs N                        并行度（默认 autoninja 自行决定）
+#      -k, --keep-going                ninja -k 0（单条失败不中断，先跑完能跑的）
+#      --retry N                       编译失败后重跑次数（补跑被 -k 跳过的目标）
 #      --delivery <路径>               显式指定内核交付包根（browser 用）
 #      --delivery-n N                  指定交付次数（默认自动递增）
 #      --keep-history                  打包时保留历史交付包
@@ -91,10 +93,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ver", default="", help="版本号（默认取自 src/chrome/VERSION）")
     p.add_argument("--link", default="", help="static / dynamic")
     p.add_argument("--variant", default="", help="android: debug / release（默认 debug）")
-    p.add_argument("--jobs", type=int, default=0, help="并行度")
+    p.add_argument("--jobs", type=int, default=8, help="并行度")
     p.add_argument("--delivery", default="", help="显式指定内核交付包根（browser）")
     p.add_argument("--delivery-n", dest="delivery_n", type=int, default=0, help="指定交付次数")
     p.add_argument("--keep-history", action="store_true", help="打包时保留历史交付包")
+    p.add_argument("-k", "--keep-going", action="store_true",
+                   help="ninja -k 0: 单条失败不中断，跑完能跑的（对抗偶发编译器崩溃）")
+    p.add_argument("--retry", type=int, default=0,
+                   help="编译失败后重跑次数（配合 -k 补跑被跳过的目标，默认 0）")
     p.add_argument("--no-link", action="store_true", help="不动挂载点")
     p.add_argument("--no-gate", action="store_true", help="跳过交付前门禁")
     p.add_argument("--no-web", action="store_true", help="browser 出包时跳过 WebUI")
@@ -109,6 +115,8 @@ def main(argv=None) -> int:
 
     C.DRY_RUN = args.dry_run
     C.YES = args.yes
+    C.KEEP_GOING = args.keep_going
+    C.RETRIES = max(0, args.retry)
     cfg = C.load_config()
     apply_proxy(cfg, args.proxy)
 

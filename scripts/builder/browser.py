@@ -2,7 +2,10 @@
 # =============================================================================
 #  nomad 浏览器（PC 外壳）编译 / 出包
 #
-#  编译目录: out/browser-<os>-<arch>-<ver>-<static|dynamic>   （dotnet 中间/落盘产物）
+#  编译目录: out/browser-<os>-<arch>-<ver>-<static|dynamic>
+#      · build   主输出 → 该目录本身（dotnet build -o）
+#      · package 载荷   → 该目录下的 payload/
+#      · 各工程自己的 obj/bin 仍留在 nomadbrowser.pc 里（不动，避免影响仓内既有约定）
 #  交付目录: dist/browser-<os>-<arch>-<ver>-<n>
 #
 #  前置: 内核交付包必须先存在并通过门禁（python3 scripts/build.py kernel package）。
@@ -30,6 +33,59 @@ RIDS = {
 
 def rid(c: Ctx) -> str:
     return RIDS.get(c.os, {}).get(c.arch, f"{c.os}-{c.arch}")
+
+
+def delivery_props(c: Ctx, delivery: Path) -> list:
+    """把交付包根传给 MSBuild 的属性。
+
+    坑: 同一个交付包根在 Directory.Build.targets 里**两个名字**——
+      · Windows/Linux: ArupaSdkDir  → $(ArupaSdkDir)\\kernel\\.arupa-version
+      · Mac         : ArupaDeliveryRoot → $(ArupaDeliveryRoot)/macKernel/.arupa-version
+    只传 ArupaDeliveryRoot 时，Windows 上真值查不到，报
+    "没查到内核版本的真值 (.arupa-version)"（炸在 NomadBrowser.Core，看着像代码问题）。
+    """
+    props = [f"-p:ArupaDeliveryRoot={delivery}"]
+    if c.os != "mac":
+        props.append(f"-p:ArupaSdkDir={delivery}")
+    return props
+
+
+def compile_props(c: Ctx) -> list:
+    """Windows: 关掉 Roslyn 共享编译服务器（VBCSCompiler）。
+
+    坑: 同一工程在同一轮里被编两次时（日志里 NomadBrowser.Updater 先出了 bin，随后又写
+    同一个 obj），VBCSCompiler 仍握着上一份 obj 的句柄，CSC 撞
+    CS2012「无法打开 obj\\Release\\net10.0\\X.dll 以进行写入 —— 文件正被另一个进程使用」，
+    错误信息会点名 "可能被 'VBCSCompiler' (pid) 锁定"（看着像代码/杀软问题，其实是编译器服务器）。
+    关掉后每次编译走进程内 CSC，不再争句柄（PC 全量约 16 秒，代价可接受）。
+    """
+    return ["-p:UseSharedCompilation=false"] if c.os == "win" else []
+
+
+def ensure_kernel_facade(c: Ctx, delivery: Path):
+    """交付只带门面源码时，先用它自带的工程编出 ArupaKernel.dll。
+
+    Directory.Build.props: ArupaKernelAssembly = $(ArupaSdkDir)\\dotnet\\ArupaKernel.dll，
+    不存在时回落到 $(ArupaSdkDir)\\dotnet\\bin\\x64\\Release\\net10.0\\ArupaKernel.dll ——
+    也就是"用同一份交付自己编出来的那份"。154+6 起的交付号称带已编译门面，但本机这份
+    （dist/kernel-win-x64-154.0.8037.21-1）dotnet\\ 下只有 ArupaKernel.csproj + 两个 .cs，
+    不先编出来就会撞 VerifyArupaKernelAssembly: "缺少配套的内核门面"。
+    """
+    if c.os == "mac":
+        return
+    d = delivery / "dotnet"
+    proj = d / "ArupaKernel.csproj"
+    if not proj.exists():
+        return
+    for cand in (d / "ArupaKernel.dll",
+                 d / "bin" / "x64" / "Release" / "net10.0" / "ArupaKernel.dll"):
+        if cand.exists():
+            return
+    log(f"交付只带内核门面源码 —— 先用它自带工程编出 ArupaKernel.dll: {proj}")
+    if common.DRY_RUN:
+        log(f"(dry-run) dotnet build {proj} -c Release -p:Platform=x64")
+        return
+    run([dotnet(), "build", str(proj), "-c", "Release", "-p:Platform=x64"], cwd=PC_REPO)
 
 
 def resolve_delivery(c: Ctx) -> Path:
@@ -62,11 +118,22 @@ def resolve_delivery(c: Ctx) -> Path:
 
 
 def dotnet() -> str:
+    # 坑: MSBuild 节点复用会让上一轮的 dotnet / VBCSCompiler 进程存活约 15 分钟，
+    # 期间再编同一批工程，CSC 会撞 CS2012「无法打开 obj\Release\...\X.dll 以进行写入 ——
+    # 文件正被另一个进程使用」（看着像代码问题，其实是上一轮的编译服务器没退）。
+    os.environ.setdefault("MSBUILDDISABLENODEREUSE", "1")
     d = shutil.which("dotnet")
     if not d:
-        for c in ("/usr/share/dotnet/dotnet", "/usr/lib/dotnet/dotnet",
-                  "/usr/local/share/dotnet/dotnet"):
+        # 坑: Windows 官方安装包默认落在 C:\Program Files\dotnet，用安装脚本/zip 部署或
+        # 安装时没勾"添加到 PATH"时它不在 PATH 上，shutil.which 查不到 —— 补默认位置。
+        cands = (["C:\\Program Files\\dotnet\\dotnet.exe",
+                  "C:\\Program Files (x86)\\dotnet\\dotnet.exe"]
+                 if common.IS_WIN else
+                 ["/usr/share/dotnet/dotnet", "/usr/lib/dotnet/dotnet",
+                  "/usr/local/share/dotnet/dotnet"])
+        for c in cands:
             if Path(c).exists():
+                log(f"dotnet 不在 PATH 上，用默认安装位置: {c}")
                 return c
         err("未找到 dotnet —— 需要 .NET 10 SDK")
     return d
@@ -112,6 +179,27 @@ def project_paths(c: Ctx):
     return proj, proj
 
 
+def npm_bin() -> str:
+    """定位 npm。
+
+    坑: Windows 的 Node 安装同时放了 npm（bash shim，**无扩展名**）/ npm.cmd / npm.ps1。
+    shutil.which("npm") 命中的是那个无扩展名的 shim（PATHEXT 里没有它，但文件确实存在，
+    which 就认），交给 subprocess 就是 WinError 2「系统找不到指定的文件」—— 必须显式
+    解析到 npm.cmd。与 dotnet()/autoninja 是同一类坑。
+    """
+    n = shutil.which("npm")
+    if not common.IS_WIN:
+        return n or "npm"
+    cands = []
+    if n:
+        cands.append(Path(n).with_suffix(".cmd"))
+    cands.append(Path(r"C:\Program Files\nodejs\npm.cmd"))
+    for c in cands:
+        if c.exists():
+            return str(c)
+    return n or "npm"
+
+
 def ensure_node_modules(web: Path):
     """node_modules 不存在时先把前端依赖装上 —— 否则 prebuild 里的 i18n 校验脚本
     会以 'Cannot find module esbuild' 挂掉，看着像源码坏了，其实只是没装依赖。"""
@@ -119,9 +207,10 @@ def ensure_node_modules(web: Path):
         return
     lock = web / "package-lock.json"
     log("首次构建 WebUI —— 安装前端依赖（node_modules 不存在）")
-    if lock.exists() and run(["npm", "ci"], cwd=web, check=False):
+    npm = npm_bin()
+    if lock.exists() and run([npm, "ci"], cwd=web, check=False):
         return
-    run(["npm", "install"], cwd=web)
+    run([npm, "install"], cwd=web)
 
 
 def build_webui(c: Ctx):
@@ -133,19 +222,111 @@ def build_webui(c: Ctx):
     if not (web / "package.json").exists():
         warn(f"未找到 WebUI 工程: {web}")
         return
-    if not shutil.which("npm"):
+    npm = npm_bin()
+    if not Path(npm).exists() and not shutil.which(npm):
         warn("未找到 npm —— 跳过 WebUI 构建")
         return
     ensure_node_modules(web)
-    if run(["npm", "run", "build"], cwd=web, check=False):
+    if run([npm, "run", "build"], cwd=web, check=False):
         return
     # IDE / 沙箱注入的 NODE_OPTIONS --require shim 会拦住 vite 清空 outDir 的 rmSync，
     # 失败信息看着像前端坏了，实际是外层拦截 —— 去掉注入重试一次，并把原因说清楚。
     if os.environ.pop("NODE_OPTIONS", None) is not None:
         warn("npm run build 失败：检测到 NODE_OPTIONS 注入（外层 node shim 会拦 vite 清 outDir）—— 去掉后重试")
-        run(["npm", "run", "build"], cwd=web)
+        run([npm, "run", "build"], cwd=web)
         return
     err("WebUI 构建失败（npm run build）—— 交付前需要它产出 Resources；只编 C# 侧请加 --no-web")
+
+
+# 出货载荷装配范式以 PC 仓 Scripts/assemble-release-payload.ps1 为准:
+#   ① NomadBrowser.exe        自包含**单文件**(客户机零 .NET 依赖)
+#   ② NomadBrowser.Updater.exe 独立更新器(主程序退出后要能覆盖主程序文件)
+#   ③ Helpers\WindowsUpdater\ 更新窗
+#   ④ arupa-desktop\          内核交付件(ResolveArupaDir: BaseDirectory\arupa-desktop)
+#   ⑤ Resources\              WebUI(ResolveWebUiRoot: BaseDirectory\Resources)
+#   ⑥ 剔原生 PDB(SkiaSharp/HarfBuzz 的 NuGet 自带约 100MB, DebugType=none 只管托管 PDB)
+UPDATER_PROJ = PC_REPO / "NomadBrowser.Updater" / "NomadBrowser.Updater.csproj"
+WIN_UPDATER_PROJ = PC_REPO / "NomadBrowser.Windows.Updater" / "NomadBrowser.Windows.Updater.csproj"
+SINGLE_FILE_ARGS = ["-p:PublishSingleFile=true",          # 单 exe 自带运行时
+                    "-p:IncludeNativeLibrariesForSelfExtract=false",  # 原生库躺旁边, 不解包到 %TEMP%
+                    "-p:EnableCompressionInSingleFile=false",         # 压缩只在每次启动多花 ~375ms
+                    "-p:PublishReadyToRun=true",                      # 换启动速度
+                    "-p:DebugType=none", "-p:DebugSymbols=false"]
+
+
+def publish_updater(dn: str, c: Ctx, cfg: str, out: Path):
+    """独立更新器: 必须在主程序退出后仍能覆盖主程序文件 ⇒ 独立自包含发布。
+    Native AOT 优先；没装「使用 C++ 的桌面开发」时链接失败，退回自包含单文件。"""
+    if not UPDATER_PROJ.exists():
+        warn(f"未找到更新器工程: {UPDATER_PROJ}")
+        return
+    run([dn, "restore", str(UPDATER_PROJ), "-r", rid(c)], cwd=PC_REPO)
+    if run([dn, "publish", str(UPDATER_PROJ), "-c", cfg, "-r", rid(c),
+            "--self-contained", "true", "--no-restore",
+            "-p:PublishAot=true", "-p:StripSymbols=true",
+            "-p:DebugType=none", "-p:DebugSymbols=false", "-o", str(out)],
+           cwd=PC_REPO, check=False):
+        return
+    warn("更新器 Native AOT 失败（常见: 未装「使用 C++ 的桌面开发」）—— 退回自包含单文件")
+    run([dn, "restore", str(UPDATER_PROJ), "-r", rid(c), "-p:PublishAot=false"], cwd=PC_REPO)
+    run([dn, "publish", str(UPDATER_PROJ), "-c", cfg, "-r", rid(c),
+         "--self-contained", "true", "--no-restore",
+         "-p:PublishAot=false", "-p:PublishSingleFile=true",
+         "-p:IncludeNativeLibrariesForSelfExtract=true",
+         "-p:DebugType=none", "-p:DebugSymbols=false", "-o", str(out)], cwd=PC_REPO)
+
+
+def publish_windows_updater(dn: str, c: Ctx, cfg: str, out: Path):
+    """更新窗（弹窗 UI）: 自包含、非单文件，落在载荷的 Helpers\\WindowsUpdater\\。"""
+    if not WIN_UPDATER_PROJ.exists():
+        warn(f"未找到更新窗工程: {WIN_UPDATER_PROJ}")
+        return
+    out.mkdir(parents=True, exist_ok=True)
+    run([dn, "restore", str(WIN_UPDATER_PROJ), "-r", rid(c)], cwd=PC_REPO)
+    run([dn, "publish", str(WIN_UPDATER_PROJ), "-c", cfg, "-r", rid(c),
+         "--self-contained", "true", "--no-restore", "-p:PublishAot=false",
+         "-p:DebugType=none", "-p:DebugSymbols=false", "-o", str(out)], cwd=PC_REPO)
+
+
+def assemble_webui(payload: Path):
+    """WebUI → payload\\Resources。
+
+    npm 的 deploy 落在 PC 仓 dist\\Debug\\Resources（Release 那份可能压根没初始化），
+    publish 不会把它带进载荷 ⇒ 必须显式拷。缺 index.html 的表现是"能启动但页面全白"。
+    """
+    for cand in (PC_REPO / "dist" / "Debug" / "Resources",
+                 PC_REPO / "dist" / "Release" / "Resources"):
+        if cand.is_dir() and (cand / "index.html").exists():
+            shutil.copytree(cand, payload / "Resources", dirs_exist_ok=True)
+            log(f"  资源: WebUI -> payload/Resources（来自 {cand.relative_to(PC_REPO)}）")
+            return
+    warn("未找到已 deploy 的 WebUI（dist/Debug|Release/Resources 里没有 index.html）")
+
+
+def strip_pdbs(payload: Path):
+    n = 0
+    total = 0
+    for p in payload.rglob("*.pdb"):
+        total += p.stat().st_size
+        p.unlink()
+        n += 1
+    if n:
+        log(f"  剔 PDB: {n} 个 / {total / 1048576:.0f} MB")
+
+
+def warn_running_browser():
+    """构建输出目录 == 运行目录（out/<project>-<os>-<arch>-<ver>-<link>）：
+    浏览器还开着时，它自己占着这批 dll → MSB3026/3027「无法复制 … 文件正被另一个进程
+    使用」（重试 10 次后才失败），看着像构建坏了。构建前先探一次，把原因直接说清楚。
+    """
+    if not common.IS_WIN:
+        return          # Unix 下覆盖正在使用的文件不会失败，无此问题
+    pids = re.findall(r"NomadBrowser\.exe\s+(\d+)",
+                      out(["tasklist", "/FI", "IMAGENAME eq NomadBrowser.exe", "/NH"]))
+    if not pids:
+        return
+    warn(f"检测到 NomadBrowser.exe 正在运行（PID {' '.join(pids)}）—— 构建输出目录就是它的"
+         f"运行目录，dll 会被它自己锁住（MSB3027 复制失败）。请先关掉浏览器再 build/package。")
 
 
 def do_build(c: Ctx):
@@ -156,25 +337,33 @@ def do_build(c: Ctx):
     delivery = resolve_delivery(c)
 
     dn = dotnet()
+    warn_running_browser()
+    ensure_kernel_facade(c, delivery)
     if c.os == "linux":
         # Directory.Build.props 在非 Windows 上把 BuildMac 置 true → 主工程双 TFM
         # （net10.0-windows7.0;net10.0），还原/编译 windows TFM 需要
         # EnableWindowsTargeting，否则 NETSDK1100；编出来也不能在 Linux 上跑，
         # 故显式只编 net10.0。
         run([dn, "restore", str(sln), "-p:EnableWindowsTargeting=true"], cwd=PC_REPO)
+        # 中间产物同样落 out/browser-<os>-<arch>-<ver>-<link>/（说明见下方 else 分支）。
+        c.out_dir.mkdir(parents=True, exist_ok=True)
         run([dn, "build", str(main_proj), "-c", cfg, "--no-restore", "-f", "net10.0",
-             "-p:EnableWindowsTargeting=true", f"-p:ArupaDeliveryRoot={delivery}"],
-            cwd=PC_REPO)
+             "-p:EnableWindowsTargeting=true", "-o", str(c.out_dir),
+             *delivery_props(c, delivery), *compile_props(c)], cwd=PC_REPO)
     else:
         run([dn, "restore", str(sln)], cwd=PC_REPO)
         if c.os == "mac":
             # -p:BuildMac=true 必须显式给：slnx 直含的 Core/PluginContracts 等工程
             # 与 Avalonia.Mac 引用链全局属性不一致时，MSBuild 会把同一工程编两次。
             run([dn, "build", str(sln), "-c", cfg, "--no-restore",
-                 "-p:BuildMac=true", f"-p:ArupaDeliveryRoot={delivery}"], cwd=PC_REPO)
+                 "-p:BuildMac=true", *delivery_props(c, delivery)], cwd=PC_REPO)
         else:
-            run([dn, "build", str(main_proj), "-c", cfg, "--no-restore",
-                 f"-p:ArupaDeliveryRoot={delivery}"], cwd=PC_REPO)
+            # 中间产物按要求落在 out/browser-<os>-<arch>-<ver>-<link>/（package 的载荷在它的 payload/ 下）。
+            # 不给 -o 的话主程序会散落在 PC 仓的 dist/Release、dist/x64/Release 与各工程 bin\ 里。
+            # Mac 不动: 它的产物最终由 publish 的 BuildAppBundle 组装成 .app，走仓内 mac-bundle 约定。
+            c.out_dir.mkdir(parents=True, exist_ok=True)
+            run([dn, "build", str(main_proj), "-c", cfg, "--no-restore", "-o", str(c.out_dir),
+                 *delivery_props(c, delivery), *compile_props(c)], cwd=PC_REPO)
     log("PC 编译完成")
 
 
@@ -185,11 +374,18 @@ def do_package(c: Ctx):
     env_api = os.environ.get("NOMAD_API_ENV", "Production")
     delivery = resolve_delivery(c)
     dn = dotnet()
+    warn_running_browser()
+    ensure_kernel_facade(c, delivery)
     build_webui(c)
 
     if common.DRY_RUN:
         log(f"(dry-run) 将出包: 项目 {main_proj.name} / RID {rid(c)} / 交付根 {delivery}")
         return None
+    # 坑: publish 带 -r（RID）却用 --no-restore，而 build 阶段的还原是**按解决方案且不带
+    # RID** 跑的 → 资产文件里没有 net10.0-windows7.0/win-x64 目标，publish 撞
+    # NETSDK1047「资产文件没有 ... 的目标」。RID 只能在工程级传（NETSDK1134 禁止解决方案
+    # 级），所以这里按主工程补一次带 RID 的还原。
+    run([dn, "restore", str(main_proj), "-r", rid(c)], cwd=PC_REPO)
     c.out_dir.mkdir(parents=True, exist_ok=True)
     payload = c.out_dir / "payload"
     if payload.exists():
@@ -225,11 +421,25 @@ def do_package(c: Ctx):
         # + EnableWindowsTargeting（还原 windows7.0 TFM 需要）。
         run([dn, "publish", str(main_proj), "-c", cfg, "-r", rid(c), "-f", "net10.0",
              "--no-restore", "-o", str(payload), "-p:EnableWindowsTargeting=true",
-             f"-p:ArupaDeliveryRoot={delivery}"], cwd=PC_REPO)
+             *delivery_props(c, delivery)], cwd=PC_REPO)
     else:
+        # 与 assemble-release-payload.ps1 同款出货形态: 单文件 exe + 原生库/runtimes 散放。
         run([dn, "publish", str(main_proj), "-c", cfg, "-r", rid(c),
              "--self-contained", "true", "--no-restore", "-o", str(payload),
-             "-p:Platform=x64", f"-p:ArupaDeliveryRoot={delivery}"], cwd=PC_REPO)
+             "-p:Platform=x64", *SINGLE_FILE_ARGS,
+             *delivery_props(c, delivery), *compile_props(c)], cwd=PC_REPO)
+        publish_updater(dn, c, cfg, payload)
+        publish_windows_updater(dn, c, cfg, payload / "Helpers" / "WindowsUpdater")
+
+    # 内核件必须随包: Program.cs 的 ResolveArupaDir 在打包态只认
+    # <BaseDirectory>\arupa-desktop（里面得有 arupa_kernel.dll）—— 没有它启动时
+    # 直接 DllNotFoundException「Unable to load DLL 'arupa_kernel'」，报的是"找不到模块"
+    # 而不是"缺内核"。放在 publish 之后、拷进 dist 之前: 这样 out/ 的中间产物目录与
+    # dist/ 交付件两处都能直接跑（之前只有 dist 那一份带内核，从 out/.../payload 启动必崩）。
+    if c.os == "win":
+        shutil.copytree(delivery / "kernel", payload / "arupa-desktop", dirs_exist_ok=True)
+        assemble_webui(payload)
+        strip_pdbs(payload)
 
     # 组装交付目录
     n = next_delivery_no(c)
@@ -245,7 +455,7 @@ def do_package(c: Ctx):
         shutil.copytree(app, dst, symlinks=True)
     else:
         dst = stage / ("NomadBrowser" if c.os == "linux" else "payload")
-        shutil.copytree(payload, dst, symlinks=True)
+        shutil.copytree(payload, dst, symlinks=True)   # 内核件已在 payload/arupa-desktop 里
         if c.os == "linux":
             # Linux 没有 bundle 概念：便携目录 = 主程序 + kernel/ + Resources/ + run.sh
             shutil.copytree(delivery / "kernel", stage / "kernel", dirs_exist_ok=True)
@@ -261,7 +471,11 @@ def do_package(c: Ctx):
     # 内核件必须真的进了载荷，否则这包装起来也跑不起来
     marks = {"mac": [dst / "Contents" / "Resources" / "arupa-mac"],
              "linux": [stage / "kernel"],
-             "win": [dst / "NomadBrowser.exe"]}[c.os]
+             "win": [dst / "NomadBrowser.exe",
+                     dst / "arupa-desktop" / "arupa_kernel.dll",
+                     dst / "Resources" / "index.html",
+                     dst / "NomadBrowser.Updater.exe",
+                     dst / "Helpers" / "WindowsUpdater" / "NomadBrowser.Windows.Updater.exe"]}[c.os]
     missing = [str(m) for m in marks if not m.exists()]
     if missing:
         err("载荷缺必需件: " + ", ".join(missing))
