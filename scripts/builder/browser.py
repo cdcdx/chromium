@@ -75,6 +75,13 @@ def ensure_kernel_facade(c: Ctx, delivery: Path):
         return
     d = delivery / "dotnet"
     proj = d / "ArupaKernel.csproj"
+    if not d.is_dir():
+        # 不静默: 这份交付连门面源码都没有（内核仓 package/dotnet 缺失 / 出包时没拷进来），
+        # 后面 PC 编译只会甩一句"缺少配套的内核门面: <delivery>\dotnet\ArupaKernel.dll"，
+        # 看不出是交付件不全。先说清楚，免得当代码问题查。
+        warn(f"内核交付件里没有 dotnet/（门面源码）: {delivery} —— 出包时 copy_assets 没把"
+             f"内核仓 package/dotnet 拷进来（或该目录已不在内核仓）。重出一次内核包即可补齐")
+        return
     if not proj.exists():
         return
     for cand in (d / "ArupaKernel.dll",

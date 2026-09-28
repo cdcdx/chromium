@@ -456,7 +456,38 @@ def _copy_stage_assets(c: Ctx, stage: Path):
     """包级平台无关件 —— docs / probe-plugin 等，各 ABI 共用一份。
 
     Android 交付包不带 dotnet/ 与 include/（dotnet 是 PC 侧 C# 绑定、include 是
-    C ABI 头，都只服务 PC 宿主）—— 参照上游 arupa-android-* 的包结构。"""
+    C ABI 头，都只服务 PC 宿主）—— 参照上游 arupa-android-* 的包结构。
+    """
+    pkg = KERNEL_REPO / "package"
+    subs = ["docs"] if c.os == "android" else ["docs", "dotnet"]
+    for sub in subs:
+        src = pkg / sub
+        if src.is_dir():
+            shutil.copytree(src, stage / sub, dirs_exist_ok=True)
+            log(f"  收录 {sub}/")
+        else:
+            warn(f"内核仓缺 {src}（平台无关件），跳过")
+    if c.os != "android":
+        # C ABI 头只服务 PC 宿主（dotnet 绑定按它生成 P/Invoke 声明）
+        capi = KERNEL_REPO / "public" / "arupa_kernel_capi.h"
+        if capi.exists():
+            (stage / "include").mkdir(parents=True, exist_ok=True)
+            shutil.copy2(capi, stage / "include" / capi.name)
+            log("  收录 include/arupa_kernel_capi.h")
+        else:
+            warn(f"缺 C ABI 头: {capi}")
+    if c.os == "android":
+        probe = pkg / "android" / "probe-plugin"
+        if probe.is_dir():
+            shutil.copytree(probe, stage / "probe-plugin", dirs_exist_ok=True)
+            log("  收录 probe-plugin/")
+        else:
+            warn(f"内核仓缺 {probe}（Android 探针插件），跳过")
+    if c.os == "mac":
+        alias = stage / "macKernel"
+        if not alias.exists():
+            alias.symlink_to("kernel", target_is_directory=True)   # PC 侧按 macKernel 取件
+            log("  软链 macKernel -> kernel（PC 侧按此名取内核）")
 
 
 def copy_gen_paks(c: Ctx, kernel_dir: Path) -> int:
@@ -487,35 +518,6 @@ def copy_gen_paks(c: Ctx, kernel_dir: Path) -> int:
     if n:
         log(f"  资源: gen/**/*.pak {n} 个 / {total / 1048576:.1f} MB -> kernel/gen/")
     return n
-    pkg = KERNEL_REPO / "package"
-    subs = ["docs"] if c.os == "android" else ["docs", "dotnet"]
-    for sub in subs:
-        src = pkg / sub
-        if src.is_dir():
-            shutil.copytree(src, stage / sub, dirs_exist_ok=True)
-            log(f"  收录 {sub}/")
-        else:
-            warn(f"内核仓缺 {src}（平台无关件），跳过")
-    if c.os != "android":
-        capi = KERNEL_REPO / "public" / "arupa_kernel_capi.h"
-        if capi.exists():
-            (stage / "include").mkdir(parents=True, exist_ok=True)
-            shutil.copy2(capi, stage / "include" / capi.name)
-            log("  收录 include/arupa_kernel_capi.h")
-        else:
-            warn(f"缺 C ABI 头: {capi}")
-    if c.os == "android":
-        probe = pkg / "android" / "probe-plugin"
-        if probe.is_dir():
-            shutil.copytree(probe, stage / "probe-plugin", dirs_exist_ok=True)
-            log("  收录 probe-plugin/")
-        else:
-            warn(f"内核仓缺 {probe}（Android 探针插件），跳过")
-    if c.os == "mac":
-        alias = stage / "macKernel"
-        if not alias.exists():
-            alias.symlink_to("kernel", target_is_directory=True)   # PC 侧按 macKernel 取件
-            log("  软链 macKernel -> kernel（PC 侧按此名取内核）")
 
 
 def _copy_kernel_assets(c: Ctx, kernel_dir: Path):
