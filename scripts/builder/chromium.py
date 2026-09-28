@@ -110,14 +110,14 @@ def do_build(c: Ctx):
     if not (c.out_dir / "build.ninja").exists():
         warn("尚未 gn gen —— 顺手补一次")
         do_gen(c)
-    from .common import build_cmd, probe_steps
+    from .common import build_cmd, probe_steps, run_build
     steps = probe_steps(c, [TARGET])
     if steps == 0:
         log("所有目标均无工作（ninja: no work to do）—— 跳过编译")
     else:
         if steps and steps >= 5000:
             warn(f"本次要编 {steps} 步 —— 不像一次小改动，多半是级联（sysroot/args.gn/版本变了）")
-        if not run(build_cmd(c, [TARGET]), cwd=SRC):
+        if not run_build(c, [TARGET]):
             err(f"编译失败: {TARGET}")
     log("编译成功")
 
