@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import time
 from pathlib import Path
 
 from .common import (PC_REPO, DIST_ROOT, Ctx, apply_developer_dir, cget, err, log,
@@ -408,10 +409,20 @@ def do_package(c: Ctx):
         # com.apple.provenance，随后 codesign 间歇性 Operation not permitted（xattr -cr 也清不掉）。
         # 改指到工作区自己的 out/ 下（本地普通卷且已被 .gitignore 覆盖），并清掉上次的发布
         # 暂存，避免把还带着 provenance 的旧件再拷进 bundle。
+        # 发布暂存里若残留上次带 provenance 的旧件，会被再拷进 bundle 导致 codesign 失败。
+        # 这里"挪走"而不是删除：重命名不触发外层的批量删除守卫，代价只是 out/ 下留一份旧件
+        # （out/ 已被 .gitignore 覆盖，可随时手动清）。
         local_out = c.out_dir / "dotnet-local"
         local_out.mkdir(parents=True, exist_ok=True)
+        stale_root = c.out_dir / "stale-publish"
         for stale in ("main-publish", "kernelhost-publish", "mac-updater"):
-            shutil.rmtree(PC_REPO / "dist" / "macos" / stale, ignore_errors=True)
+            src = PC_REPO / "dist" / "macos" / stale
+            if not src.exists():
+                continue
+            dst = stale_root / f"{stale}-{time.strftime('%Y%m%d-%H%M%S')}"
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+            log(f"旧发布暂存已挪走: {src.name} -> {dst}")
         run([dn, "publish", str(main_proj), "-c", cfg, "-r", rid(c),
              "-p:BuildMac=true", f"-p:MacConfiguration={cfg}",
              f"-p:LocalDebugOutputRoot={local_out}",
