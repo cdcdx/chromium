@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Arupa 桌面内核 .NET 封装 (CefSharp 式)。
+    封 C ABI (chrome/browser/arupa_desktop/public/arupa_kernel_capi.h) → 托管 API。
+    宿主 (WPF/WinForms/Avalonia) 引用本库, 用 ArupaKernel/ArupaWebView + OnPaint 事件 blit。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Platforms>AnyCPU;x64;ARM64</Platforms>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>ArupaKernel</AssemblyName>
+    <RootNamespace>Arupa</RootNamespace>
+  </PropertyGroup>
+</Project>

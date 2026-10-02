@@ -10,10 +10,11 @@
 #   dist/arupa-mac-arm64-154.0.8037.21-static-1/
 #     kernel/{libarupa_kernel.dylib, render, *.pak, icudtl.dat, snapshot_blob.bin,
 #             v8_context_snapshot.arm64.bin, libEGL.dylib, libGLESv2.dylib, …,
-#             angledata/, hyphen-data/, resources/,
+#             angledata/, hyphen-data/, resources/, plugin-runtime/,
 #             .arupa-version, .arupa-delivery-id}
 #     include/{arupa_kernel_capi.h, arupa_kernel_capi_nomad.h}
 #     docs/ dotnet/ …        ← <repo>/package 下的一级文件/文件夹整份搬过来（有则带）
+#     macKernel -> kernel     ← 仅 mac：PC 侧按 macKernel/ 取内核件（软链，勿实体复制）
 #     SHA256SUMS.txt / MANIFEST.md
 #   linux 同理，库名 libarupa_kernel.so（linux 分支若没编 render 会告警而非失败）
 #
@@ -35,7 +36,7 @@
 #       --no-package    不拷 package 目录
 #       --docs DIR      额外把该目录整份拷成 docs/
 #       --probe DIR     额外拷成 probe-plugin/
-#   -z, --zip           额外打 dist/arupa-{os}-{arch}-{ver}-static-{n}.zip
+#   -z, --zip           额外打 dist/arupa-{os}-{arch}-{ver}-static-{n}.zip（mac 用 zip -y 保软链）
 #   -f, --force         目标 dist 目录已存在时先删再打
 #   -h, --help
 #
@@ -48,11 +49,18 @@
 #   OUT/snapshot_blob.bin / v8_context_snapshot* → kernel/同名（至少一个，必需）
 #   OUT/libEGL.* / libGLESv2.* / libvk_swiftshader.* / libvulkan.*  → kernel/（有则带）
 #   OUT/angledata/ hyphen-data/ resources/ locales/  → kernel/同名目录（有则带）
+#   OUT/vk_swiftshader_icd.json                  → kernel/（有则带）
+#   OUT/devtools_resources.pak 或 OUT/gen/content/browser/devtools/devtools_resources.pak → kernel/（有则带）
+#   OUT/Libraries/libtest_trace_processor.dylib  → kernel/Libraries/（mac，有则带）
 #   <repo>/arupa_desktop/public/*.h              → include/…
 #   <repo>/package/package_desktop/{docs,dotnet,…}               → 交付根同名（有则带，跟 scripts/builder/kernel.py
 #                                                  的 copy_assets 同一口径）
+#   <repo>/package/package_desktop/plugin-runtime/               → kernel/plugin-runtime/（运行期按「内核目录/
+#                                                  plugin-runtime/nomad-plugin-runtime.js」取，不放交付根）
 #   版本标记                                     → kernel/.arupa-version = ver
 #                                                  kernel/.arupa-delivery-id = ver+n
+#   mac 专属                                     → macKernel -> kernel（软链；PC 侧 Mac/ArupaDelivery.props
+#                                                  与 Directory.Build.targets 按 macKernel/ 取件）
 #
 # 校验:
 #   * 必缺少 -> 直接失败，并且不留半成品 dist 目录（免得把下次的序号顶上去）
@@ -333,6 +341,23 @@ package_arch() {
     have_dir "${out}/${d}" "${dest}"
   done
 
+  # 与 scripts/builder/kernel.py 的 ARTIFACTS[<os>].optional 同口径的散件。
+  # PC 侧 Mac/ArupaDelivery.props 会逐件校验（缺一件就拦发布），所以宁可这里带全：
+  #   vk_swiftshader_icd.json  Vulkan/SwiftShader ICD 描述，缺了软件渲染回退起不来
+  #   devtools_resources.pak   devtools 前端资源
+  #   Libraries/libtest_trace_processor.dylib  perfetto trace processor
+  have "${out}/vk_swiftshader_icd.json" "${dest}"
+  if [[ -f "${out}/devtools_resources.pak" ]]; then
+    have "${out}/devtools_resources.pak" "${dest}"
+  else
+    # Chromium 侧 devtools 资源只在 gen/ 下产出（chrome/ 的 bundle_data 才会拷到 out 根）
+    have "${out}/gen/content/browser/devtools/devtools_resources.pak" "${dest}"
+  fi
+  if [[ "${OS}" == "mac" ]]; then
+    mkdir -p "${dest}/Libraries"
+    have "${out}/Libraries/libtest_trace_processor.dylib" "${dest}/Libraries"
+  fi
+
 
 
   # include/
@@ -368,6 +393,24 @@ package_arch() {
 
   copy_package_dir "${dist}"
 
+  # 交付根下的 plugin-runtime/ 归位到 kernel/：运行期按「内核目录/plugin-runtime/nomad-plugin-runtime.js」
+  # 取运行时（NomadBrowser 的 _kernel/plugin-runtime 路由、Mac bundle 的 $(ArupaPluginRuntimeDir)），
+  # scripts/builder/kernel.py 的 _copy_kernel_assets 同样是落在 kernel/plugin-runtime。
+  if [[ -d "${dist}/plugin-runtime" ]]; then
+    mkdir -p "${dest}"
+    rm -rf "${dest}/plugin-runtime"
+    mv "${dist}/plugin-runtime" "${dest}/plugin-runtime"
+    log "  plugin-runtime/ -> kernel/plugin-runtime/"
+  fi
+
+  # Mac: PC 侧按 macKernel/ 取内核件（Mac/ArupaDelivery.props、Directory.Build.targets 读
+  # macKernel/.arupa-version），交付根必须同时能看到 kernel/ 与 macKernel —— kernel.py 同规矩。
+  if [[ "${OS}" == "mac" ]]; then
+    rm -f "${dist}/macKernel"
+    ln -s kernel "${dist}/macKernel"
+    log "  软链 macKernel -> kernel（PC 侧按此名取内核）"
+  fi
+
   find "${dist}" -name '.DS_Store' -delete 2>/dev/null || true
 
   # 架构核对：内核库必须就是本次打包的 arch
@@ -375,6 +418,17 @@ package_arch() {
 
   if [[ ${#MISSING_OPTIONAL[@]} -gt 0 ]]; then
     warn "可选件缺失 ${#MISSING_OPTIONAL[@]} 项（不阻断）: ${MISSING_OPTIONAL[*]}"
+  fi
+
+  # Mac: PC 侧 NomadBrowser.Mac.KernelHost 直接**编译**交付根 dotnet/ 下的 wrapper 源
+  # （工程里写死的 C6 裁定：glob Interop.cs + ArupaBrowser.cs，不引锁平台的 ArupaKernel.csproj），
+  # 而 wrapper 源只随内核仓的 wrapper 包发（内核仓没有远端，clone 不到）。缺了 PC 发布/打包
+  # 第一步就被 Mac/ArupaDelivery.props 拦下 —— 出包时先说清楚，别等 PC 那边报。
+  if [[ "${OS}" == "mac" ]]; then
+    for f in ArupaBrowser.cs Interop.cs; do
+      [[ -f "${dist}/dotnet/${f}" ]] \
+        || warn "交付根 dotnet/${f} 缺失：PC 侧 mac 发布会拦（wrapper 与 macKernel 必须同一份交付）。把内核 wrapper 包里的 ArupaBrowser.cs / Interop.cs / ArupaKernel.csproj 放进 ${PKG_DIR}/dotnet/ 后重新出包"
+    done
   fi
 
   PAK_SRC="${PAK_SRC_SAVED}"   # 下一个架构重新解析
@@ -473,7 +527,10 @@ for cpu in "${ARCHS[@]}"; do
   if [[ "${DO_ZIP}" -eq 1 ]]; then
     zip_path="${DIST}.zip"
     rm -f "${zip_path}"
-    ( cd "${DIST_DIR}" && zip -q -r "$(basename "${zip_path}")" "$(basename "${DIST}")" ) \
+    zip_opts=(-q -r)
+    # mac 的 macKernel 是软链：-y 存成链接，否则 kernel/ 里的 dylib 会在包里再存一份。
+    if [[ "${OS}" == "mac" ]]; then zip_opts+=(-y); fi
+    ( cd "${DIST_DIR}" && zip "${zip_opts[@]}" "$(basename "${zip_path}")" "$(basename "${DIST}")" ) \
       || err "打 zip 失败（需要 zip 命令）"
     log "zip: ${zip_path}"
   fi
