@@ -84,7 +84,6 @@ def build_parser():
     p.add_argument("--ver", default="", help="内核版本；默认读取 src/chrome/VERSION，编译内核时必须与源码一致")
     p.add_argument("--link", "--mode", choices=("static", "dynamic"), default="static")
     p.add_argument("--jobs", "-j", type=int, default=None, help="并发任务数；Ninja 默认按 CPU/内存自动计算；显式指定可覆盖")
-    p.add_argument("--plugin-runtime", type=Path, help="nomad-plugin-runtime.js 路径；默认工作区 plugin-runtime/")
     p.add_argument("--zip", action="store_true", help="打包时额外生成 zip")
     p.add_argument("--num", type=int, default=None, help="交付序号（默认自动递增）")
     p.add_argument("--dist-dir", type=Path, default=ROOT / "dist")
@@ -209,8 +208,6 @@ def package_command(args, target_os, arch, version):
         command = ["bash", ROOT / f"scripts/packaging/package-arupa_{name}.sh"]
     command += ["--os", target_os, "--arch", arch, "--ver", version,
                 "--dist-dir", args.dist_dir.resolve()]
-    if args.plugin_runtime:
-        command += ["--plugin-runtime", args.plugin_runtime.resolve()]
     if args.zip:
         command.append("--zip")
     if args.num is not None:
@@ -267,9 +264,9 @@ def main(argv=None):
         F.log("浏览器构建计划完成（未执行）" if args.dry_run else "浏览器构建流程完成")
         return 0
     if "package" in actions and not args.dry_run:
-        runtime = args.plugin_runtime or ROOT / "plugin-runtime/nomad-plugin-runtime.js"
-        if not runtime.is_file():
-            F.err(f"缺少打包附件 {runtime}；用 --plugin-runtime 指定 nomad-plugin-runtime.js")
+        attachments = ROOT / "package" / ("package_android" if is_android else "package_desktop")
+        if not attachments.is_dir():
+            F.err(f"缺少交付附件目录: {attachments}")
     cfg = F.load_config()
     F.tool_environment(cfg)  # PATH only; never bootstrap or fetch during build.
     if target_os == "mac" and actions & {"gen", "build"}:

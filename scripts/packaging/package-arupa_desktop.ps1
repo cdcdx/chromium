@@ -11,10 +11,10 @@
 #            snapshot_blob.bin, v8_context_snapshot.bin, libEGL.dll, libGLESv2.dll,
 #            vk_swiftshader.dll, vulkan-1.dll, d3dcompiler_47.dll, dxcompiler.dll,
 #            msvcp140*.dll, vcruntime140*.dll, …, angledata\, hyphen-data\,
-#            resources\, plugin-runtime\nomad-plugin-runtime.js,
+#            resources\,
 #            .arupa-version, .arupa-delivery-id}
 #     include\{arupa_kernel_capi.h, arupa_kernel_capi_nomad.h}
-#     docs\ dotnet\ …        ← <repo>\package 下的一级文件/文件夹整份搬过来（有则带）
+#     docs\ dotnet\ …        ← <repo>\package\package_desktop 下的一级文件/文件夹整份搬过来（有则带）
 #     SHA256SUMS.txt / MANIFEST.md
 #
 # 参考（仓库里已有的旧口径 Windows 包）：dist\arupa-win-154.0.8037.21+17
@@ -31,10 +31,9 @@
 #       --dist-name NAME 直接指定交付包目录名（单架构；不用 -n 递增时用得上）
 #       --pak FILE      主 pak 来源，默认 out\content_shell.pak，
 #                       没有时取 out 根体积最大的 *.pak
-#       --plugin-runtime FILE  默认 <repo>\plugin-runtime\nomad-plugin-runtime.js
 #       --include-dir DIR      默认 <repo>\arupa_desktop\public（里面的 *.h 拷进 include\）
 #       --package-dir DIR       把该目录下的一级文件/文件夹整份拷进交付根
-#                               （默认 <repo>\package，常见: docs\ dotnet\）
+#                               （默认 <repo>\package\package_desktop，常见: docs\ dotnet\）
 #       --no-package    不拷 package 目录
 #       --docs DIR      额外把该目录整份拷成 docs\
 #       --probe DIR     额外拷成 probe-plugin\
@@ -56,9 +55,8 @@
 #       vcruntime140_1.dll / vccorlib140.dll / concrt140.dll /
 #       dbgcore.dll / dbghelp.dll            → kernel\（有则带）
 #   OUT\angledata\ hyphen-data\ resources\ locales\ → kernel\同名目录（有则带）
-#   <repo>\plugin-runtime\nomad-plugin-runtime.js → kernel\plugin-runtime\
 #   <repo>\arupa_desktop\public\*.h          → include\
-#   <repo>\package\{docs,dotnet,…}            → 交付根同名（有则带，跟 scripts\builder\kernel.py
+#   <repo>\package\package_desktop\{docs,dotnet,…}            → 交付根同名（有则带，跟 scripts\builder\kernel.py
 #                                               的 copy_assets 同一口径）
 #   版本标记                                 → kernel\.arupa-version = ver
 #                                              kernel\.arupa-delivery-id = ver+n
@@ -132,7 +130,6 @@ $Num       = ''
 $DistDir   = Join-Path $Root 'dist'
 $DistName  = ''
 $PakSrc    = ''
-$PrSrc     = ''
 $IncDir    = ''
 $PackageDir = ''
 $NoPackage = $false
@@ -162,7 +159,6 @@ try {
             'dist-dir' { $DistDir = (Read-Value $key); break }
             'dist-name' { $DistName = (Read-Value $key); break }
             'pak' { $PakSrc = (Read-Value $key); break }
-            'plugin-runtime' { $PrSrc = (Read-Value $key); break }
             'include-dir' { $IncDir = (Read-Value $key); break }
             'package-dir' { $PackageDir = (Read-Value $key); break }
             'no-package' { $NoPackage = $true; break }
@@ -270,17 +266,15 @@ if ($Num -notmatch '^\d+$') { Fail "--num 必须是数字: $Num" }
 $DeliveryId = "$Ver+$Num"
 
 # ---------------------------------------------------------------- 公共附件
-if (-not $PrSrc) { $PrSrc = Join-Path $Root 'plugin-runtime\nomad-plugin-runtime.js' }
-if (-not (Test-Path -LiteralPath $PrSrc -PathType Leaf)) { Fail "找不到 plugin-runtime: $PrSrc" }
 if (-not $IncDir) { $IncDir = Join-Path $Root 'arupa_desktop\public' }
 
 # package 附加件（docs\ dotnet\ …）：一级文件/文件夹整份搬进交付根，
 # 口径同 scripts\builder\kernel.py 的 copy_assets
-if (-not $PackageDir) { $PackageDir = Join-Path $Root 'package' }
+if (-not $PackageDir) { $PackageDir = Join-Path $Root 'package\package_desktop' }
 if ($NoPackage) {
     $PackageDir = ''
 } elseif (-not (Test-Path -LiteralPath $PackageDir -PathType Container)) {
-    Write-Warn "找不到 package 目录，交付包里不会有 docs\ dotnet\ 等附加件: $PackageDir"
+    Fail "找不到交付附件目录: $PackageDir"
 }
 
 # 主 pak：out 根 content_shell.pak，没有则体积最大的 *.pak
@@ -341,7 +335,7 @@ function Add-OptionalDir {
     Write-Step ("  {0}/  {1}" -f (Split-Path -Leaf $Src), (Format-Size ([long]$bytes)))
 }
 
-# 把 <repo>\package 下的一级文件/文件夹整份搬进交付根（docs\ dotnet\ …）
+# 把 <repo>\package\package_desktop 下的一级文件/文件夹整份搬进交付根（docs\ dotnet\ …）
 # 口径同 scripts\builder\kernel.py 的 copy_assets：平台无关件不塞进 kernel\，
 # 直接平铺在交付根，宿主按 dist\docs、dist\dotnet 取用。
 function Copy-PackageDir {
@@ -446,11 +440,6 @@ function Invoke-PackageArch {
         }
     }
 
-    # plugin-runtime
-    $pluginDir = Join-Path $dest 'plugin-runtime'
-    New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
-    Copy-Item -LiteralPath $PrSrc -Destination (Join-Path $pluginDir 'nomad-plugin-runtime.js') -Force
-    Write-Step '  plugin-runtime/nomad-plugin-runtime.js'
 
     # include/
     if (Test-Path -LiteralPath $IncDir -PathType Container) {
@@ -489,7 +478,7 @@ function Invoke-PackageArch {
         Write-Step "  附带 probe-plugin\ ← $ProbeDir"
     }
 
-    # <repo>\package 下的一级文件/文件夹（docs\ dotnet\ …）
+    # <repo>\package\package_desktop 下的一级文件/文件夹（docs\ dotnet\ …）
     Copy-PackageDir -DistPath $DistPath
 
     # 系统垃圾文件清理

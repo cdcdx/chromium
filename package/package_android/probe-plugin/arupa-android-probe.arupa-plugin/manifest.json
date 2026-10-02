@@ -1,0 +1,18 @@
+{
+  "created_at": "2026-08-28T03:52:07Z",
+  "format_version": 1,
+  "max_abi": 1,
+  "min_abi": 1,
+  "plugin_id": "arupa-android-probe",
+  "signed_upstreams": [],
+  "so_filename": "libtransport.so",
+  "so_sha256": "b5568306f02b74ddb7732690b01d9430217e3c73303baa150871c65f0ab5977c",
+  "transport_config": {
+    "managed_hosts": [
+      "example.com"
+    ],
+    "socks_endpoint": "socks5://127.0.0.1:55088"
+  },
+  "vendor": "ArupaInternal",
+  "version": "1.0.0"
+}

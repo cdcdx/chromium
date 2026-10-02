@@ -9,7 +9,7 @@
 # 输出（默认都带 -static，因为 Android 只有静态构建）：
 #   dist/arupa-android-154.0.8037.21-static-1/
 #     kernel/arm64/{arupa-kernel.aar, arupa_kernel.pak, arupa_kernel_resources.apk,
-#                  icudtl.dat, snapshot_blob.bin, plugin-runtime/nomad-plugin-runtime.js,
+#                  icudtl.dat, snapshot_blob.bin,
 #                  .arupa-version, .arupa-delivery-id}
 #     kernel/x64/…（同上）
 #     SHA256SUMS.txt / MANIFEST.md
@@ -26,8 +26,7 @@
 #       --pak FILE      主 pak 来源；APP = 取 App 仓
 #                       （../nomadbrowser.android/app/src/main/assets/arupa_kernel.pak）
 #                       默认：out/content_shell.pak，否则 out 根体积最大的 *.pak
-#       --plugin-runtime FILE   默认 <repo>/plugin-runtime/nomad-plugin-runtime.js
-#   -p, --package DIR    附加交付内容源目录（默认 <repo>/package，整份并入交付包）
+#   -p, --package DIR    附加交付内容源目录（默认 <repo>/package/package_android，整份并入交付包）
 #       --no-package     不加 package/（只出内核件）
 #       --docs DIR       额外把该目录整份拷成交付包里的 docs/；晚于 package/ 拷，
 #                        同名内容以它为准（同理 --probe → probe-plugin/）
@@ -46,11 +45,10 @@
 #   OUT/snapshot_blob.bin                              → kernel/<arch>/snapshot_blob.bin
 #                                                        （另存 snapshot_blob_64.bin，gin 只认带后缀名）
 #   OUT/v8_context_snapshot*.bin（有则带）              → 同名
-#   <repo>/plugin-runtime/nomad-plugin-runtime.js      → kernel/<arch>/plugin-runtime/…
 #   版本标记                                            → kernel/<arch>/.arupa-version = ver
 #                                                        kernel/<arch>/.arupa-delivery-id = ver+n
-#   <repo>/package/<file>                               → <file>（交付根，同名）
-#   <repo>/package/<dir>/…                              → <dir>/…（合并，含隐藏文件）
+#   <repo>/package/package_android/<file>                               → <file>（交付根，同名）
+#   <repo>/package/package_android/<dir>/…                              → <dir>/…（合并，含隐藏文件）
 #
 # 注意（照搬 dist/arupa-android-154.0.8037.21+28-test 时的几条硬约束）:
 #   1. 资源 apk 取 gen/ 下那份「剥离版」（~1.1MB），不是 apks/ArupaKernelResources.apk（~30MB 全量）；
@@ -77,7 +75,6 @@ OUT_OVERRIDE=""
 NUM=""
 DIST_DIR="${ROOT_DIR}/dist"
 PAK_SRC=""
-PR_SRC=""
 PKG_DIR=""
 DO_PACKAGE=1
 DOCS_DIR=""
@@ -96,7 +93,6 @@ while [[ $# -gt 0 ]]; do
     -n|--num)          NUM="${2:?--num 需要参数}"; shift 2 ;;
     --dist-dir)        DIST_DIR="${2:?--dist-dir 需要参数}"; shift 2 ;;
     --pak)             PAK_SRC="${2:?--pak 需要参数}"; shift 2 ;;
-    --plugin-runtime)  PR_SRC="${2:?--plugin-runtime 需要参数}"; shift 2 ;;
     -p|--package)      PKG_DIR="${2:?--package 需要参数}"; shift 2 ;;
     --no-package)      DO_PACKAGE=0; shift ;;
     --docs)            DOCS_DIR="${2:?--docs 需要参数}"; shift 2 ;;
@@ -175,14 +171,11 @@ log "交付 id: ${DELIVERY_ID}  （ver=${VER} n=${NUM}）"
 trap 'st=$?; if [[ ${st} -ne 0 && -d "${DIST}" ]]; then rm -rf "${DIST}"; fi' EXIT
 
 # ---------------------------------------------------------------- 公共附件
-if [[ -z "${PR_SRC}" ]]; then PR_SRC="${ROOT_DIR}/plugin-runtime/nomad-plugin-runtime.js"; fi
-[[ -f "${PR_SRC}" ]] || err "找不到 plugin-runtime: ${PR_SRC}"
 
-# package/：附加交付内容的唯一来源（交付文档、探针插件……）；不存在只警告、不阻断打包
-if [[ -z "${PKG_DIR}" ]]; then PKG_DIR="${ROOT_DIR}/package"; fi
+# package/：附加交付内容的唯一来源（交付文档、探针插件……）；默认必须存在
+if [[ -z "${PKG_DIR}" ]]; then PKG_DIR="${ROOT_DIR}/package/package_android"; fi
 if [[ "${DO_PACKAGE}" -eq 1 && ! -d "${PKG_DIR}" ]]; then
-  warn "package/ 不存在，跳过附加内容: ${PKG_DIR}"
-  DO_PACKAGE=0
+  err "找不到交付附件目录: ${PKG_DIR}"
 fi
 
 # 主 pak：out 根 content_shell.pak，否则体积最大的 *.pak；APP = App 仓 assets
@@ -223,7 +216,7 @@ for cpu in "${ARCHS[@]}"; do
   resolve_pak "${OUT}"
 
   dest="${DIST}/kernel/${cpu}"
-  mkdir -p "${dest}/plugin-runtime"
+  mkdir -p "${dest}"
   echo
   log "── kernel/${cpu} ← $(basename "${OUT}") ──"
 
@@ -267,9 +260,6 @@ for cpu in "${ARCHS[@]}"; do
     [[ -f "${dest}/${alias_name}" ]] || cp -f "${dest}/snapshot_blob.bin" "${dest}/${alias_name}"
   fi
 
-  # plugin-runtime
-  cp -f "${PR_SRC}" "${dest}/plugin-runtime/nomad-plugin-runtime.js"
-  log "  plugin-runtime/nomad-plugin-runtime.js"
 
   # 版本标记
   printf '%s\n' "${VER}"         > "${dest}/.arupa-version"

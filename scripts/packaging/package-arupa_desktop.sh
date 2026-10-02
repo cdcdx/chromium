@@ -10,7 +10,7 @@
 #   dist/arupa-mac-arm64-154.0.8037.21-static-1/
 #     kernel/{libarupa_kernel.dylib, render, *.pak, icudtl.dat, snapshot_blob.bin,
 #             v8_context_snapshot.arm64.bin, libEGL.dylib, libGLESv2.dylib, …,
-#             angledata/, hyphen-data/, resources/, plugin-runtime/nomad-plugin-runtime.js,
+#             angledata/, hyphen-data/, resources/,
 #             .arupa-version, .arupa-delivery-id}
 #     include/{arupa_kernel_capi.h, arupa_kernel_capi_nomad.h}
 #     docs/ dotnet/ …        ← <repo>/package 下的一级文件/文件夹整份搬过来（有则带）
@@ -29,10 +29,9 @@
 #       --dist-dir DIR  交付根（默认 <repo>/dist）
 #       --pak FILE      主 pak 来源，默认 out/content_shell.pak，
 #                       没有时取 out 根体积最大的 *.pak
-#       --plugin-runtime FILE   默认 <repo>/plugin-runtime/nomad-plugin-runtime.js
 #       --include-dir DIR       默认 <repo>/arupa_desktop/public（里面的 *.h 拷进 include/）
 #       --package-dir DIR       把该目录下的一级文件/文件夹整份拷进交付根
-#                               （默认 <repo>/package，常见: docs/ dotnet/）
+#                               （默认 <repo>/package/package_desktop，常见: docs/ dotnet/）
 #       --no-package    不拷 package 目录
 #       --docs DIR      额外把该目录整份拷成 docs/
 #       --probe DIR     额外拷成 probe-plugin/
@@ -49,9 +48,8 @@
 #   OUT/snapshot_blob.bin / v8_context_snapshot* → kernel/同名（至少一个，必需）
 #   OUT/libEGL.* / libGLESv2.* / libvk_swiftshader.* / libvulkan.*  → kernel/（有则带）
 #   OUT/angledata/ hyphen-data/ resources/ locales/  → kernel/同名目录（有则带）
-#   <repo>/plugin-runtime/nomad-plugin-runtime.js → kernel/plugin-runtime/…
 #   <repo>/arupa_desktop/public/*.h              → include/…
-#   <repo>/package/{docs,dotnet,…}               → 交付根同名（有则带，跟 scripts/builder/kernel.py
+#   <repo>/package/package_desktop/{docs,dotnet,…}               → 交付根同名（有则带，跟 scripts/builder/kernel.py
 #                                                  的 copy_assets 同一口径）
 #   版本标记                                     → kernel/.arupa-version = ver
 #                                                  kernel/.arupa-delivery-id = ver+n
@@ -76,7 +74,6 @@ OUT_OVERRIDE=""
 NUM=""
 DIST_DIR="${ROOT_DIR}/dist"
 PAK_SRC=""
-PR_SRC=""
 INC_DIR=""
 PKG_DIR=""
 DOCS_DIR=""
@@ -95,7 +92,6 @@ while [[ $# -gt 0 ]]; do
     -n|--num)          NUM="${2:?--num 需要参数}"; shift 2 ;;
     --dist-dir)        DIST_DIR="${2:?--dist-dir 需要参数}"; shift 2 ;;
     --pak)             PAK_SRC="${2:?--pak 需要参数}"; shift 2 ;;
-    --plugin-runtime)  PR_SRC="${2:?--plugin-runtime 需要参数}"; shift 2 ;;
     --include-dir)     INC_DIR="${2:?--include-dir 需要参数}"; shift 2 ;;
     --package-dir)     PKG_DIR="${2:?--package-dir 需要参数}"; shift 2 ;;
     --no-package)      NO_PACKAGE=1; shift ;;
@@ -186,16 +182,14 @@ else
 fi
 
 # ---------------------------------------------------------------- 公共附件
-if [[ -z "${PR_SRC}" ]]; then PR_SRC="${ROOT_DIR}/plugin-runtime/nomad-plugin-runtime.js"; fi
-[[ -f "${PR_SRC}" ]] || err "找不到 plugin-runtime: ${PR_SRC}"
 if [[ -z "${INC_DIR}" ]]; then INC_DIR="${ROOT_DIR}/arupa_desktop/public"; fi
 
 # package 附加件（docs/ dotnet/ …）：一级文件/文件夹整份搬进交付根，与 kernel.py copy_assets 同口径
-if [[ -z "${PKG_DIR}" ]]; then PKG_DIR="${ROOT_DIR}/package"; fi
+if [[ -z "${PKG_DIR}" ]]; then PKG_DIR="${ROOT_DIR}/package/package_desktop"; fi
 if [[ "${NO_PACKAGE}" -eq 1 ]]; then
   PKG_DIR=""
 else
-  [[ -d "${PKG_DIR}" ]] || warn "找不到 package 目录，交付包里不会有 docs/ dotnet/: ${PKG_DIR}"
+  [[ -d "${PKG_DIR}" ]] || err "找不到交付附件目录: ${PKG_DIR}"
 fi
 
 # 主 pak：out 根 content_shell.pak，没有则体积最大的 *.pak
@@ -245,8 +239,8 @@ copy_package_dir() {
   [[ -d "${PKG_DIR}" ]] || return 0
 
   local entries=()
-  for e in "${PKG_DIR}"/* "${PKG_DIR}"/.[!.]*; do
-    [[ -e "${e}" ]] || continue           # 没匹配上的 glob 原样留着，跳过
+  for e in "${PKG_DIR}"/* "${PKG_DIR}"/.[!.]* "${PKG_DIR}"/..?*; do
+    [[ -e "${e}" || -L "${e}" ]] || continue           # 没匹配上的 glob 原样留着，跳过
     name="$(basename "${e}")"
     [[ "${name}" == ".DS_Store" ]] && continue
     entries+=("${e}")
@@ -339,10 +333,7 @@ package_arch() {
     have_dir "${out}/${d}" "${dest}"
   done
 
-  # plugin-runtime
-  mkdir -p "${dest}/plugin-runtime"
-  cp -f "${PR_SRC}" "${dest}/plugin-runtime/nomad-plugin-runtime.js"
-  log "  plugin-runtime/nomad-plugin-runtime.js"
+
 
   # include/
   if [[ -d "${INC_DIR}" ]]; then

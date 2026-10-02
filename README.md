@@ -228,10 +228,14 @@ bash build.sh arupa_desktop --os win --arch all --dry-run
 .\build.ps1 arupa_desktop all --arch arm64 --zip
 ```
 
-打包沿用现有交付协议，需要额外文件 `plugin-runtime/nomad-plugin-runtime.js`。
-该文件不由 GN 生成；可用 `--plugin-runtime <文件>` 指定真实交付附件，缺失时在编译前报错。
-可选 `package/` 附加文档、SDK 等内容沿用原打包脚本规则。
-脚本不生成占位运行时，也不宣称仅拉取这些 Git 仓库就能获得该附件。
+内核打包按项目使用附件目录，将其中的内容平铺复制到交付根目录，并纳入清单和 ZIP：
+
+- `arupa_desktop`：`package/package_desktop/`，例如 `docs/`、`dotnet/`。
+- `arupa_android`：`package/package_android/`，例如 `docs/`、`probe-plugin/`。
+
+对应附件目录必须存在；根 build 入口在编译前检查，不再读取整个 `package/` 或另一平台的附件。
+已删除 `--plugin-runtime` 参数及专用运行时检查、复制逻辑，不再向 `kernel/plugin-runtime` 或
+`kernel/<arch>/plugin-runtime` 注入文件。附件目录内若有 `plugin-runtime/`，仅作为普通附件复制到交付根目录。
 
 构建目录为 `src/out/arupa-<os>-<arch>-<version>-static`，dynamic 目录省略 `-static`。
 版本默认读取 `src/chrome/VERSION`，显式 `--ver` 必须与它一致。

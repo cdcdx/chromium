@@ -1,0 +1,7 @@
+{
+  "alg": "ed25519",
+  "ca_key_id": "arupa-ca-dev-2026",
+  "created_at": "2026-09-13T05:32:56Z",
+  "signature_b64": "OeT02UzH4zhLKr0XnUwXrSAiP7a0xVQFg8BgndsbqMmI5MCYHC9bFwQQQ8dB6oZKY5OmYS9vuW8+eJrgtnnFDA==",
+  "signed_payload_hex": "678375031219906a8e93d4e43d7dbc4f3711847cade15d18440db3290f1c9d0d"
+}

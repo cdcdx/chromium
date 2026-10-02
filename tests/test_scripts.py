@@ -174,28 +174,41 @@ class WorkspaceTest(unittest.TestCase):
         scripts.mkdir(parents=True)
         for name in ('desktop', 'android'):
             shutil.copy(REPO / f'scripts/packaging/package-arupa_{name}.sh', scripts)
-        runtime = self.root / 'runtime.js'
-        runtime.write_text('// fixture')
+        for platform_name in ('desktop', 'android'):
+            attachments = self.root / f'package/package_{platform_name}'
+            (attachments / 'docs').mkdir(parents=True)
+            (attachments / 'docs/readme.txt').write_text(platform_name)
+            (attachments / '.hidden').write_text('hidden attachment')
+            (attachments / 'plugin-runtime').mkdir()
+            (attachments / 'plugin-runtime/runtime.js').write_text('ordinary attachment')
         out = self.root / 'output'
         out.mkdir()
         for name in ('content_shell.pak', 'icudtl.dat', 'snapshot_blob.bin', 'arupa_render'):
             (out / name).write_bytes(b'fixture')
-        return out, runtime
+        return out
 
     @unittest.skipUnless(sys.platform == 'darwin', 'macOS package integration')
     def test_desktop_package_and_arch_mismatch_cleanup(self):
-        out, runtime = self.package_fixture()
+        out = self.package_fixture()
         # Minimal valid Mach-O header: file(1) can identify the architecture.
         (out / 'libarupa_kernel.dylib').write_bytes(struct.pack('<IiiIIIII', 0xfeedfacf, 0x100000c, 0, 6, 0, 0, 0, 0))
         command = ['bash', str(self.root / 'scripts/packaging/package-arupa_desktop.sh'),
                    '--os', 'mac', '--arch', 'arm64', '--ver', VERSION,
-                   '--out', str(out), '--plugin-runtime', str(runtime), '--no-package', '--zip']
+                   '--out', str(out), '--zip']
         result = subprocess.run(command, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         delivery = self.root / f'dist/arupa-mac-arm64-{VERSION}-static-1'
         self.assertTrue((delivery / 'SHA256SUMS.txt').is_file())
         self.assertTrue((delivery / 'MANIFEST.md').is_file())
         self.assertTrue(Path(str(delivery) + '.zip').is_file())
+        self.assertEqual((delivery / 'docs/readme.txt').read_text(), 'desktop')
+        self.assertTrue((delivery / '.hidden').is_file())
+        self.assertTrue((delivery / 'plugin-runtime/runtime.js').is_file())
+        self.assertFalse((delivery / 'kernel/plugin-runtime').exists())
+        self.assertFalse((delivery / 'package_android').exists())
+        self.assertIn('docs/readme.txt', (delivery / 'SHA256SUMS.txt').read_text())
+        with zipfile.ZipFile(str(delivery) + '.zip') as archive:
+            self.assertTrue(any(name.endswith('/docs/readme.txt') for name in archive.namelist()))
         command[command.index('arm64')] = 'x64'
         result = subprocess.run(command, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
@@ -203,7 +216,7 @@ class WorkspaceTest(unittest.TestCase):
         self.assertTrue(delivery.exists())
 
     def test_android_wrong_abi_removes_partial_delivery(self):
-        out, runtime = self.package_fixture()
+        out = self.package_fixture()
         (out / 'apks').mkdir()
         with zipfile.ZipFile(out / 'apks/arupa-kernel.aar', 'w') as aar:
             aar.writestr('jni/x86_64/libarupakernel.so', b'fixture')
@@ -212,11 +225,37 @@ class WorkspaceTest(unittest.TestCase):
         apk.write_bytes(b'fixture')
         command = ['bash', str(self.root / 'scripts/packaging/package-arupa_android.sh'),
                    '--arch', 'arm64', '--ver', VERSION, '--out', str(out),
-                   '--plugin-runtime', str(runtime), '--no-package']
+                   '--no-package']
         result = subprocess.run(command, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('jni', result.stdout + result.stderr)
         self.assertFalse((self.root / f'dist/arupa-android-{VERSION}-static-1').exists())
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Android packaging requires Linux GNU tools')
+    def test_android_package_includes_only_android_attachments(self):
+        out = self.package_fixture()
+        (out / 'apks').mkdir()
+        with zipfile.ZipFile(out / 'apks/arupa-kernel.aar', 'w') as aar:
+            aar.writestr('jni/arm64-v8a/libarupakernel.so', b'fixture')
+        apk = out / 'gen/chrome/browser/arupa_android/aar/arupa_kernel_resources.apk'
+        apk.parent.mkdir(parents=True)
+        apk.write_bytes(b'fixture')
+        result = subprocess.run(['bash', str(self.root / 'scripts/packaging/package-arupa_android.sh'),
+                                 '--arch', 'arm64', '--ver', VERSION, '--out', str(out)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        delivery = self.root / f'dist/arupa-android-{VERSION}-static-1'
+        self.assertEqual((delivery / 'docs/readme.txt').read_text(), 'android')
+        self.assertTrue((delivery / '.hidden').is_file())
+        self.assertTrue((delivery / 'plugin-runtime/runtime.js').is_file())
+        self.assertFalse((delivery / 'kernel/arm64/plugin-runtime').exists())
+        self.assertFalse((delivery / 'package_desktop').exists())
+        self.assertIn('docs/readme.txt', (delivery / 'SHA256SUMS.txt').read_text())
+
+    def test_package_requires_platform_attachment_directory_before_commands(self):
+        with patch.object(fetch, 'HOST_OS', 'mac'), patch.object(fetch, 'run', side_effect=AssertionError('executed')):
+            with self.assertRaisesRegex(RuntimeError, 'package_desktop'):
+                self.quiet(build.main, ['desktop', 'package', '--os', 'mac', '--arch', 'x64'])
 
     def test_missing_project_config_fails_before_any_fetch(self):
         with patch.object(fetch, 'run', side_effect=AssertionError('network before validation')):

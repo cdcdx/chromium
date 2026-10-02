@@ -1,0 +1,1088 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>ArupaKernel</name>
+    </assembly>
+    <members>
+        <member name="P:Arupa.InterceptRequest.ResourceType">
+            <summary>
+            MV3 <c>declarativeNetRequest</c> 的资源类型字面量
+            (<c>main_frame</c> / <c>sub_frame</c> / <c>stylesheet</c> / <c>script</c> /
+            <c>image</c> / <c>xmlhttprequest</c> / …), 与规则里写的**逐字相同**
+            ⇒ 中间不需要映射表。ABI MINOR 14 起。
+            </summary>
+            <remarks>
+            ⚠ <b>为 null = 这份内核件没有这个能力</b>(MINOR &lt; 14 的旧件), <b>不是</b>
+            "这条请求没有资源类型"。要按资源类型分流的宿主必须先判 null 再用,
+            否则在旧件上会静默把所有请求当成同一类。
+            </remarks>
+        </member>
+        <member name="T:Arupa.InterceptAction">
+            <summary>拦截响应要内核做什么(ABI MINOR 14)。</summary>
+        </member>
+        <member name="F:Arupa.InterceptAction.Replace">
+            <summary>用本对象里的 status/mime/body **替换**该请求(**默认**, 老行为)。</summary>
+        </member>
+        <member name="F:Arupa.InterceptAction.ContinueWithModifiedHeaders">
+            <summary>
+            **放行, 但改头** —— 请求照常走网络, 只按四个 Header 字段改。
+            此时 <c>StatusCode</c> / <c>MimeType</c> / <c>Body</c> **一概不看**。
+            </summary>
+        </member>
+        <member name="P:Arupa.InterceptResponse.Action">
+            <summary>默认 <see cref="F:Arupa.InterceptAction.Replace"/>(老行为一个字不变)。</summary>
+        </member>
+        <member name="P:Arupa.InterceptResponse.SetRequestHeaders">
+            <summary>换行分隔的 "K: V" —— **有则覆盖, 无则新增**的请求头。可空。</summary>
+        </member>
+        <member name="P:Arupa.InterceptResponse.RemoveRequestHeaders">
+            <summary>换行分隔的**头名**(不带冒号) —— 要删掉的请求头。可空。</summary>
+        </member>
+        <member name="P:Arupa.InterceptResponse.SetResponseHeaders">
+            <summary>同上, 作用在**响应头**上(内核在响应回来时改, 再交给页面)。</summary>
+        </member>
+        <member name="P:Arupa.InterceptResponse.RemoveResponseHeaders">
+            <summary>同上。</summary>
+        </member>
+        <member name="T:Arupa.CertificateErrorEventArgs">
+            <summary>A批: 证书错误决策 (CertError = net::ERR_* 负值, 如 -200 CERT_COMMON_NAME_INVALID)。</summary>
+        </member>
+        <member name="T:Arupa.FileChooserMode">
+            <summary>文件选择 mode (blink FileChooserParams::Mode)。</summary>
+        </member>
+        <member name="T:Arupa.ContextMenuMediaType">
+            <summary>FB-P024: 网页右键命中的媒体类型 (blink ContextMenuDataMediaType)。</summary>
+        </member>
+        <member name="T:Arupa.ContextMenuEventArgs">
+            <summary>FB-P024: 网页右键菜单接缝。宿主据上下文弹自定义菜单 (微应用注册项);
+            **同步**回调 — 宿主若接管须在事件内置 <see cref="P:Arupa.ContextMenuEventArgs.Handled"/>=true 抑制内核原生菜单
+            (随后再异步弹自己的菜单)。回调内勿重入内核控制函数。</summary>
+        </member>
+        <member name="P:Arupa.ContextMenuEventArgs.Handled">
+            <summary>置 true = 宿主已接管 → 抑制内核原生菜单。默认 false 走内核默认。</summary>
+        </member>
+        <member name="T:Arupa.NotificationPermissionEventArgs">
+            <summary>FB-P026: Web Notification 权限请求 (宿主弹 UI 后经 RespondNotificationPermission 应答)。</summary>
+        </member>
+        <member name="T:Arupa.CertificateInfo">
+            <summary>FB-P025: 当前页 TLS 证书详情 (供地址栏安全面板"查看证书"; schema "arupa-cert/1")。</summary>
+        </member>
+        <member name="T:Arupa.ArupaTransportRoute">
+            <summary>set_transport_route 路由 (FB-P007 split-tunnel, capi_impl:2091)。
+            managed_hosts 名单内走 socks / 名单外直连; reverse_bypass 内核恒 true 不传。</summary>
+        </member>
+        <member name="P:Arupa.ArupaTransportRoute.PacUrl">
+            <summary>PAC 地址(与 SocksEndpoint 二选一)。</summary>
+        </member>
+        <member name="P:Arupa.ArupaTransportRoute.PacMandatory">
+            <summary>MINOR 26: PAC 取不到 / 解析不了 / 脚本出错时 true = 阻断, false = 回落直连。
+            不设 = 内核按 true。扩展 chrome.proxy 里 mandatory 没给时 Chrome 默认 false —— 请显式设 false。</summary>
+        </member>
+        <member name="T:Arupa.ArupaIdentity">
+            <summary>set_pending_identity 身份 (ParseIdentityJson 全 schema, identity.cc:111)。
+            经 set_pending_identity 激活 C++ 深档反指纹层 (下次导航生效)。</summary>
+        </member>
+        <member name="P:Arupa.ArupaIdentity.Languages">
+            <summary>navigator.languages 的纯列表 (如 ["en-US","en"])。⚠ 不带 q 值 —— 那是出站
+            Accept-Language 头的形状, 混进 JS 面就是破绽。空/null = 不覆盖, 渲染器保持进程级默认。</summary>
+        </member>
+        <member name="P:Arupa.ArupaIdentity.Locale">
+            <summary>ICU/Intl locale (如 "en-US")。不给则内核从 Languages 首项派生 ——
+            两者必须同源, 否则 navigator.language 与 Intl.* 会互相矛盾(比"没改"更硬的反爬信号)。</summary>
+        </member>
+        <member name="T:Arupa.ArupaFingerprint">
+            <summary>指纹树 (schema (c); 注意 webGL 大写 GL / canvasV2 与 canvas 同种子)。</summary>
+        </member>
+        <member name="P:Arupa.ArupaFingerprint.Geo">
+            <summary>geolocation 覆盖。给了就是要覆盖 (内核那个 override 布尔恒为 true —— 不想覆盖
+            就别给这个字段)。AccuracyMeters 建议给粗粒度值: 坐标本身是城市级的, 报一个 GPS 级精度反而矛盾。</summary>
+        </member>
+        <member name="T:Arupa.ArupaWebPrefs">
+            <summary>set_web_prefs 偏好 (内核 ANSWERED schema (a): 仅此 5 键全 bool, null=不改)。
+            ⚠ DoH/safebrowsing 不在此 (DoH 走 transport/DNS 专项)。</summary>
+        </member>
+        <member name="P:Arupa.ArupaKernelOptions.DeviceScaleFactor">
+            <summary>FB-P011: OSR 设备缩放。0/1 = 不强制(dpr=1); 1.5 = 150% DPI 物理出帧+锐利
+            (宿主须配合物理出帧 Resize(w*dsf, h*dsf))。默认 0 = 不强制。</summary>
+        </member>
+        <member name="T:Arupa.ArupaPluginInfo">
+            <summary>FB-P020: 插件加载结果 (load_plugin 回传)。宿主据 SocksEndpoint + ManagedHosts
+            调 view.SetTransportRoute 把 view 路由进插件 (名单内走代理/外直连)。</summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.LastErrorJson">
+             <summary>
+             读**本线程**最近一次失败的结构化说明; 没有则 null。形状 {code,what,why,next,detail}。
+            
+             🔴 三条用法边界(照 capi.h 的错误通道语义, 别当通用错误码使):
+               · **thread_local** —— 谁调的谁读。跨线程读到的是那个线程的记录, 多半是 null。
+                 ⚠ 对 async 宿主尤其要小心: `await` 之后的续体常常已经换线程了。
+               · **只在紧接着的失败之后读才有意义**。
+               · **null 不等于"上一次成功了"** —— 只是本线程没记录过失败(并非每个函数都写它)。
+             </summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.WarmupRenderer">
+            <summary>预热一个空闲渲染进程 (spare renderer): kernel 创建后调一次, 首次导航直接领用 → 首帧/首字节更快。
+            失败静默 (非致命; 内核会按需起渲染进程)。内核 06-24+ dll 才有此导出。</summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.SetPluginRoot(System.String)">
+            <summary>设签名插件 bundle 根目录 (&lt;root&gt;/&lt;id&gt;.arupa-plugin/...)。</summary>
+            <remarks>🔴 这是**传输插件**根, 不是 MV3 扩展根 —— 装扩展请用 <see cref="M:Arupa.ArupaKernel.SetExtensionRoot(System.String)"/>。</remarks>
+        </member>
+        <member name="M:Arupa.ArupaKernel.CancelDrag">
+            <summary>取消正在进行的拖放。true = 真的取消了一个。</summary>
+        </member>
+        <member name="P:Arupa.ArupaKernel.IsDragging">
+            <summary>此刻是否有拖放在进行。</summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.SetExtensionApiHandler(System.Action{System.Int32,System.String,System.String,System.String})">
+            <summary>FB-P104: 接管插件调用的 <c>chrome.tabs</c> / <c>action</c> /
+            <c>contextMenus</c> / <c>sidePanel</c> / <c>permissions</c>。
+            <para>这些 API 的语义**内核答不出来**(哪些标签页存在、侧栏怎么渲、右键菜单挂哪 ——
+            都在你这一侧), 所以内核只把调用如实转出来。不接管的话, 插件会收到一句明确的
+            「宿主未接管这条 API」错误 —— 那**不是崩**, 插件 catch 得到, 但功能确实没有。</para>
+            <para>回调参数: <c>(requestId, extensionId, name, argsJson)</c>。
+            <c>name</c> 形如 <c>"tabs.query"</c>; <c>argsJson</c> 是**已经过 schema 校验**的
+            参数数组 JSON。处理完(同步异步都行)**必须**调一次
+            <see cref="M:Arupa.ArupaKernel.RespondExtensionApi(System.Int32,System.String,System.String)"/> —— 不答的话插件那边永远 pending
+            (内核有 10 秒超时兜底会替你回一个错误, 但那是兜底不是设计)。</para>
+            <para>传 <c>null</c> = 撤销接管。⚠ 进程级、只在 UI 线程调。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.RespondExtensionApi(System.Int32,System.String,System.String)">
+            <summary>FB-P104: 答复一次 <see cref="M:Arupa.ArupaKernel.SetExtensionApiHandler(System.Action{System.Int32,System.String,System.String,System.String})"/> 收到的调用。
+            <para>二选一: <paramref name="resultJson"/> 非空 = 成功, 内容是**回调参数数组**的
+            JSON(例: <c>chrome.tabs.query</c> 回一个数组, 所以是 <c>"[[{...tab...}]]"</c>);
+            <paramref name="error"/> 非空 = 失败, 内容会**原样出现在插件那边的错误里**, 请写人话。</para>
+            <para>⚠ 同一个 requestId 只答一次。超时之后再答会被内核如实记一条 WARNING 并丢弃。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.FireExtensionEvent(System.String,System.String,System.String)">
+            <summary>FB-P133: 把一个事件发给某个扩展的 service worker(**内核 → 扩展**方向)。
+            <para>🔴 **别拿它发 <c>action.onClicked</c>** —— 那条走
+            <see cref="M:Arupa.ArupaKernel.DispatchActionClick(System.String,System.String,System.String,System.String,System.String,System.Boolean)"/>, 带**手势断言**与 popup 语义
+            (有 popup 时按 MV3 不该派发 onClicked)。用错的表现是"点了没反应"
+            或"popup 与 onClicked 同时来", 两种都难查。</para>
+            <para><paramref name="argsJson"/> 是 JSON **数组** = 监听器的实参列表
+            (例: <c>tabs.onRemoved</c> 是 <c>[42, {"windowId":1,"isWindowClosing":false}]</c>)。
+            空参传 <c>"[]"</c> —— **不是 null, 不是空串**。</para>
+            <para>返回码 —— 🔴 **每一种都说得出原因, 别折成 bool**:
+            <c>0</c> 成功 ·
+            <c>1</c> 这个事件名**不在宿主可发的边界内**(边界防的是宿主伪造
+            <c>runtime.onInstalled</c> / <c>cookies.onChanged</c> 这类**内核自己该发**的事件,
+            扩展分不出真假) ·
+            <c>2</c> argsJson 不是合法 JSON 数组 ·
+            <c>3</c> 该扩展的 SW 现在不在 —— <b>不是"发了"</b>, 宿主要如实处理, 别当成功 ·
+            <c>4</c> extensionId 为空(**没有广播语义**)。</para>
+            <para>⚠ 旧 dll 上没有这个导出 ⇒ 返回 <c>-1</c>(**与码 0..4 不冲突**),
+            表示"这个内核件根本答不了这个问题" —— 与"发失败"是两回事, 别合起来读。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.GetPermissionDescriptions">
+            <summary>权限项的**一份真相源**:名字 / 判定 / 能力映射 / 给用户看的那句话。
+            <para>🔴 由内核出而不是各处自己写一份 —— 那份说明至少要用在**三处**
+            (授权弹框 · 权限管理页 · 商店的"这个插件要什么权限"预览),
+            各处一份的话同一条权限在两个地方的说法会不一样。</para>
+            <para>返回 JSON:<c>{"version":"…","count":N,"withNote":M,"items":[…]}</c>。
+            <c>version</c> 是**内容哈希** —— 缓存之后拿它对一下就知道还对不对得上
+            (为性能缓存一次而不校验, 那份缓存就是又一个会漂的副本, 只是漂得慢一点)。</para>
+            <para>⚠ 某一项的 <c>note</c> 为 <c>null</c> = **内核没有这句话**,
+            <b>不是</b>"这条权限无害"。目前只有指纹风险那一族写了文案。
+            **别拿名字顶替说明**发给用户 —— 缺就如实缺。</para>
+            <para>⚠ 旧 dll 上没有这个导出 ⇒ 返回 <c>null</c>。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.SetExtensionRouteConsent(System.String,System.Boolean)">
+            <summary>断言"用户已经为这个扩展**确认过**改浏览器全局代理出口这件事"。
+            <para>🔴 产品 2026-09-09 拍板: 扩展改全局出口**要用户二次确认, 由端侧弹框**。
+            内核只**判**这次算不算数, <b>弹框、措辞、记住选择都是端侧的事</b>。</para>
+            <para>🔴 <b>内核不猜用户点了什么</b> —— 没调过这个方法 ⇒ 按"没同意"算
+            (fail-closed), 而 <see cref="M:Arupa.ArupaWebView.SetTransportRouteForExtension(System.String,System.String)"/>
+            会回码 3(要确认)。</para>
+            <para>⚠ 传 <c>false</c> 是**撤销**(用户改主意 / 扩展被重装)——
+            撤销要能表达, 否则"同意过一次"就等于**永久授权**。</para>
+            <para>⚠ 影响面**只是浏览器内的全局出口**, 不是系统代理 ——
+            确认框的措辞要照这个写: 写重了用户会拒, 写轻了用户不知道在同意什么。</para>
+            <para>⚠ 旧 dll 上没有这个导出 ⇒ 返回 <c>false</c>(**这次断言没生效**)。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.FireExtEventWithWake(System.String,System.String,System.String,System.Int32)">
+            <summary>后台唤醒版的发事件(MINOR 23): 扩展 SW 不在时内核先起它再投。
+            <para>返回: 0 已投递 · 10 已排队唤醒(最终结果经 <see cref="M:Arupa.ArupaKernel.SetExtEventResultObserver(System.Action{System.Int32,System.Int32,System.String})"/> 回, 带同一个 ticket) ·
+            12 扩展已停用 · 1/2/4 入参不合法(同 FireExtEvent) · -1 旧 dll 没有这个导出。</para>
+            <para>ticket 由你们编号, 用来和自己的 outbox 条目对上。「已投递」≠ 插件处理完, 仍以插件的 ACK 为准。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.SetExtEventResultObserver(System.Action{System.Int32,System.Int32,System.String})">
+            <summary>订阅唤醒排队的最终结果(MINOR 23): (ticket, result, detail)。
+            result: 0 唤醒后已投递 · 11 超时 · 12 等待期间被停用 · 14 起来了但投不出去。传 null 撤销。
+            ⚠ 回调在内核 UI 线程上来。旧 dll 上返回 false。</summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.SetExtensionPermissionConsent(System.String,System.String,System.Boolean)">
+            <summary>告诉内核: 用户对这个扩展的某条「需授权」权限点了什么头(MINOR 22)。
+            <para>目前用于 <c>"management"</c>: 授权过 ⇒ <c>chrome.management.getAll</c> 转宿主答真实名单
+            (你们的扩展 API 处理器会收到 "management.getAll"); 没授权/撤销 ⇒ 内核替代应答空数组。</para>
+            <para>⚠ 判定码仍是 3(指纹风险): 启用门见 3 请弹授权, 不要硬拒。内核不落盘, 每次起内核后重新告诉一遍。</para>
+            <para>⚠ 旧 dll 上没有这个导出 ⇒ 返回 <c>false</c>(调用没有生效)。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.SetExtensionUserLoaded(System.String,System.Boolean)">
+            <summary>断言某个扩展是**用户自己加载的开发包**(旁加载 / 开发者模式)。
+            <para>🔴 这条决定 <c>nativeMessaging</c> 那一族的准入档位:
+            未签名的包**只有**被这样断言过才放行(风险由用户承担);
+            商店装的未签名包一律拒。</para>
+            <para>🔴 <b>内核不猜来源</b> —— 它只看得到"有个目录里有个 manifest",
+            看不出是用户拖进来的还是商店下下来的。<b>不调 ⇒ 按 false 算(fail-closed)</b>,
+            也就是那一档永远走不通。</para>
+            <para>⚠ <b>谎报 true 等于把一个还没做的入口当成做了</b> ——
+            若产品还没有"加载开发包"这个入口, 如实传 false 才是准确, 不是保守。</para>
+            <para>⚠ 旧 dll 上没有这个导出 ⇒ 返回 <c>false</c>(**调用没有生效**),
+            与"调了且设成了"分得开。</para></summary>
+            <returns>true = 这次断言真的送到内核了; false = 这个内核件没有这个导出。</returns>
+        </member>
+        <member name="M:Arupa.ArupaKernel.SetExtensionRoot(System.String)">
+            <summary>设 **MV3 扩展**根目录: 该目录下每个带 manifest.json 的子目录算一个扩展,
+            renderer 进程 ready 时内核自动逐个下发 (宿主不需要逐个调什么)。
+            <para>🔴 与 <see cref="M:Arupa.ArupaKernel.SetPluginRoot(System.String)"/> **是两个东西, 别传同一个目录**:
+            那个是传输插件根 (签名 bundle), 这个是解包后的扩展目录。传混了的后果见 FB-A050:
+            扩展被拿去传输目录里找, **零下发, 且不报错**。内核**不会**在没设扩展根时
+            拿传输根顶替 —— 它宁可一个都不发并在日志里说清楚。</para>
+            <para>🔴 **什么时候调都行, 不必赶在开页面之前**: 根设进来时若已经有 ready 的
+            renderer, 内核会回头补发给它们 (FB-A045 的时序坑)。重复设同一个值是空操作。</para>
+            <para>内核 2026-08-25+ (ABI MINOR 11) 的 dll 才有此导出; 旧 dll 上静默失败 ——
+            与 <see cref="M:Arupa.ArupaKernel.WarmupRenderer"/> 同一处理, 但**后果不同**: 这个静默失败意味着
+            **扩展一个都装不上**, 所以内核日志里会有一条 "扩展根未设置" 的 WARNING 兜底。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.SetExtensionEnabled(System.String,System.Boolean)">
+            <summary>启用/禁用**单个** MV3 扩展 (内核 2026-08-25+ / ABI MINOR 12)。
+            <para>禁用 = ① 之后的扫描跳过它; ② 对所有已 ready 的 renderer 发卸载 ⇒ **立刻失效**,
+            不用等下一个页面; ③ 从"已下发"记录里摘掉, 重新启用时发得回去。</para>
+            <para>🔴 别用"把目录移出扩展根"代替 —— 那**做不到立刻生效**: 已经下发过的 renderer 里
+            那个扩展仍然活着。用户在插件管理页点"禁用"却发现它还在跑, 就是这个差别。</para>
+            <para>⚠ 禁用状态**只活在内核进程内, 不落盘** —— 用户的选择由宿主的插件管理页持久化,
+            宿主每次起来后按自己的记录重设一遍。</para>
+            <para>⚠ <paramref name="extensionId"/> 是 MV3 那个 32 字符 id, **不是目录名**:
+            manifest 里有 <c>key</c> 时 id 从 key 派生, 与目录名可以不同。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.ListExtensions">
+            <summary>列出内核**已经认识的**扩展 (解析成功并下发过至少一次)。
+            <para>🔴 为什么需要它：<see cref="M:Arupa.ArupaKernel.SetExtensionEnabled(System.String,System.Boolean)"/> 要的是 MV3 那个 32 字符 id，
+            而 manifest 里有 <c>key</c> 时 id **从 key 派生、与目录名不同**（实测 TunnelBear 就是这种）
+            ⇒ 按目录名猜就会**静默不生效**。装完扩展调一次这个，拿权威 id 再去启停。</para>
+            <para>⚠ **它回答的是"内核已经认识哪些"，不是"当前根下有哪些"** —— 两条都别当判据用错：
+            ①"已登记" ≠ "当前启用"（被禁用的仍在表里）；
+            ②"已登记" ≠ "在当前扩展根下"——**换了根之后，旧根那些扩展仍在表里**，
+            因为登记发生在"解析成功并下发过至少一次"那一刻，而这张表**只增不减**。
+            🔴 第二条是 2026-08-25 PC 侧实撞的：反测拿"换成空根之后列表应该变空"当判据，当场红 ——
+            判据本身错了，不是内核错了。要判"当前根下有什么"请自己扫目录。</para>
+            <para>⚠ 内核 +9 起(FB-P186): 换根时旧根的扩展会被**撤下**(不再注入、SW 停、chrome-extension:// 打不开),
+            但仍在这张表里 —— 本方法不区分它们。UI 要把已撤下的排除掉, 用 <see cref="M:Arupa.ArupaKernel.ListExtensionsWithState"/>。</para>
+            <returns>(id, dir) 列表；旧 dll (&lt; MINOR 12) 或没有扩展时返回空列表。</returns></summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.ListExtensionsWithState">
+            <summary>同 <see cref="M:Arupa.ArupaKernel.ListExtensions"/>, 多一个 <c>Retired</c>: 换扩展根时被撤下的旧根扩展为 true
+            (内核 JSON 里的 <c>"retired":true</c>, FB-P186, 内核 +9 起)。
+            <para>🔴 UI 列"可用扩展"时要排除 <c>Retired</c> 的 —— 它们已经不再作用于任何页面, 只是登记表"只增不减"
+            仍留着记录。旧 dll 没有这个字段, 一律读作 false(与它当时的真实行为一致: 旧内核换根不撤)。</para>
+            <returns>(id, dir, retired) 列表；旧 dll (&lt; MINOR 12) 或没有扩展时返回空列表。</returns></summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.RescanExtensions">
+            <summary>重扫扩展根, 把新发现的扩展补发给**已经开着的页面** (内核 2026-08-25+ / ABI MINOR 12)。
+            <para>🔴 什么时候需要: 刚往扩展根里装了一个新扩展, 想让它立刻生效。内核的自动下发是在
+            renderer 进程 ready 那一刻扫一次盘 —— **不是文件系统监听** —— 所以不调它的话,
+            新扩展要等**下一个 renderer 进程**起来才被扫到 (⚠ 同一个 renderer 里继续导航不会重扫)。</para>
+            <para>⚠ 已下发过的不会重复下发, 多调几次是安全的; 被禁用的不会被重扫带回来。</para>
+            <para>⚠ 2026-08-25 修: 这段说明原先写在 <see cref="M:Arupa.ArupaKernel.ListExtensions"/> 的 summary 前面
+            且没闭合 ⇒ 它实际挂在了那个方法上, 而本方法一句注释都没有 —— IDE 里悬停看到的是错的那份。</para></summary>
+        </member>
+        <member name="T:Arupa.ArupaKernel.ExtensionSwState">
+            <summary>一个扩展的 background service worker 处在什么状态 (ABI MINOR 13, FB-P090)。</summary>
+        </member>
+        <member name="F:Arupa.ArupaKernel.ExtensionSwState.Unknown">
+            <summary>内核**不认识这个 id** —— 没装, 或者**清单在解析那一层就没过**。
+            <para>🔴 FB-P090 的原病就在这一档: 带 <c>background.service_worker</c> 的清单
+            因为 <c>chrome-extension</c> 没被注册成 scheme 而 <c>Extension::Create</c> 整个失败,
+            于是它连 id 都不存在 —— 而当时唯一的表现是"<see cref="M:Arupa.ArupaKernel.ListExtensions"/> 里没有它"。</para>
+            <para>⚠ 旧 dll (&lt; MINOR 13) 没有这个导出, 也归到这一档 —— 判据用的时候要知道
+            "问不出来"与"内核不认识"在这里是同形的。</para></summary>
+        </member>
+        <member name="F:Arupa.ArupaKernel.ExtensionSwState.NotRegistered">
+            <summary>清单里**有** SW, **但没注册上** —— 装是装上了, background 一行没跑。
+            <para>真因看内核日志的 <c>[arupa][sw] 注册失败 … status=&lt;n&gt;</c>。</para></summary>
+        </member>
+        <member name="F:Arupa.ArupaKernel.ExtensionSwState.Registered">
+            <summary>清单里有 SW, **且已经注册成功**(它在跑, 或随时会被叫起来)。</summary>
+        </member>
+        <member name="F:Arupa.ArupaKernel.ExtensionSwState.NoServiceWorker">
+            <summary>清单里**本来就没有** <c>background.service_worker</c> —— 内容脚本型扩展, 正常。
+            <para>🔴 这一档必须与 <see cref="F:Arupa.ArupaKernel.ExtensionSwState.NotRegistered"/> 分开: 合成一个 false 的话,
+            "这个扩展本来就没有 background"与"它的 SW 起不上来"长得一模一样。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.ExtensionServiceWorkerState(System.String)">
+            <summary>问这个扩展的 background service worker 到底起没起 (内核 2026-08-25+ / ABI MINOR 13)。
+            <para>🔴 为什么需要它: 在它之前, "带 background 的扩展装不上/不工作"这件事在宿主侧
+            **完全是静默的** —— FB-P090 那次对接侧是拿三份只差一个字段的清单做对照才定位到的。</para>
+            <para>⚠ <paramref name="extensionId"/> 用 <see cref="M:Arupa.ArupaKernel.ListExtensions"/> 拿的权威 id,
+            别按目录名猜(带 <c>key</c> 的扩展 id 与目录名无关)。</para>
+            <para>⚠ 本调用**不改变任何状态**, 随时可调。</para></summary>
+        </member>
+        <member name="T:Arupa.ArupaKernel.ActionClickResult">
+            <summary>点一下工具栏按钮之后, 内核该怎么答 (FB-P121)。</summary>
+            <remarks>
+            🔴 <b>八个都要逐个分支, 别折叠成 bool</b>。尤其
+            <see cref="F:Arupa.ArupaKernel.ActionClickResult.OpenPopupInstead"/> <b>不是失败</b> —— 它是"这个扩展有 popup,
+            请你去开 popup", 而且那一支<b>也已经授了 activeTab</b>。
+            <para>把它折进"失败"是 FB-P116 那个错的同族: 那次把判定码 7「走替代」折成"拒",
+            结果权限被摘、扩展的 service worker 顶层直接崩。</para>
+            </remarks>
+        </member>
+        <member name="F:Arupa.ArupaKernel.ActionClickResult.Dispatched">
+            <summary>onClicked 已送进该扩展的 service worker。</summary>
+        </member>
+        <member name="F:Arupa.ArupaKernel.ActionClickResult.OpenPopupInstead">
+            <summary>该扩展有 popup ⇒ <b>宿主去开 popup</b>; 按 MV3 语义<b>不派发 onClicked</b>
+            (两样都做是错的)。⚠ activeTab <b>已经授了</b>, popup 里的脚本同样要读当前页。</summary>
+        </member>
+        <member name="F:Arupa.ArupaKernel.ActionClickResult.NoUserGesture">
+            <summary>没有用户手势。内核<b>不猜</b>手势 —— 由宿主如实断言。</summary>
+        </member>
+        <member name="F:Arupa.ArupaKernel.ActionClickResult.ServiceWorkerUnavailable">
+            <summary>该扩展的 SW 现在不在。<b>不是"发了"</b> —— 要如实处理, 别当成成功。</summary>
+        </member>
+        <member name="F:Arupa.ArupaKernel.ActionClickResult.TabIdNotInteger">
+            <summary>🔴 <paramref name="tabId"/> 不是<b>十进制整数的字符串</b> ⇒ 这次派发被拒
+            (FB-P123, 2026-09-08)。
+            <para>由来: 标准 <c>chrome.tabs.Tab.id</c> 是<b>整数</b>, 而内核此前把你们给的
+            字符串原样塞进 <c>tab.id</c>。扩展<b>拿得到</b>那个对象, 一转手喂给
+            <c>tabs.sendMessage</c> / <c>scripting.executeScript</c> 就被参数校验当场拒 ——
+            实测派进去的真商店包 <b>19.4%</b> 死在这一条上。</para>
+            <para>⚠ 内核<b>不发 0/-1 兜底</b>: 那会让扩展去操作<b>别的标签页</b>。</para>
+            <para>⚠ 与 <see cref="F:Arupa.ArupaKernel.ActionClickResult.TabNotFound"/> 分开是刻意的: 6 = "你们没给",
+            8 = "给了、格式不对" —— 两条排查路完全不同。</para></summary>
+        </member>
+        <member name="F:Arupa.ArupaKernel.ActionClickResult.Unavailable">
+            <summary>旧 dll 里没有这个导出 ⇒ <b>问不出来</b>。不是成功也不是失败。</summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.DispatchActionClick(System.String,System.String,System.String,System.String,System.String,System.Boolean)">
+            <summary>把一次工具栏点击派发给扩展的 <c>chrome.action.onClicked</c> (FB-P121)。</summary>
+            <remarks>
+            🔴 <b>为什么必须走内核</b>: 监听器活在扩展自己的 service worker 里, 宿主拿不到
+            那个 JS 函数。按插件 id 写死业务逻辑的话, 用户"看起来能用"而<b>插件代码一次都没跑</b>
+            —— 那不是 MV3 Action 支持, 是仿造。
+            <para>⚠ <paramref name="userGesture"/> <b>缺省按拒处理</b>。你们是可信嵌入方:
+            手指点的、还是产品的 AI 点的, 都算你们的手势 —— 但要<b>如实</b>断言。</para>
+            <para>🔴 <paramref name="tabId"/> <b>必须是十进制整数的字符串</b>(如 <c>"42"</c>) ——
+            它会作为<b>整数</b> <c>tab.id</c> 交到扩展手里(标准如此)。不是整数 ⇒ 回
+            <see cref="F:Arupa.ArupaKernel.ActionClickResult.TabIdNotInteger"/> 并拒这次派发, 见 FB-P123。
+            ⚠ 别用下标: 下标会随开关标签页移位, 而 activeTab 的授权绑在它上面 ⇒
+            那是<b>撤销撤错对象</b>, 比撤不掉更坏。</para>
+            <para>⚠ <paramref name="navigationId"/> 是 activeTab 绑定的 <b>document</b> 维度,
+            <b>每次导航必须换新值</b>; 而且撤销时要用<b>同一个值</b>调
+            <see cref="M:Arupa.ArupaKernel.RevokeActiveTabDocument(System.String,System.String)"/> —— 两处各编一个字符串, 撤销就对不上。</para>
+            </remarks>
+        </member>
+        <member name="M:Arupa.ArupaKernel.RevokeActiveTabDocument(System.String,System.String)">
+            <summary>activeTab 撤销 —— <b>三个时机都要调</b>: ①导航 ②标签页关闭 ③扩展停用/卸载。</summary>
+            <remarks>⚠ 内核<b>不监听</b>宿主的标签页生命周期, 漏调不会报错, 但插件会在
+            它不该有权限的页面上继续有权限。</remarks>
+        </member>
+        <member name="M:Arupa.ArupaKernel.RevokeActiveTabTab(System.String)">
+            <inheritdoc cref="M:Arupa.ArupaKernel.RevokeActiveTabDocument(System.String,System.String)"/>
+        </member>
+        <member name="M:Arupa.ArupaKernel.RevokeActiveTabExtension(System.String)">
+            <inheritdoc cref="M:Arupa.ArupaKernel.RevokeActiveTabDocument(System.String,System.String)"/>
+        </member>
+        <member name="M:Arupa.ArupaKernel.ActiveTabGrantCount">
+            <summary>现有 activeTab 授权条数 —— 给判据用: <b>反测要能看见"撤销之后真的少了一条"</b>。
+            旧 dll 回 -1(问不出来)。</summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.ListExtensionActionsJson">
+            <summary>有 Action 的扩展清单 (原样 JSON 数组; 旧 dll 回空串)。</summary>
+            <remarks>⚠ <c>popupPath</c> 为 null ⇒ 点击该派发 onClicked; 非 null ⇒ 只开 popup。
+            ⚠ <b>MV3 扩展都在里面</b>(上游给 MV3 一个默认 Action, 清单没写 action 键也一样),
+            与 Chrome 一致 —— 别读成"清单里写了 action 键的那些"。</remarks>
+        </member>
+        <member name="M:Arupa.ArupaKernel.GetExtensionRoot">
+            <summary>回显内核**真正记住的** MV3 扩展根 (未设 / 旧 dll = 空串)。
+            <para>拿它在 initialize 之后对一下, 就能当场知道 <see cref="M:Arupa.ArupaKernel.SetExtensionRoot(System.String)"/>
+            到底生效没有 —— 这条线出过的两次事 (FB-A050 传输根顶替扩展根 · FB-P089 压根没有
+            门面可调) 都是"值悄悄没生效, 而没有任何视图会问它一句"。</para></summary>
+            <remarks>⚠ 2026-08-26 修: 本段注释原先与下面 <c>SetExtensionEnabled</c> 的
+            summary **连着写在同一处**(中间没有代码) ⇒ 两个 <c>summary</c> 都挂在了那个方法上,
+            而本方法**一句注释都没有** —— IDE 里悬停看到的是错的那份。
+            🔴 同族的病这个文件里一共 **6 个实例**(第 6 个是闸 <c>C57</c> 抓的, 人核那轮漏了):
+            <see cref="M:Arupa.ArupaKernel.RescanExtensions"/> 的注释自己写着
+            「这段说明原先写在 ListExtensions 的 summary 前面 ⇒ 它实际挂在了那个方法上」(08-25 修的第 1 个),
+            2026-08-26 又查出 4 个 —— 本方法 · <c>SetTransportRoute</c> · <see cref="!:InjectIsolatedJsAsync"/>
+            (三个 summary 连挂在 <see cref="!:LastInjectError"/> 上) · 以及 <c>ArupaPluginStorage.Set</c> 的
+            param 里留着一句**已被订正掉的错话**。
+            ⚠ **写下"这次修好了"不等于免疫** —— 08-25 修第 1 个时旁边就躺着另外 3 个。
+            ⇒ 已立闸 <c>C57</c> 机器判这件事(`build/roll/dotnet-doc-comment-check.py`)。</remarks>
+        </member>
+        <member name="M:Arupa.ArupaKernel.LoadPlugin(System.String)">
+            <summary>验签 (Ed25519) 加载 native 传输引擎插件, 引擎自起本地 SOCKS inbound。
+            🔴 同步阻塞 (含验签/dll sha256/LoadLibrary), 请在后台线程调避免卡 UI。成功返插件
+            信息 (含 SocksEndpoint); 据它调 view.SetTransportRoute 把 view 路由进插件。失败抛。
+            🔴 Go c-shared 加载后常驻进程不卸 (RevokePlugin 只撤路由不卸 .dll)。</summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.RevokePlugin">
+            <summary>撤销 active 插件标记 (引擎 SOCKS 仍在跑, 宿主须同时把相关 view 路由撤回 DIRECT)。</summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.SetDoh(System.Int32,System.String)">
+            <summary>FB-P034 全局 DoH (进程级, 作用于全局 NetworkService 所有 NetworkContext)。
+            mode: 0=off(系统DNS) / 1=automatic(尽力升级失败回落) / 2=secure(强制DoH失败不回落)。
+            dohTemplate = DoH URL 模板 (如 "https://dns.alidns.com/dns-query"), off 时忽略。
+            返 ArupaResult (0=OK, 4=INVALID_ARG 模板非法/secure 缺模板)。
+            ⚠ MINOR 7 dll 才有此导出; 旧 dll 调会抛 EntryPointNotFoundException, 调用方须兜底。</summary>
+        </member>
+        <member name="T:Arupa.ArupaInject">
+             <summary>
+             页面内注入的**域名粒度授权**判定 (capi.h:719/727; 2026-08-07 内核按 FB-P062 W-b 加的)。
+            
+             为什么单独一套: 注入是**持续生效**的(同意一次, 之后每页都注), 而别处的能力模型是
+             "一次调用一次门控" —— 两者不同形, 不能沿用。
+             判定顺序由内核负责(先红线、再声明、后授权), 宿主只按返回码决定 拒 / 弹授权 / 放行 ——
+             **不要在宿主再写一套判据**, 那会立刻产生第二真相源。
+            
+             ⚠ 方案A(同 FB-P013 那批): 本包装由对接侧(桌面端会话)按 FB-P062 草拟, 属内核 owner 域, 待 review。
+             </summary>
+        </member>
+        <member name="M:Arupa.ArupaInject.Check(System.String,System.String,System.String,System.String)">
+            <summary>三个清单都是逗号分隔("a.com,*.b.com"), 空串 = 空清单。返回上面的常量之一。</summary>
+        </member>
+        <member name="M:Arupa.ArupaInject.NeedsReconsent(System.String,System.String,System.String)">
+            <summary>插件更新后声明范围**扩大**了吗 (true = 要重新征求同意; 缩小不算变更)。</summary>
+        </member>
+        <member name="T:Arupa.ArupaMv3">
+             <summary>
+             MV3 permission 的**内核**风险分级 (capi.h:752/755)。运行时 host.guard.mapPermission 吃它。
+            
+             🔴 判定在内核 (三端同一份, 64 条测试盯着), 宿主不重写 —— 运行时文件头自己写着:
+             宿主没提供 guard 时它**不静默放行**, 而是如实标"未经内核校验"。所以这条接上 = 让风险分级真生效。
+             ⚠ 方案A: 由对接侧(桌面端会话)按 FB-P062/FB-P068 草拟, 属内核 owner 域, 待 review。
+             </summary>
+        </member>
+        <member name="F:Arupa.ArupaMv3.VendorNamespace">
+             <summary>
+             5 = 厂商命名空间 (`nomad.*`, capi.h 2026-08-19 加, FB-P072 问题二)。
+            
+             🔴 **既不是放行也不是拒**: 这张表只管标准 MV3 权限, 我们自己新增的接口由**各自那套
+             判定**决定准入 (`nomad.route` → <see cref="M:Arupa.ArupaRoute.Check(System.String,System.String,System.Boolean)"/>)。
+             拿到 5 当放行 = 凭一个名字前缀发能力; 当拒 = 加速类插件在装的那一刻就被摘权限
+             (桌面 2026-08-19 实跑撞到的正是后者)。
+             ⚠ 调用方**别自己写前缀判断** —— 边界由内核给, 各端各写一份必漂。
+             </summary>
+        </member>
+        <member name="F:Arupa.ArupaMv3.DenyUnsupported">
+             <summary>
+             6 = **认识这个权限、也认它是合法的 MV3 权限, 但能力还没做**。
+            
+             🔴 **与 <see cref="F:Arupa.ArupaMv3.DenyUnknown"/>(4) 的差别对宿主很值钱, 别合并**:
+             · 4 = "表里没有这个词" —— 可能是标准新加的, 也可能是我们漏了;
+             · 6 = "我们认得它, 只是**还没实现**" —— **会随实现落地改判**。
+             给用户的那句话也不一样: 4 该说"未知权限", 6 该说"暂未支持"。
+             合并的话商店筛不出来, 文案也是错的。
+            
+             ⚠ 本常量 **2026-09-04 才补上**, 而内核从 `153.0.8010.12+2` 起对 14 条权限返 6
+             (`webRequest` 族 / `management` / `cookies` / `history` / `bookmarks` /
+             `downloads` / `topSites` / `browsingData` / `privacy` …)。
+             在此之前照本类判定的宿主, 拿到 6 会落进"不认识"分支 —— 那是发出去的错, 不是你的。
+             </summary>
+        </member>
+        <member name="F:Arupa.ArupaMv3.Substituted">
+             <summary>
+             7 = **走逐风的替代实现**。上游那条路我们没有, 换了一条。
+            
+             🔴 **这不是拒。** 拿到 7 的宿主要让插件**装上、跑起来** ——
+             只是这条能力走的不是上游那套, 行为可能有差异。
+             用 <c>PermissionCapability(perm)</c> 拿"替代走的是哪条能力"
+             (例如 <c>webRequest</c> → <c>cap.net.declarative</c>)。
+            
+             现役例子: <c>webRequest</c> —— 实测**对象在**(开出 23 个入口)而
+             **拦不到东西**(FB-P111), 判"没做"和判"放行"都是假话。
+             它的拦截类用法可以走 <c>declarativeNetRequest</c>(我们真支持);
+             ⚠ **观察类用法(onCompleted 统计、读响应头)覆盖不了** —— 那部分仍不可用,
+             宿主该提示。
+             </summary>
+        </member>
+        <member name="F:Arupa.ArupaMv3.DegradedUnavailable">
+             <summary>
+             8 = **认识 · 这条能力确实没有 · 但不阻止安装**。
+            
+             🔴 **这不是拒。** 与 6 的区别只有一件事: **6 阻装, 8 不阻装**。
+             🔴 拿到 8 的宿主**必须给出可见提示**
+             (「本插件的 XX 功能在逐风浏览器上不可用」)—— 这是**契约, 不是建议**。
+             不提示就退化成"装上了、然后一声不响不工作", 而那正是码 6 当初拒绝放行
+             要防的东西; 那种情况下还不如维持整包拒绝。
+            
+             🔴 为什么要有这一档 —— 一个实测数字:
+             此前一条权限判拒 = 整个插件装不上。语料 2858 个商店扩展里被拒 1517 个(53.1%),
+             而**其中 45%(678 个)只被 1 条权限挡住** —— 678 个插件的全部功能被砍掉,
+             只因为其中一个功能我们没做。改判之后"能装能跑"从 46.9% 升到 **88.8%**。
+            
+             ⚠ 2026-09-05 起, 此前判 6 的绝大多数(cookies / downloads / identity /
+             webNavigation / notifications / privacy …)改判 8。
+             在此之前照本类判定的宿主, 拿到 7/8 会落进"不认识"分支按拒处理 ——
+             **方向安全但可观测性差**: 表现成"插件装不上"而不是"某功能不可用"。
+             </summary>
+        </member>
+        <member name="M:Arupa.ArupaMv3.VerdictName(System.Int32)">
+             <summary>
+             判定码 → 名字(`"ALLOW_MAPPED"` / `"DENY_UNSUPPORTED"` …)。**直接问内核。**
+            
+             🔴 存在的理由是**让你不必维护上面那张表**。抄一份表的代价已经收过好几次利息:
+             内核自己的判据抄漏过两次, 对接端的码表只声明了一半, 而**本类到 2026-09-04
+             都还缺 6** —— 三次都是同一个形状, 而且**坏的时候不报错**。
+            
+             ⚠ 认不出的码回 <c>null</c>(**不是**回 <c>"DENY_UNKNOWN"</c> —— 那会与码 4 撞名,
+             分不出"码是 4"和"这个码我不认识")。拿到 null 的正确处理是
+             **按拒 + 明说"本版本不认识这个码"**, <b>不许猜成放行</b>。
+            
+             ⚠ 采用条件是**你的生产基线含这个导出**(`153.0.8010.12+2` 起), 不是"我这台机器上有"。
+             旧内核上调它会 <c>EntryPointNotFoundException</c>。
+             </summary>
+        </member>
+        <member name="M:Arupa.ArupaMv3.IsPermUsable(System.Int32)">
+             <summary>
+             ① 这条能力**能不能用**。<c>0</c>/<c>1</c> 能用 ·
+             <b><c>7</c> 也能用</b>（走替代）· <c>8</c> 不能用（确实没有）· 其余不能用。
+            
+             🔴 <b>拿到 <c>7</c> 时必须同时读 <see cref="M:Arupa.ArupaMv3.SubstitutionGap(System.String)"/></b>：
+             替代能用不等于等价，缺口非空就要给用户可见提示。
+             只读本方法会把"有替代"当成全量等价 ⇒ 覆盖不到的那半照样静默失效。
+            
+             ⚠ <c>5</c>（厂商命名空间）回 <c>false</c> —— 它的意思是"**不归这张表判**"，
+             你要去问对应的那套判定（如 <c>RouteCheck</c>）。把"不归我判"读成"可以"，
+             就是凭一个名字前缀发能力。
+             </summary>
+        </member>
+        <member name="M:Arupa.ArupaMv3.IsPluginInstallable(System.Int32)">
+             <summary>
+             ② 这插件**装不装得上**。<c>0</c>/<c>1</c>/<c>7</c> 装得上 ·
+             <b><c>8</c> 也装得上</b> · <c>2</c>/<c>3</c>/<c>4</c>/<c>6</c> 装不上。
+            
+             🔴 <b>与 <see cref="M:Arupa.ArupaMv3.IsPermUsable(System.Int32)"/> 只在码 8 上不同</b> —— 而 8 正是本版新增那一档。
+             此前只有一个函数在答这两个问题，它对 7 和 8 一律回 <c>false</c>，
+             <b>两个问题各答错一半</b>：照它写 <c>if (!allowed) 拒装</c>，
+             会把本版从 46.9% 抬到 88.8% 的那批插件原样拒回去，而且不报错。
+            
+             🔴 判 8 装得上是**带条件的**：宿主必须给出可见提示
+            （「本插件的 XX 功能在逐风浏览器上不可用」）。不提示就退化成
+             "装上了然后一声不响不工作" —— 那还不如整包拒绝。<b>这是契约不是建议。</b>
+             提示文案的唯一来源是管理系统 <c>/api/plugin-docs</c> 的 <c>degrade.tips</c>。
+             </summary>
+        </member>
+        <member name="M:Arupa.ArupaMv3.NativeCheck(System.String,System.Boolean,System.Boolean)">
+            <summary>🔴 native 通道(<c>chrome.runtime.sendNativeMessage</c>)的准入。
+            <para>产品 2026-09-08:「nativemessaging 最主要是我们 vpn 程序必须支持」·
+            (三方 VPN 插件给不给签名)「给」·「不给签名的也要用户自己加载自己的开发包,
+            <b>风险自担, 权力还是用户自己</b>」。</para>
+            <para><b>0 和 1 都不是拒, 别折成 bool</b>:
+            <c>0</c> 签名包(我们背书) ·
+            <c>1</c> 未签名 + <b>用户自己加载的开发包</b> —— 放行, 而<b>必须先让用户知道后果</b> ·
+            <c>2</c> 清单没声明(连问的资格都没有) ·
+            <c>3</c> 商店装的未签名包(谁都没背书)。</para>
+            <para>🔴 <b>码 1 的同意提示要写实话</b>: 通了之后这个插件可以跟一个本地程序
+            双向说话, <b>它已经不在浏览器的沙箱里了</b>。不是"该插件需要额外权限"那种话 ——
+            用户读完不知道自己在同意什么。</para>
+            <para>⚠ <paramref name="userLoaded"/> 由<b>宿主如实断言</b>, 内核不猜 ——
+            与 <c>userGesture</c> 同一条纪律: <b>缺省按"没有"处理, 不按有</b>。
+            入口没做就如实传 <c>false</c>; 谎报 true 等于把它当做了。</para>
+            <para>⚠ 本方法<b>只判准入, 不判"哪个程序"</b> —— 能连哪个本地程序由
+            <b>宿主登记的名单</b>决定, 内核<b>不读注册表</b>。</para>
+            <para>⚠ 旧 dll 上没有这个导出 ⇒ 回 <c>3</c>(拒)。
+            <b>判不了就不放行</b> —— 这一条的后果是沙箱外权限, 不许"问不通按放行"。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaMv3.PermissionPrivacyNote(System.String)">
+            <summary>🔴 这条权限<b>能看到用户的什么</b> —— 一句给普通用户看的中文。
+            <para>2026-09-08 产品拍板「<b>说明隐私风险, 而不是拒绝</b>」之后,
+            <c>management</c> / <c>clipboardRead</c> / <c>system.*</c> /
+            <c>&lt;all_urls&gt;</c> 这 8 条不再阻装 ——
+            <b>而这句话就是放行之后唯一还在的保护</b>。</para>
+            <para>🔴 <b>宿主必须把它显示出来。</b>不显示的话我们就是<b>把保护去掉了而
+            什么都没换上</b> —— 那比原来一刀切拒<b>更糟</b>, 因为用户连"这里有过一道门"
+            都不知道。而"真的显示了"这一格<b>内核验不了</b>。</para>
+            <para>⚠ 回<b>空串 = 这条权限没写隐私说明</b>, <b>不等于</b>"它没有隐私风险"。
+            两者压成一个读数的话, 会把"我们还没写"显示成"这个插件很安全" ——
+            拿不到时该显示一句<b>通用</b>提醒, 而不是什么都不显示。</para>
+            <para>⚠ 参数是<b>权限名</b>(如 <c>"clipboardRead"</c>), 不是判定码。
+            只逐字匹配: <c>&lt;all_urls&gt;</c> 取得到, 而
+            <c>https://*.example.com/*</c> 这类 host pattern 一律回空 ——
+            逐站点的文案是<b>站点权限</b>那条路的事。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaMv3.PermissionCapability(System.String)">
+            <summary>ALLOW_MAPPED 时映射到的 capability 名 (如 "cap.net.declarative"); 否则空串。</summary>
+        </member>
+        <member name="M:Arupa.ArupaMv3.SubstitutionGap(System.String)">
+             <summary>
+             判 <b>7 <c>Substituted</c></b> 时，"替代实现**顶不到哪儿**"。
+            
+             🔴 与 <see cref="M:Arupa.ArupaMv3.PermissionCapability(System.String)"/> 是**一对**：那个答"替代走的是哪条能力"，
+             本方法答"那条能力顶不到哪儿"。<b>只读前者会把有替代当成全量等价</b> ⇒ 不提示 ⇒
+             覆盖不到的那半照样静默失效。<b>缺口非空就必须给用户可见提示。</b>
+            
+             ⚠ 返回**空串 = 替代是完整的**（或该权限根本不判 7），<b>不是"没查"</b> ——
+             每一条判 7 的权限都必须在内核的缺口表里有一行，漏登记会被判据拦下。
+            
+             ⚠ 本方法 <b>2026-09-07 才补进 .NET 门面</b>，而内核 09-06 就有了这条导出 ——
+             中间那段时间对接文档写着 <c>ArupaMv3.SubstitutionGap(perm)</c> 而它并不存在。
+             采用条件是**你的生产基线含这个导出**，不是"我这台机器上有"。
+             </summary>
+        </member>
+        <member name="F:Arupa.ArupaMv3.ActionBlock">
+            <summary>声明式 action 取值 —— 其它值一律被内核判为"非声明式"并拒。</summary>
+        </member>
+        <member name="M:Arupa.ArupaMv3.CheckDeclarativeRule(System.String,System.Int32,System.String)">
+            <param name="managedHostsCsv">当前分区被代理接管的域名(逗号分隔), 与注入授权取同一份。</param>
+        </member>
+        <member name="T:Arupa.ArupaRoute">
+             <summary>
+             出口路由的**档位**护栏 (capi.h:735, 2026-08-19)。回答:
+             这个插件能不能拿到**这一档作用域**的出口路由。
+            
+             🔴 判定在内核, 宿主**不重判**: 签名包四档全给; 未签名只给 global 且首次要用户点头一次,
+             请求更细的作用域一律拒。<c>is_signed</c> 不是入参 —— 内核自己查 active 签名包,
+             做成入参等于把信任交给调用方, 那就没有门控了。
+             🔴 拿到 <see cref="F:Arupa.ArupaRoute.DenyScopeNeedsSign"/> 时**必须报错**, 不许静默降级成 global ——
+             那会让插件以为分流生效了, 而实际全局出口都变了。
+            
+             ⚠ **老交付件上没有这个导出**(内核 2026-08-19 才落地) —— 调用方必须先探测,
+             探不到就如实降级, 直接调会抛 <see cref="T:System.EntryPointNotFoundException"/>。
+             ⚠ 方案A: 本门面由对接侧(桌面端会话)按 capi.h 草拟, 属内核 owner 域, 待 review。
+             </summary>
+        </member>
+        <member name="M:Arupa.ArupaRoute.Check(System.String,System.String,System.Boolean)">
+            <summary>scope 取 "global" | "tab" | "domain" | "profile"; declared = 清单里声明了吗。</summary>
+        </member>
+        <member name="T:Arupa.ArupaPluginStorage">
+             <summary>
+             per-plugin 隔离存储 (capi.h:738–749) —— <c>chrome.storage</c> 的后端。
+             按插件隔离(A 读不到 B) · 持久 profile 落盘 <c>&lt;udd&gt;/PluginStorage/&lt;id&gt;.json</c> ·
+             OTR 纯内存(反取证) · 卸载 <see cref="M:Arupa.ArupaPluginStorage.Clear(System.String)"/> 擦除。
+            
+             🔴 **value 必须是 JSON 串** —— 这是 capi.h 写死的契约, 不是建议:
+             内核 <c>set</c> 先 <c>JSONReader::Read</c> 解析(解析不了才当字符串存), <c>get</c> 一律
+             <c>WriteJson</c> 输出 ⇒ 传裸 <c>hello</c> 读回来是 <c>"hello"</c>(带引号)。
+             调用方统一 <c>JSON.stringify</c> 写 / <c>JSON.parse</c> 读, 非法 JSON 直接拒, 别指望原样往返。
+             ⚠ 本处此前写的是"内核不解析它, 原样存原样还" —— 那句是错的, 2026-08-19 内核确认后订正。
+            
+             🔴 内核那侧 get/get_all 返回的是 **thread_local** 缓冲区("有效至同线程下次 get"),
+             所以这里每次都**立刻拷成托管 string** 再返回 —— 调用方拿到的是自己的副本, 可以存。
+             ⚠ 方案A: 由内核会话按 capi.h 补齐(2026-08-18)。补它的起因是那张能力表:
+             D 组 <c>per-plugin 隔离存储</c> / <c>声明式规则护栏</c> 两格桌面报「无」, 追下去发现
+             **不是 App 没接, 是内核 wrapper 压根没给门面** —— 桌面想接也没东西可调。
+             </summary>
+        </member>
+        <member name="M:Arupa.ArupaPluginStorage.Get(System.String,System.String)">
+             <summary>
+             读一个键; **键不存在返回 null**。
+            
+             🔴 内核那侧 <b>永不返回 NULL 指针</b> —— 键不存在时返回的是**空串**
+             (`arupa_kernel_capi_impl.cc:2598`: thread_local std::string, miss 就是空)。
+             这条 capi.h 此前没写, 是 2026-08-18 对着交付件实跑才知道的。
+             空串安全地等价于"没有": value 按契约是 JSON 串, 而合法 JSON 最短也有 2 个字符
+             (`""`), 长度 0 不可能是一个真实存下去的值。
+             ⇒ 这里折成 null, 好让 <c>chrome.storage</c> shim 区分「没这个键」与「有值」——
+             那是 MV3 语义要求的(<c>get</c> 的结果对象里根本不该出现缺失的键)。
+             </summary>
+        </member>
+        <member name="M:Arupa.ArupaPluginStorage.GetAll(System.String)">
+            <summary>
+            读**全部**键, 返回 JSON 对象串(<c>{}</c> = 空)。
+            给 <c>chrome.storage.local.get(null)</c> 用 —— 那个语义是"给我全部",
+            逐键 Get 表达不了(调用方根本不知道有哪些键)。
+            </summary>
+        </member>
+        <member name="M:Arupa.ArupaPluginStorage.Set(System.String,System.String,System.String)">
+            <param name="valueJson">
+            **必须是合法 JSON 串** —— 这是 capi.h 写死的契约, 不是建议。
+            <para>内核 <c>set</c> 先 <c>JSONReader::Read</c> 解析(解析不了才当字符串存),
+            <c>get</c> 一律 <c>WriteJson</c> 输出 ⇒ 传裸 <c>hello</c> 读回来是 <c>"hello"</c>(带引号)。
+            统一 <c>JSON.stringify</c> 写 / <c>JSON.parse</c> 读, 非法 JSON 直接拒, **别指望原样往返**。</para>
+            <para>⚠ 2026-08-26 修: 本处原写「内核不解析它, 原样存原样还」—— **那句 2026-08-19 就被订正过了**,
+            订正写在本类的 summary 里(「本处此前写的是…那句是错的」), 而**被订正掉的原话还留在这一行上**,
+            于是同一个类里两种说法并存, 且下面这一行是错的那份。</para>
+            </param>
+        </member>
+        <member name="M:Arupa.ArupaPluginStorage.Clear(System.String)">
+            <summary>擦掉这个插件的全部存储 —— 卸载时调。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.CursorChanged">
+            <summary>FB-P016: 页面光标类型变化 (ui::mojom::CursorType int: 0=kPointer/2=kHand/3=kIBeam/...)。
+            宿主据此 SetCursor 自己的窗口 → 解 hover 链接"光标不变/无反应"感知。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.RenderProcessGone">
+            <summary>FB-P017: 渲染进程消失 (crashed=true 崩溃 / false 正常退出)。崩溃后该 view OSR 停帧
+            (页面"卡死"), 宿主可据此重载/显示崩溃页恢复。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.SslStateChanged">
+            <summary>FB-P025: 内核 on_ssl_state_changed 回调 — 主帧安全态变化 (true=secure=1)。
+            诊断"证书 getter 返空"用: 若真 HTTPS 页从未以 true 回调 → 内核 ssl_info 没挂到 entry。</summary>
+        </member>
+        <member name="T:Arupa.ArupaWebView.NavigationStartingInfo">
+            <summary>
+            一次导航被问到时的全部信息(FB-P156)。返回 true = **宿主接管**, 这次导航
+            取消且**请求不发出去**, 也不出错误页。
+            </summary>
+            <remarks>
+            🔴 内核在 <c>WillStartRequest</c> **与** <c>WillRedirectRequest</c> 两处都问 ——
+              两处都在请求发出去之前。<see cref="P:Arupa.ArupaWebView.NavigationStartingInfo.IsRedirect"/> 区分是哪一处。
+            ⚠ <see cref="P:Arupa.ArupaWebView.NavigationStartingInfo.Url"/> 是**这一跳**的地址(重定向后就是新地址), 不是起始地址。
+            </remarks>
+        </member>
+        <member name="M:Arupa.ArupaWebView.NavigationStartingInfo.#ctor(System.String,System.Boolean,System.Boolean,System.Boolean)">
+            <summary>
+            一次导航被问到时的全部信息(FB-P156)。返回 true = **宿主接管**, 这次导航
+            取消且**请求不发出去**, 也不出错误页。
+            </summary>
+            <remarks>
+            🔴 内核在 <c>WillStartRequest</c> **与** <c>WillRedirectRequest</c> 两处都问 ——
+              两处都在请求发出去之前。<see cref="P:Arupa.ArupaWebView.NavigationStartingInfo.IsRedirect"/> 区分是哪一处。
+            ⚠ <see cref="P:Arupa.ArupaWebView.NavigationStartingInfo.Url"/> 是**这一跳**的地址(重定向后就是新地址), 不是起始地址。
+            </remarks>
+        </member>
+        <member name="P:Arupa.ArupaWebView.NavigationStartingDetailed">
+            <summary>
+            与 <see cref="P:Arupa.ArupaWebView.NavigationStarting"/> 同一条接缝, 但**给全四个参数**。
+            订了这个就用这个; 没订才回落到 <see cref="P:Arupa.ArupaWebView.NavigationStarting"/>。
+            </summary>
+            <remarks>
+            🔴 为什么另开一个而不是改 <see cref="P:Arupa.ArupaWebView.NavigationStarting"/> 的签名:
+              对接侧直接编译本工作树, 改签名 = 当场打断他们的构建。
+            🔴 典型用途 `chrome.identity.launchWebAuthFlow`: 认 URL 前缀
+              <c>https://&lt;扩展id&gt;.chromiumapp.org/</c>, 返 true 把这一跳截住 ——
+              那个 URL 的 query/fragment 里**装着 OAuth 授权码**, 而
+              <c>chromiumapp.org</c> 是真实解析得出的域名。
+              **只"看得见"而拦不住的钩子会把授权码送出去**, 上游从来不发这个请求。
+              ⚠ 授权码常常是从授权页 302 过来的 ⇒ <b>别只判 IsRedirect==false 那一跳</b>。
+            </remarks>
+        </member>
+        <member name="E:Arupa.ArupaWebView.ConsoleMessage">
+            <summary>页面 console 消息: (level 0=verbose 1=info 2=warning 3=error, message, sourceId, line)。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.CertificateErrorOccurred">
+            <summary>证书错误决策 (经 RespondCertificateError 应答; 不应答 = 内核取消, 安全默认)。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.CloseRequested">
+            <summary>页面 window.close()。内核不自动毁 view; 宿主自行关 tab 或忽略。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.PopupShow">
+            <summary>OSR popup widget (&lt;select&gt;/autocomplete) 显隐 (true=显示; false 后宿主擦掉 popup 区域)。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.PopupSize">
+            <summary>popup 在 view 坐标系的矩形 (x, y, w, h)。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.PopupPaint">
+            <summary>popup 帧 (语义同 Paint; blit 到 PopupSize 矩形之上)。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.ContextMenuRequested">
+            <summary>FB-P024: 网页右键 (同步)。宿主接管须置 e.Handled=true 抑制内核原生菜单, 再异步弹自定义菜单 (含微应用注册项)。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.NotificationPermissionRequested">
+            <summary>FB-P026: Web Notification 权限请求 (经 RespondNotificationPermission 应答; 不应答=默认拒绝)。</summary>
+        </member>
+        <member name="P:Arupa.ArupaWebView.PartitionKey">
+            <summary>
+            这个 view 属于哪个 <b>StoragePartition</b>(FB-P164, 2026-09-10)。
+            </summary>
+            <remarks>
+            🔴 <b>出口路由的作用域是 partition, 不是"浏览器"</b> —— 这件事此前在托管侧
+            完全看不见, 而它会造出一种非常难查的矛盾读数:
+            <list type="bullet">
+            <item><c>GetTransportRoute()</c> 说 socks5://… <b>在</b>;</item>
+            <item>而这个 view 的导航实际走的是<b>直连</b>。</item>
+            </list>
+            两个都没撒谎: 前者读的是这个 view 自己记下的那份(<b>回声是自己写的</b>),
+            后者走的是它所在 partition 的 NetworkContext。
+            典型场合: 扩展 popup 是一个 view、用户看的标签页是另一个,
+            而 <c>chrome.proxy.settings.set</c> 语义上是<b>浏览器全局</b>的 ——
+            宿主必须挑一个 view 去调内核, 挑错了就是这个形状。
+            <para>⚠ 本属性<b>只让问题看得见, 不解决问题</b>, 而且它自己也是回声。
+            要确认"这次导航到底会走哪个出口", 用
+            <see cref="M:Arupa.ArupaWebView.LookupProxyForUrlAsync(System.String,System.Int32)"/> —— 那条<b>答话的是网络服务自己</b>。
+            📌 两者配着看: key 相同而 lookup 说 DIRECT ⇒ 推送那一环坏了;
+            key 不同 ⇒ 就是设错了对象。</para>
+            <para>⚠ <b>首次导航之前是空串</b> —— StoragePartition 是 lazy 建的。
+            空串不是错, 但它意味着此刻设的路由走的是 deferred 那条路(首航才落地)。</para>
+            </remarks>
+        </member>
+        <member name="M:Arupa.ArupaWebView.ListFramesJson">
+            <summary>
+            当前页面有哪些帧(FB-P163)。JSON 数组, 每帧一项:
+            <c>frame_id</c> / <c>parent_frame_id</c> / <c>url</c> / <c>is_main</c> / <c>live</c>。
+            </summary>
+            <remarks>
+            🔴 <b>它是按帧注入的钥匙</b>: <see cref="M:Arupa.ArupaWebView.InjectIsolatedJsInFrameAsync(System.Int32,System.Int32,System.String,System.Int32)"/> 要一个
+            <c>frameId</c>, 而在这之前托管侧拿不到任何帧号 —— 帧号原来只发给<b>扩展</b>
+            (<c>webNavigation</c> 事件), 宿主自己看不见。
+            <para>帧号口径: 主帧 = <c>0</c> · 子帧 = FrameTreeNodeId · 主帧的
+            <c>parent_frame_id</c> = <c>-1</c>。
+            ⚠ <b>与 <c>webNavigation</c> 事件里那个 <c>frameId</c> 是同一套编号</b>
+            (内核里只有一处定义) —— 所以扩展给的帧号可以直接拿来用。</para>
+            <para>⚠ <b>这是快照不是订阅</b>: 拿到之后页面随时可能换帧。拿着旧号去注入而
+            那一帧已经没了 ⇒ 内核<b>如实拒</b>(<c>INJECT_FRAME_NOT_FOUND</c>),
+            <b>不会</b>静悄悄回落到主帧。</para>
+            <para>view 已销毁 / 还没有页面 ⇒ 回 <c>"[]"</c>, 不是 null。</para>
+            </remarks>
+        </member>
+        <member name="M:Arupa.ArupaWebView.LookupProxyForUrlAsync(System.String,System.Int32)">
+            <summary>
+            🔴 <b>这次请求实际会走哪个出口</b> —— 答话的是<b>网络服务自己</b>,
+            不是内核的 registry 回声。
+            </summary>
+            <remarks>
+            由来 (2026-09-10): 对接侧排查"路由设了而流量还是直连"时, 一连排除了九个假设
+            都没查出来 —— 而<b>那九个假设全是拿回声去验的</b>
+            (宿主记的"我刚写了什么" · view 记的"我被设过什么")。
+            <b>问"我设了什么"永远只会得到"我设了什么"。</b>
+            要知道"实际会怎样", 必须问执行的那一方。
+            <para>结果形如 <c>"DIRECT"</c> / <c>"SOCKS5 127.0.0.1:18801"</c>
+            (多条用分号隔开, 与 PAC 脚本返回值同形)。</para>
+            <para>⚠ <b>拿不到 = null, 而 null 不等于"直连"</b>: 内核那边
+            <c>netError != 0</c> 表示<b>没查成</b>(DNS 之外的原因, 见 net_error_list.h),
+            这时结果本来就是 NULL。把"没查成"读成"直连"正是本方法要防的那种错。</para>
+            <para>⚠ <b>问的必须是发起导航的那个 view</b>, 不是设路由的那个 ——
+            两者不在同一个 partition 时答案不同, 见 <see cref="P:Arupa.ArupaWebView.PartitionKey"/>。</para>
+            <para>⚠ 它只回答"<b>会</b>走哪个代理", <b>不</b>回答"这次请求真的走了" ——
+            必要不充分。真走没走仍要看流量。</para>
+            </remarks>
+        </member>
+        <member name="M:Arupa.ArupaWebView.InjectIsolatedJsInFrameAsync(System.Int32,System.Int32,System.String,System.Int32)">
+            <summary>
+            往<b>指定的一帧</b>注入隔离世界脚本(FB-P163)。
+            </summary>
+            <param name="frameId">
+            主帧 = <c>0</c>。子帧的号从 <see cref="M:Arupa.ArupaWebView.ListFramesJson"/> 拿,
+            或直接用 <c>webNavigation</c> 事件里那个 <c>frameId</c> —— <b>两处同一套编号</b>。
+            </param>
+            <remarks>
+            ⚠ <b>帧找不到 = 如实拒, 不回落主帧</b>: 回调仍回 <c>"null"</c>, 而
+            <c>ArupaKernel.LastErrorJson()</c> 上是 <c>INJECT_FRAME_NOT_FOUND</c>。
+            回落会让"帧号写错了"静悄悄变成"注到主帧上", 调用方永远发现不了。
+            </remarks>
+        </member>
+        <member name="M:Arupa.ArupaWebView.InjectIsolatedJsAllFramesAsync(System.Int32,System.String,System.Int32)">
+            <summary>
+            往<b>所有帧</b>注入隔离世界脚本(FB-P163) —— <c>scripting.executeScript</c> 的
+            <c>allFrames: true</c> 那一档。
+            </summary>
+            <returns>每帧一条结果, <b>顺序不保证</b>。</returns>
+            <remarks>
+            🔴 内核那边是<b>每帧回调一次</b>(与上游 <c>executeScript</c> 返回数组的语义一致),
+            本方法把它们收齐再返回。
+            <para>⚠ <b>帧数事先不可知</b> ⇒ 只能等到超时或不再有新回调为止。要精确控制,
+            先 <see cref="M:Arupa.ArupaWebView.ListFramesJson"/> 数一遍再用
+            <see cref="M:Arupa.ArupaWebView.InjectIsolatedJsInFrameAsync(System.Int32,System.Int32,System.String,System.Int32)"/> 逐帧注。</para>
+            <para>⚠ 一个活着的帧都没有 ⇒ 内核仍答一次(<c>INJECT_NO_LIVE_FRAME</c>),
+            不会让你挂到超时。</para>
+            </remarks>
+        </member>
+        <member name="M:Arupa.ArupaWebView.SetPendingProxy(System.String)">
+            <summary>延迟代理: 下次导航生效 (身份/出口轮换用; 区别于即时 SetProxy, 即时后写覆盖)。</summary>
+        </member>
+        <member name="P:Arupa.ArupaWebView.LastInjectError">
+            <summary>上一次 <see cref="M:Arupa.ArupaWebView.InjectIsolatedJsAsync(System.Int32,System.String,System.Int32)"/> 在**同步入口**上拿到的失败说明。
+            拿到 `null` 结果时读它, 就能分清是"越界/参数不对"还是"脚本真的返回了 null"。
+            null = 那次同步入口没报错(结果为 null 就是脚本自己返回的)。</summary>
+        </member>
+        <member name="P:Arupa.ArupaWebView.LastInjectErrorRaw">
+            <summary>
+            上一次隔离世界注入的 last_error **原始值**(未经陈旧值过滤)。
+            🔴 给**判据**用: <see cref="P:Arupa.ArupaWebView.LastInjectError"/> 那层过滤是为兜住内核 FB-P084 而加的,
+               它会把"成功调用却留着旧错"这件事抹平 —— 判据要是也读那个值, 就永远测不出内核修没修。
+               业务面读 LastInjectError(安全), 判据读这个(有检出能力)。
+            </summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.InjectIsolatedJsAsync(System.Int32,System.String,System.Int32)">
+             <summary>
+             MV3 Phase 1: 在**隔离世界** world_id∈[1,11] 执行 JS, 取 JSON 结果 (超时/失败 null)。
+            
+             隔离世界与主世界(0, 内核 15 维反指纹 JS 所在)物理隔离: 独立 JS 上下文、共享 DOM,
+             读不到也改不到主世界全局。MV3 content script 就注在这儿。
+             ⚠ world_id 越界 (不在 [1,11]) 内核 no-op —— 不崩, 但也**不会回调**, 故本包装靠超时收场。
+             ⚠ 每插件占一个 world 的生命周期, 分配/复用由 App 层加载器负责 (browser 侧每帧最多 ~11 个)。
+             </summary>
+             <remarks>⚠ 2026-08-26 修: 本段说明原先与 <c>SetTransportRoute</c> 和
+             <see cref="P:Arupa.ArupaWebView.LastInjectError"/> 的 summary **三段连着写在同一处**(中间没有代码)
+             ⇒ 三个 summary 全挂在了 <see cref="P:Arupa.ArupaWebView.LastInjectError"/> 上, 而本方法与
+             <c>SetTransportRoute</c> **各自一句注释都没有**。
+             🔴 本方法是插件线的核心入口(隔离世界注入), IDE 里悬停看到的却是别人的说明。</remarks>
+        </member>
+        <member name="M:Arupa.ArupaWebView.EvalJsAsync(System.String,System.Int32)">
+             <summary>
+             在**主世界**(world 0)执行 JS, 取 JSON 结果 (超时/失败返回 null)。
+            
+             🔴 与 <see cref="M:Arupa.ArupaWebView.InjectIsolatedJsAsync(System.Int32,System.String,System.Int32)"/> 的分工, **别选错**:
+             · 本方法 = 主世界 —— 页面自己的 JS 上下文。读得到 <c>document.title</c>、
+               写得到 <c>window.*</c> 且**页面里的脚本看得见**。
+             · <see cref="M:Arupa.ArupaWebView.InjectIsolatedJsAsync(System.Int32,System.String,System.Int32)"/> = 隔离世界 —— 独立上下文、共享 DOM,
+               页面里的脚本**看不见**你写的全局。MV3 content script 注在那儿。
+            
+             ⚠ 什么时候必须用本方法: 往扩展页面里装 <c>nomad-plugin-runtime.js</c> 那类
+             "**要让页面里的脚本够得着**"的东西。用隔离世界注入的话, 插件自己的代码
+             看不到 <c>window.nomad</c>, 等于没注入。
+            
+             ⚠ 已知约束(2026-08-26, 对接侧实测): <c>nomad-plugin-runtime.js</c> 是 **ESM**
+             (末尾有 <c>export {…}</c>) ⇒ **直接把它整份丢进来是语法错误**, 必须当模块加载
+             (桌面走 <c>nomad://</c> 供应 + <c>&lt;script type="module"&gt;</c> 引)。
+             本方法负责的是"在主世界跑一段 JS", 不负责模块加载。
+             </summary>
+             <remarks>
+             🔴 **这个包装此前一直缺**(2026-08-26 补): C ABI <c>arupa_webview_eval_js</c> 有、
+             <c>Interop.cs</c> 也声明了, 但门面**没往外给** ⇒ 对接侧只能看到隔离世界那个,
+             拿它做主世界的事必然不成。同轮还发现文档里凭记忆写了一个**根本不存在**的
+             <c>EvaluateJavaScriptAsync</c>。⇒ 缺口与幻觉是一对: 门面里没有的东西, 文档里会长出来。
+             </remarks>
+             <param name="script">要执行的 JS。返回值经内核序列化为 JSON 文本。</param>
+             <param name="timeoutMs">等回调的上限; 超时返回 null(与"脚本真的返回 null"同形, 这一点与隔离世界那条一致)。</param>
+        </member>
+        <member name="M:Arupa.ArupaWebView.SetTransportRoute(System.String)">
+            <summary>split-tunnel 传输路由 (名单内走 socks / 名单外直连)。传 typed 或裸 JSON。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.SetTransportRouteForExtension(System.String,System.String)">
+            <summary>**扩展发起的**设出口路由 —— 与 <see cref="M:Arupa.ArupaWebView.SetTransportRoute(System.String)"/>
+            是<b>两个入口</b>。
+            <para>🔴 为什么分两个而不是加个参数: **两种意图的默认值相反** ——
+            <c>SetTransportRoute</c> = 宿主自己的意图(设置界面 / 策略), 默认可信;
+            本方法 = 扩展发起的意图, 默认<b>要用户确认过</b>才作数。
+            合成一个入口的话默认值只能选一个, 而<b>选错的那一侧就是静默放行</b>。</para>
+            <para>返回码(**每一档给各自的码, 别折成 bool** —— 你要据此决定下一步):
+            <c>0</c> 判过并**已应用** ·
+            <c>1</c> 清单没声明 <c>proxy</c> ⇒ 去看清单(**弹框也没用**) ·
+            <c>2</c> 未签名包要更细的作用域 ⇒ 拒 ·
+            <c>3</c> 🔴 <b>要用户二次确认, 而你没断言过</b> ⇒ 去弹框, 用户同意后调
+            <see cref="!:ArupaBrowser.SetExtensionRouteConsent"/> 再来一次 ·
+            <c>4</c> 认不出的作用域 · <c>5</c> routeJson 坏 ·
+            <c>6</c> 内核没登记这个扩展(<b>不是</b>"它没权限") ·
+            <c>-1</c> 这个内核件没有这个导出。</para>
+            <para>⚠ <b>拒的时候一条路由都不会被应用</b> —— 上一份配置原样保留,
+            <b>不会退回直连</b>。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.SetTabId(System.Int32)">
+            <summary>把**这个标签页的编号**告诉内核。
+            <para>🔴 <c>chrome.tabs.sendMessage(tabId, …)</c> 靠它才投得出去:
+            那个整数是<b>宿主的命名空间</b>(<c>tabs.query</c> / <c>action.onClicked</c>
+            答出去的都是它), 而内核认识的只有 view —— 不声明就没法把两者对上。</para>
+            <para>⚠ <b>建 view 的时候调一次就够</b>: 那个号在标签页对象构造时就定、
+            此后不变。传负数 = 解绑。</para>
+            <para>⚠ 内核**不猜** —— 没声明过的号一律投递失败并留日志,
+            不会退化成"只有一个 view 那就是它"。</para>
+            <para>⚠ 旧 dll 上没有这个导出 ⇒ 返回 <c>false</c>(这次声明没生效,
+            <c>tabs.sendMessage</c> 会投不出去)。</para></summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.SetPendingIdentity(System.String)">
+            <summary>待生效指纹身份 (下次导航激活 C++ 深档反指纹层)。传 typed 或裸 JSON。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.ResetIdentity(System.Boolean)">
+            <summary>#852 (MINOR 28): 关掉指纹防护 —— 本 view 恢复成真实值(建 view 时、任何身份写进去之前的快照),
+            并且不再吃进程级全局身份。同步: 返回即已生效。reload=true 时内核顺手刷新(已渲染的页面要刷新后 JS 才读到新值)。
+            不动 Cookie / LocalStorage / 分区 / 代理。之后再 SetPendingIdentity 照常生效。
+            ⚠ 不要用"下发一份空身份"代替它: 空字段是"不写", 上一份身份的值会留着。
+            回 JSON: {"code":0,"had_identity":bool,"applied":"now"|"at_create","reloaded":bool} ·
+            3 内核/view 不在 · 4 在内核 UI 线程上调。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.GetDiagnostics(System.Boolean)">
+            <summary>诊断 (schema "arupa-diag/1"; full=ARUPA_DIAG_FULL 仅本地调试严禁落盘, 默认脱敏)。
+            含 identity.applied / fingerprint.intended 等, 供验证身份是否真生效。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.LoadData(System.String,System.String)">
+            <summary>加载 HTML 字符串 (错误页/about; baseUrl 空时 origin 为 about:blank)。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.SetWebPrefs(System.String)">
+            <summary>web 偏好 (force_dark/load_images/... 仅 schema (a) 5 键)。传 typed 或裸 JSON。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.SaveState">
+            <summary>序列化本 view 导航/会话状态 (内核黑盒格式; 关 tab 恢复用)。null=失败。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.RestoreState(System.Byte[])">
+            <summary>恢复 SaveState 的状态 (须同内核版本; 返 true=成功)。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.FlushCookies">
+            <summary>同步落盘 cookie (退出前调, 防丢)。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.FlushCookiesSync">
+            <summary>#821 (MINOR 27): 等本 view 所在分区的 Cookie 真正写到盘上才返回(最多 10 秒)。
+            回 JSON: {"code":0} 已落盘 · 3 view 还没有分区 · 4 在内核 UI 线程上调 · 5 超时。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.ClearSiteData(System.Collections.Generic.IEnumerable{System.String})">
+            <summary>#845 (MINOR 27): 清本 view 所在分区的站点数据, 页面开着也能清(同空间的其它标签不用先关)。
+            types = null 全部站点数据; 可选 cookies / local_storage / indexeddb / cache_storage / service_workers /
+            file_systems / http_cache / shader_cache。只清缓存传 ["http_cache"]。同步, 最多 30 秒。
+            回 JSON: {"code", "cleared":[…], "pending":[…]} —— 0 全部清完 · 2 有认不出的类型(见 unknown, 什么都没动) ·
+            3 view 还没有分区 · 4 在内核 UI 线程上调 · 5 有类型 30 秒内没清完(见 pending)。</summary>
+        </member>
+        <member name="P:Arupa.ArupaWebView.PacStatusJson">
+            <summary>MINOR 26: 本 view 所在分区的 PAC 状态 JSON —— 失败原因, 以及最终是阻断(blocked)还是回落直连
+            (fallback_direct)。字段: pac · mandatory · state(none|pending|fetched|failed) · kind · net_error · reason ·
+            outcome · owner_ext · at_ms。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.GetCookiesAsync(System.String)">
+            <summary>取指定 url 的 cookie ("; 分隔 name=value")。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.RespondHttpAuth(System.Int32,System.Boolean,System.String,System.String)">
+            <summary>回应 HTTP 认证 (HttpAuthRequested 后): proceed=true 提交 user/pwd; false=取消。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.RespondGeolocation(System.Int32,System.Boolean)">
+            <summary>回应地理位置授权 (GeolocationRequested 后)。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.RespondCertificateError(System.Int32,System.Boolean)">
+            <summary>A批: 回应证书错误 (CertificateErrorOccurred 后)。proceed=true 无视错误继续;
+            false/不应答 = 取消 (内核安全默认)。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.RespondMediaPermission(System.Int32,System.Boolean)">
+            <summary>回应媒体(摄像头/麦克风)授权 (MediaPermissionRequested 后; audio/video 一把授权)。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.RespondFileChooser(System.Int32,System.String[])">
+            <summary>回应文件选择 (FileChooserRequested 后): paths=选中文件; 取消传 null/空数组。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.RespondNotificationPermission(System.Int32,System.Boolean)">
+            <summary>FB-P026: 回应 Web Notification 权限请求 (NotificationPermissionRequested 后)。granted=true 允许。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.GetCertificateInfoRaw">
+            <summary>FB-P025 诊断: 取原生 getter 的原始 JSON(不解析), 看 has_cert/字段实况。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.GetCertificateInfo">
+            <summary>FB-P025: 取当前主框架 TLS 证书详情 (供地址栏安全面板"查看证书")。
+            非 HTTPS / 内部页 / 未导航 / 无证书 → 返 null。封送内核 UI 线程同步取。</summary>
+            <remarks>⚠ 2026-08-26 修: 本段原先与下面 <see cref="M:Arupa.ArupaWebView.GetCertificateInfoRaw"/> 的
+            summary **连着写在同一处** ⇒ 两段都挂在了那个方法上, 而本方法一句注释都没有。
+            两者语义**不同**(本方法解析成对象; Raw 那个不解析、给诊断看字段实况),
+            所以悬停看到的说明是**错的那一份**。同族第 6 个实例, 由闸 <c>C57</c> 抓出。</remarks>
+        </member>
+        <member name="M:Arupa.ArupaWebView.ApplyThirdPartyCookieBlocking(System.Boolean)">
+            <summary>#843 (MINOR 28): 阻止 / 放开第三方 Cookie, 作用于本 view 自己的分区(同分区的其它 view 与之后新开的
+            view 一起生效)。同步: 返回时网络服务已处理完。
+            ⚠ MINOR 28 之前 SetBlockThirdPartyCookies 设到的是默认分区, 命名 / 无痕分区的 view 设了等于没设。
+            回 JSON: {"code":0,"blocked":bool,"acked":true,"partition_key":"..."} · 3 view/分区不在 · 4 在内核 UI 线程上调 ·
+            5 10 秒内没等到网络服务回执。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.GetThirdPartyCookieBlocking">
+            <summary>#843 (MINOR 28): 读回本 view 分区的第三方 Cookie 设置:
+            {"code":0,"blocked":bool,"acked":bool,"explicit":bool,"partition_key":"..."}(explicit=false ⇒ 没设过, 默认不阻止)。</summary>
+        </member>
+        <member name="F:Arupa.ArupaWebView.CdpSessionRebound">
+            <summary>
+            内核在**会话被拆掉**时补的那条错误里带的标记(FB-P165)。见
+            <see cref="M:Arupa.ArupaWebView.SendCdpAsync(System.String,System.String,System.Int32,System.Boolean)"/> 里的自动重发。
+            </summary>
+        </member>
+        <member name="P:Arupa.ArupaWebView.CdpReboundRetries">
+            <summary>本进程内一共因会话重建**重发**过多少条 CDP。</summary>
+            <remarks>
+            ⚠ **单独一个数说明不了"止血够不够"** —— 对接侧 2026-09-10 指出:
+            「重发了 40 次」既可能是"救回 40 条", 也可能是"救回 20 条另 20 条照样死"。
+            ⇒ 必须与 <see cref="P:Arupa.ArupaWebView.CdpReboundGiveUps"/> 一起读:
+            <c>救回 = CdpReboundRetries - CdpReboundGiveUps</c>。
+            </remarks>
+        </member>
+        <member name="P:Arupa.ArupaWebView.CdpReboundGiveUps">
+            <summary>
+            重发之后**又一次**撞上会话重建、最终把错误抛出去的条数(FB-P165)。
+            </summary>
+            <remarks>
+            🔴 它不是 0 就说明"重发一次"这个止血**不够**: 那个 view 正在反复换进程,
+            而调用方最终仍然拿不到答案。⚠ 那时**不要**改成无限重发 ——
+            该查的是"为什么一直在换进程"。
+            </remarks>
+        </member>
+        <member name="M:Arupa.ArupaWebView.SendCdpWithRetryAsync(System.String,System.String,System.Int32,System.Int32)">
+            <summary>CDP DevToolsAgentHost attach 后首条命令偶发未就绪 → 短超时重试若干次, 让桥设施稳。</summary>
+        </member>
+        <member name="M:Arupa.Interop.arupa_last_error_json">
+            <summary>本线程最近一次失败的结构化说明 (arupa_free 释放; NULL = 本线程没记录过失败)。
+            ⚠ **thread_local** —— 谁调的谁读, 且只在紧接着的失败之后读才有意义 (capi.h §错误通道)。</summary>
+        </member>
+    </members>
+</doc>
