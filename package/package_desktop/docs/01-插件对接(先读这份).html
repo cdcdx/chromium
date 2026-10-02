@@ -1,0 +1,1236 @@
+<!DOCTYPE html>
+<!-- doc-type: reference -->
+<!-- owner: 内核会话 -->
+<!-- updated: 2026-09-21 -->
+<!-- ssot-for: none -->
+<!-- integration-line: pc -->
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arupa 内核 PC · MV3 插件对接文档 · 2026-08-26</title>
+<style>
+/* ARUPA-DOC-STYLE-BEGIN v1 —— 生成物, 勿手改; 改 docs/assets/arupa-doc-2026.css
+   刷新: python build/roll/doc-style-sync.py   ·   闸 C58 盯着这块与源一致 */
+/* Arupa 文档统一皮肤 · 2026 规范 —— **唯一真值源**
+ *
+ * 🔴 别手改各份 HTML 里的 <style> 块。那些是**生成物**:
+ *      python build/roll/doc-style-sync.py            # 把本文件刷进所有带标记的文档
+ *      python build/roll/doc-style-sync.py --check    # 只比对(闸 C58 调它)
+ *    改样式 = 改本文件 + 重刷。手改某一份的后果就是"文档各说各话"——
+ *    产品 2026-08-26 原话:「文档我们统一 2026 最新的规范, 别文档各说各话」。
+ *
+ * 布局有两档, 由 .page-wrap 上加不加 .with-sidebar 决定:
+ *   · 默认(不加)      = 块级居中单栏 —— 大多数文档用这个
+ *   · .with-sidebar   = 侧栏 + 正文两栏
+ * 🔴 默认块级是**有意的**: 之前那套 CSS 默认 flex, 而它假设 .page-wrap 下只有
+ *   「侧栏 + 正文」两个子元素。谁复用它去写单栏文档, 几十个元素就会各自成为 flex item
+ *   横向排开、整页压成竖条 —— 2026-08-25 真出过一次, 而且**在源码 diff 里完全看不出来**。
+ *   把安全的那档设成默认, 危险的那档要显式声明。
+ */
+
+/* ── 明暗双主题 ───────────────────────────────────────────────────────────
+ * 三态: [data-theme="dark"] / [data-theme="light"] 显式覆盖 · 都没有时跟系统。 */
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-subtle: #fafafa;
+  --card: #ffffff;
+  --card-2: #f7f7f9;
+  --bd: #e4e4e7;
+  --fg: #18181b;
+  --mut: #71717a;
+  --faint: #a1a1aa;
+  /* violet —— 2026 规范的默认 accent(shadcn 官方 violet preset) */
+  --acc: hsl(262 83% 58%);
+  --acc-fg: #ffffff;
+  --acc-bg: hsl(262 83% 96%);
+  --acc-bd: hsl(262 70% 88%);
+  /* 状态色**成对**: 亮用 600、暗用 400 —— 单一色号只会在一个主题里好看 */
+  --ok: #059669;      --ok-bg: #ecfdf5;  --ok-bd: #6ee7b7;
+  --warn: #d97706;    --warn-bg: #fffbeb; --warn-bd: #fcd34d;
+  --bad: #dc2626;     --bad-bg: #fef2f2;  --bad-bd: #fca5a5;
+  --info: #0284c7;    --info-bg: #f0f9ff; --info-bd: #bae6fd;
+  --code-fg: #6d28d9;
+  --code-bg: #f4f4f5;
+  --pre-bg: #fafafa;
+  --radius: 0.625rem;                    /* 2026 taste(shadcn new-york); 0.5rem 读着偏旧 */
+  --shadow: 0 1px 2px rgb(0 0 0 / .04), 0 1px 3px rgb(0 0 0 / .06);
+}
+:root:not([data-theme="light"]) { }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0b0d16;
+    --bg-subtle: #0f111d;
+    /* 🔴 card 比 bg **亮一档** —— 暗色下不分层的话卡片会糊在背景上, 整页显得平 */
+    --card: #161a2b;
+    --card-2: #1b2030;
+    --bd: #262b40;
+    --fg: #e7e9f3;
+    --mut: #9499b5;
+    --faint: #6b7090;
+    --acc: hsl(263 70% 74%);
+    --acc-fg: #12101f;
+    --acc-bg: hsl(263 45% 18%);
+    --acc-bd: hsl(263 40% 34%);
+    --ok: #34d399;   --ok-bg: #0c2a1f;   --ok-bd: #065f46;
+    --warn: #fbbf24; --warn-bg: #2a230c; --warn-bd: #92400e;
+    --bad: #f87171;  --bad-bg: #2a1213;  --bad-bd: #991b1b;
+    --info: #38bdf8; --info-bg: #0c1e2a; --info-bd: #075985;
+    --code-fg: #c9cdff;
+    --code-bg: #0c0e18;
+    --pre-bg: #0a0c15;
+    --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 2px 8px rgb(0 0 0 / .3);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b0d16; --bg-subtle: #0f111d; --card: #161a2b; --card-2: #1b2030;
+  --bd: #262b40; --fg: #e7e9f3; --mut: #9499b5; --faint: #6b7090;
+  --acc: hsl(263 70% 74%); --acc-fg: #12101f;
+  --acc-bg: hsl(263 45% 18%); --acc-bd: hsl(263 40% 34%);
+  --ok: #34d399; --ok-bg: #0c2a1f; --ok-bd: #065f46;
+  --warn: #fbbf24; --warn-bg: #2a230c; --warn-bd: #92400e;
+  --bad: #f87171; --bad-bg: #2a1213; --bad-bd: #991b1b;
+  --info: #38bdf8; --info-bg: #0c1e2a; --info-bd: #075985;
+  --code-fg: #c9cdff; --code-bg: #0c0e18; --pre-bg: #0a0c15;
+  --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 2px 8px rgb(0 0 0 / .3);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 14.5px/1.7 "Inter", -apple-system, "Noto Sans CJK SC", "PingFang SC",
+        "Microsoft YaHei", "Segoe UI", sans-serif;
+  /* ss01/calt/rlig: Inter 的字形替换与连字 —— 开了才是它该有的样子 */
+  font-feature-settings: "ss01", "calt", "rlig";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 自定义滚动条(走主题 token, 不用 OS 默认) ─────────────────────────── */
+* { scrollbar-width: thin; scrollbar-color: var(--bd) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--bd); border-radius: 999px;
+  border: 2px solid transparent; background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--mut); background-clip: content-box; }
+
+a { color: var(--acc); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+h1 { font-size: 27px; font-weight: 800; letter-spacing: -.022em; margin: 0 0 6px; }
+h2 {
+  font-size: 19px; font-weight: 700; letter-spacing: -.012em;
+  margin: 34px 0 12px; padding: 18px 0 12px; border-top: 1px solid var(--bd);
+}
+h2:first-of-type { margin-top: 18px; padding-top: 0; border-top: none; }
+h3 { font-size: 15.5px; font-weight: 700; margin: 22px 0 8px; letter-spacing: -.008em; }
+h4 { font-size: 13.5px; font-weight: 600; margin: 16px 0 6px; color: var(--mut); }
+p { margin: 9px 0; max-width: 78ch; }
+ul, ol { padding-left: 22px; margin: 8px 0; }
+li { margin: 5px 0; max-width: 78ch; line-height: 1.68; }
+
+code {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .855em; color: var(--code-fg); background: var(--code-bg);
+  border: 1px solid var(--bd); border-radius: 5px; padding: 1px 5px;
+}
+pre {
+  background: var(--pre-bg); border: 1px solid var(--bd);
+  border-radius: var(--radius); padding: 14px 16px; overflow-x: auto;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12.5px; line-height: 1.66; color: var(--fg); margin: 10px 0;
+}
+pre code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; }
+
+/* ── 表格 ─────────────────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 12px 0; }
+th, td { padding: 8px 11px; text-align: left; border-bottom: 1px solid var(--bd);
+         vertical-align: top; }
+th { background: var(--card-2); color: var(--mut); font-weight: 600; font-size: 11px;
+     text-transform: uppercase; letter-spacing: .04em; }
+tr:hover td { background: var(--card-2); }
+/* .kv: 带边框的键值表(对接文档里那种 API 表) */
+.kv { border-collapse: collapse; }
+.kv th, .kv td { border: 1px solid var(--bd); font-size: 14px; text-transform: none;
+                 letter-spacing: 0; }
+.kv th { background: var(--card-2); color: var(--fg); font-weight: 600; white-space: nowrap; }
+.kv code { white-space: nowrap; }
+/* 宽内容自己滚, 页面不横向滚 */
+.scroll-x { overflow-x: auto; }
+
+/* ── 徽章 ─────────────────────────────────────────────────────────────── */
+.pill { display: inline-block; padding: 1.5px 8px; border-radius: 6px;
+        font-size: 11px; font-weight: 700; border: 1px solid var(--bd);
+        letter-spacing: .01em; }
+.pill.ok   { background: var(--ok-bg);   border-color: var(--ok-bd);   color: var(--ok); }
+.pill.warn { background: var(--warn-bg); border-color: var(--warn-bd); color: var(--warn); }
+.pill.bad  { background: var(--bad-bg);  border-color: var(--bad-bd);  color: var(--bad); }
+.pill.info { background: var(--info-bg); border-color: var(--info-bd); color: var(--info); }
+.pill.acc  { background: var(--acc-bg);  border-color: var(--acc-bd);  color: var(--acc); }
+
+/* ── 提示框 ───────────────────────────────────────────────────────────── */
+.callout, .box, .trap, .note, .okbox, .warnbox {
+  border-radius: var(--radius); padding: 13px 16px; margin: 14px 0;
+  border: 1px solid var(--bd); background: var(--card);
+}
+.callout.ok,   .box.ok,   .okbox   { background: var(--ok-bg);   border-color: var(--ok-bd); }
+.callout.warn, .box.warn, .warnbox { background: var(--warn-bg); border-color: var(--warn-bd); }
+.callout.bad,  .box.bad,  .trap    { background: var(--bad-bg);  border-color: var(--bad-bd); }
+.callout.info, .box.info, .note    { background: var(--info-bg); border-color: var(--info-bd); }
+.callout p, .box p, .trap p, .note p, .okbox p, .warnbox p { margin: 5px 0; color: var(--fg); }
+.trap > b   { color: var(--bad); }
+.okbox > b  { color: var(--ok); }
+.warnbox > b{ color: var(--warn); }
+
+/* 步骤块 */
+.step { border-left: 3px solid var(--acc); padding: 2px 0 2px 14px; margin: 16px 0; }
+.step > b { color: var(--acc); }
+
+/* ── 布局 ─────────────────────────────────────────────────────────────── */
+.page-wrap { display: block; max-width: 1000px; margin: 0 auto; padding: 28px 22px 72px; }
+.page-wrap.with-sidebar { display: flex; max-width: none; margin: 0; padding: 0;
+                          min-height: 100vh; }
+nav.sidebar {
+  width: 262px; flex: none; background: var(--bg-subtle);
+  border-right: 1px solid var(--bd); padding: 20px 12px 60px;
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+}
+nav.sidebar .brand { display: flex; align-items: center; gap: 9px; margin-bottom: 18px;
+                     padding: 0 6px; }
+/* logo 包一层 accent 底 —— 光秃秃一个图标撑不起头部 */
+nav.sidebar .logo { width: 34px; height: 34px; border-radius: 9px;
+                    background: var(--acc-bg); border: 1px solid var(--acc-bd);
+                    display: grid; place-items: center; color: var(--acc);
+                    font-weight: 900; font-size: 15px; flex: none; }
+nav.sidebar .brand-text b { display: block; font-size: 13.5px; letter-spacing: -.01em; }
+nav.sidebar .brand-text small { color: var(--faint); font-size: 11px; }
+nav.sidebar .grp { color: var(--faint); font-size: 10px; text-transform: uppercase;
+                   letter-spacing: .1em; font-weight: 700; margin: 18px 8px 5px; }
+nav.sidebar a { display: block; color: var(--mut); padding: 5px 10px;
+                border-radius: 7px; font-size: 12.5px;
+                border-left: 2px solid transparent; transition: all .12s; }
+nav.sidebar a:hover { background: var(--card); color: var(--fg); text-decoration: none; }
+nav.sidebar a.active { background: var(--acc-bg); color: var(--acc);
+                       border-left-color: var(--acc); }
+main.content { flex: 1; padding: 40px 52px; max-width: 980px; min-width: 0; }
+
+.header-row { display: flex; align-items: flex-start; justify-content: space-between;
+              gap: 16px; margin-bottom: 6px; }
+.theme-btn { padding: 5px 12px; border-radius: 7px; background: var(--card);
+             border: 1px solid var(--bd); color: var(--mut); cursor: pointer;
+             font-size: 12px; flex: none; margin-top: 4px; }
+.theme-btn:hover { color: var(--acc); border-color: var(--acc-bd); background: var(--acc-bg); }
+
+.toc { columns: 2; font-size: 14px; line-height: 1.95; }
+.toc a { text-decoration: none; }
+
+.anchor-target { scroll-margin-top: 24px; }
+.dot-ok::before   { content: "●"; color: var(--ok);   margin-right: 5px; }
+.dot-warn::before { content: "●"; color: var(--warn); margin-right: 5px; }
+.dot-bad::before  { content: "●"; color: var(--bad);  margin-right: 5px; }
+.dot-info::before { content: "●"; color: var(--info); margin-right: 5px; }
+
+footer { margin-top: 48px; padding: 18px 0 8px; border-top: 1px solid var(--bd);
+         color: var(--faint); font-size: 12.5px; line-height: 1.7; }
+footer a { color: var(--mut); }
+
+@media (max-width: 820px) {
+  .page-wrap.with-sidebar { flex-direction: column; }
+  nav.sidebar { width: 100%; height: auto; position: relative;
+                border-right: none; border-bottom: 1px solid var(--bd); }
+  main.content { padding: 24px 20px; }
+  .toc { columns: 1; }
+}
+/* ARUPA-DOC-STYLE-END */
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+<h1>Arupa 内核 PC · MV3 插件对接文档</h1>
+
+<p style="color:var(--mut);font-size:14px;margin-top:-2px">
+  内核 <code>152.0.7977.42+11</code> · 2026-08-26 ·
+  本页讲 <b>桌面宿主怎么用这个内核装载并管理 MV3 扩展</b>。
+  宿主进程怎么把 dll 跑起来（加载、ABI 校验、调用时序、WebView API 全集）看
+  <a href="integration-guide-pc.html">对接文档</a>；
+  从 CefSharp 迁过来查映射表看 <code>docs/spec/cefsharp-parity-gap.md</code>。
+</p>
+
+<div class="note">
+<b>📍 这份文档的 API 表不是手写的。</b>
+下面每个 C ABI 函数都是从<b>交付件本身</b>读出来的
+（<code>dist/win/current/arupa_kernel.dll</code> 的 PE 导出名表，2026-08-26 现读）。
+如果你手上的 dll 里没有某个函数，那就是<b>版本不够</b>，不是文档写错 ——
+本页对应 <code>152.0.7977.42+11</code> 及以后。
+<br><br>
+⚠ <b>看到两个导出数字别以为矛盾</b>，它们口径不同：
+<b>93</b> = <code>arupa_</code> 前缀的、<b>我们自己的 C ABI</b>（实况镜像页与闸报的是这个）；
+<b>97</b> = PE 导出表<b>全表</b> —— 多出的 4 个是 chromium/sqlite 自带的
+（<code>CrashForExceptionInNonABICompliantCodeRange</code> / <code>GetHandleVerifier</code> /
+<code>IsSandboxedProcess</code> / <code>sqlite3_dbdata_init</code>），<b>不是给你调的</b>。
+<br><br>
+⚠ 但<b>托管侧那一层不在交付件里</b>，见第二节开头那条红框 —— PC 侧已经为此栽过。
+</div>
+
+<div class="toc">
+<a href="#two-lines">一、先分清两条插件线（混了必踩）</a>
+<a href="#api">二、你要用的 API（两层：C ABI / .NET 门面）</a>
+<a href="#quickstart">三、从零走一遍</a>
+<a href="#traps">四、五个坑</a>
+<a href="#whats-in">五、内核提供了什么（以及没提供什么）</a>
+<a href="#perm">六、权限判定（内核给结论，UI 归你）</a>
+<a href="#debug">七、出问题时看什么</a>
+<a href="#verified">八、内核侧验到哪一步（<b>别读成"都验过了"</b>）</a>
+</div>
+
+<h2 id="two-lines" class="anchor-target">一、先分清两条插件线（混了必踩）</h2>
+
+<p>内核里有<b>两条互不相干</b>的"插件"通路，名字像但完全不是一回事。
+这是本仓出过事故的地方（安卓 FB-A050），所以放在最前面。</p>
+
+<table class="kv">
+<tr><th></th><th>MV3 扩展线（<b>本文讲这条</b>）</th><th>传输插件线</th></tr>
+<tr><th>装什么</th><td>标准 Chrome MV3 扩展（解包后的目录，含 <code>manifest.json</code>）</td>
+    <td>我们自己签名的 <code>&lt;id&gt;.arupa-plugin</code> 包（native 引擎）</td></tr>
+<tr><th>设根</th><td><code>arupa_kernel_set_extension_root</code><br><code>ArupaKernel.SetExtensionRoot</code></td>
+    <td><code>arupa_kernel_set_plugin_root</code><br><code>ArupaKernel.SetPluginRoot</code></td></tr>
+<tr><th>怎么装</th><td><b>不用调装载</b> —— 把目录放进扩展根，内核自动下发</td>
+    <td><code>LoadPlugin(id)</code> 验签（Ed25519 + dll sha256）+ 起引擎</td></tr>
+<tr><th>做什么用</th><td>内容脚本、<code>chrome.*</code>、侧栏、右键菜单……</td>
+    <td>网络出口（三方加速客户端）</td></tr>
+<tr><th>要签名吗</th><td>不要</td><td>要</td></tr>
+</table>
+
+<div class="trap">
+<b>🔴 坑 1：两个根别传同一个目录。</b>
+安卓 FB-A050 就是这么出事的 —— 宿主初始化时先设了扩展根，
+之后又把<b>传输</b>根设成另一个目录，而当时两者共用一个字段 ⇒ 后写覆盖先写 ⇒
+放在扩展根里的扩展<b>一个都没下发，而且不报错</b>。
+<br><br>
+现在两者已彻底分开，且<b>内核不会在没设扩展根时拿传输根顶替</b> ——
+它宁可一个都不发，并在日志里说清楚。
+</div>
+
+<div class="warnbox">
+<b>⚠ 传输插件线那半，产品 2026-08-10 已整体弃用</b>（原话：「只出标准，三方自建」）。
+<code>LoadPlugin</code> / <code>RevokePlugin</code>（C ABI <code>arupa_kernel_load_plugin</code> /
+<code>arupa_kernel_revoke_plugin</code>）与 <code>arupa_plugin_host.exe</code>
+仍在交付件里（还编着、导出表里也还在），但<b>做插件对接不要用它们，本文不展开这两个</b>。
+现在的形态是：三方跑自己的进程并监听本地 SOCKS5，宿主拿到端口后调
+<code>view.SetTransportRoute</code> 把指定单元的流量指过去，<b>内核侧零开发</b>。
+</div>
+
+<h2 id="api" class="anchor-target">二、你要用的 API（两层：C ABI / .NET 门面）</h2>
+
+<div class="trap">
+<b>🔴 先说清一件事：这两层不在同一个地方，PC 侧已经为此栽过。</b>
+<table class="kv" style="margin-top:8px">
+<tr><th>那一层</th><th>在哪</th><th>随交付件走吗</th></tr>
+<tr><td><b>C ABI</b>（<code>arupa_kernel_*</code>）</td>
+    <td><code>dist/win/current/arupa_kernel.dll</code> 的导出表<br>
+        声明的唯一真值源 = 内核仓
+        <code>chromium-patches/desktop/arupa/public/arupa_kernel_capi.h</code></td>
+    <td><b>是</b> —— 你手上的 dll 里有什么，就是什么</td></tr>
+<tr><td><b>.NET 门面</b>（<code>ArupaKernel</code> / <code>ArupaInject</code> / <code>ArupaMv3</code> /
+        <code>ArupaRoute</code> / <code>ArupaPluginStorage</code>）</td>
+    <td>内核仓源码 <code>shells/dotnet/ArupaKernel/ArupaBrowser.cs</code></td>
+    <td><b>不是</b> —— 交付件里<b>没有任何 <code>.cs</code></b>（34 个文件全是二进制与资源）</td></tr>
+</table>
+🔴 <b><code>NomadBrowser.PC/dist/handoff-csharp/</code> 里那份 wrapper 快照停在 2026-07-21</b>，
+连 <code>SetExtensionRoot</code> 都没有。<b>照那份快照取的人会缺一大批门面</b>，
+而缺的表现是"这个方法不存在"，不会有人告诉你是快照旧了。
+<br>⇒ 要么从内核仓现取 <code>ArupaBrowser.cs</code>，要么直接按
+<code>arupa_kernel_capi.h</code> 里的签名自己 P/Invoke（签名都在头文件里，是完整的）。
+</div>
+
+<h3>MV3 扩展线的六个入口</h3>
+
+<table class="kv">
+<tr><th>C ABI</th><th>.NET 门面</th><th>做什么 / 什么时候调</th></tr>
+<tr><td><code>arupa_kernel_set_extension_root</code><br>
+        <span style="color:var(--mut);font-size:12px">MINOR 11</span></td>
+    <td><code>SetExtensionRoot(string dir)</code></td>
+    <td>告诉内核去哪找 MV3 扩展。该目录下<b>每个带 <code>manifest.json</code> 的子目录</b>算一个扩展。
+        <b>什么时候调都行</b>，不必赶在开页面之前 —— 见坑 3。重复设同一个值是空操作。</td></tr>
+<tr><td><code>arupa_kernel_set_extension_user_loaded</code><br>
+        <span style="color:var(--mut);font-size:12px">2026-09-08</span></td>
+    <td><code>ArupaBrowser.SetExtensionUserLoaded(id, bool)</code></td>
+    <td>断言"这个扩展是<b>用户自己加载的开发包</b>"（非商店、非签名包）。<br>
+        🔴 只影响 <code>nativeMessaging</code> 那一档：一个包要拿到它，要么<b>有我们的签名</b>，
+        要么<b>宿主为它背书</b>；两样都没有 ⇒ 拒（<code>NM_NEEDS_SIGNATURE_OR_USER_LOAD</code>）。<br>
+        <span style="color:var(--mut);font-size:13px">⚠ 这<b>不是</b>"用户点一下同意"那种授权 ——
+        拉起本地进程的后果用户看不见也管不了，一个确认框描述不了它。
+        ⚠ 内核<b>不猜</b>：没调过 ⇒ 按"不是用户加载的"算；传 <code>false</code> 是撤销。</span></td></tr>
+<tr><td><code>arupa_kernel_set_extension_route_consent</code><br>
+        <span style="color:var(--mut);font-size:12px">2026-09-09</span></td>
+    <td><code>ArupaBrowser.SetExtensionRouteConsent(id, bool)</code></td>
+    <td>宿主弹完确认框之后<b>如实断言</b>"用户已经为这个扩展确认过改浏览器全局出口"。<br>
+        配套的是 <code>ArupaWebView.SetTransportRouteForExtension</code>（回码 0–6，
+        <b>3 = 要确认而宿主没断言过</b> ⇒ 去弹框）。<br>
+        <span style="color:var(--mut);font-size:13px">🔴 <b>持久的那份真相在宿主手里</b>：
+        内核那张表是<b>本进程内的缓存</b>，进程一起来就是空的 ⇒ 每次内核起来要重新断言。<br>
+        ⚠ 传 <code>false</code> 是撤销 —— 否则"同意过一次"等于永久授权。
+        ⚠ 影响面<b>只是浏览器内的全局出口，不是系统代理</b>，确认框的措辞照这个写。
+        🛑 内核没有 UI 也不该有。</span></td></tr>
+<tr><td><code>arupa_kernel_get_extension_root</code><br>
+        <span style="color:var(--mut);font-size:12px">MINOR 11</span></td>
+    <td><code>GetExtensionRoot()</code> → <code>string</code></td>
+    <td>回显内核<b>真正记住的</b>那个根（未设 / 旧 dll = 空串）。
+        初始化之后对一下，就能<b>当场</b>知道上一步生效没有。
+        <span style="color:var(--mut);font-size:13px">这条线出过的两次事
+        （传输根顶替扩展根 · 压根没有门面可调）都是"值悄悄没生效，
+        而没有任何视图会问它一句"。</span></td></tr>
+<tr><td><code>arupa_kernel_list_extensions</code><br>
+        <span style="color:var(--mut);font-size:12px">MINOR 12</span></td>
+    <td><code>ListExtensions()</code> → <code>List&lt;(string Id, string Dir)&gt;</code></td>
+    <td>列出内核<b>已经认识的</b>扩展，拿<b>权威 id</b>。
+        <b>做启停之前先调它。</b>
+        <span style="color:var(--mut);font-size:13px">⚠ 是"已经认识哪些"，
+        不是"当前根下有哪些" —— 见坑 4</span></td></tr>
+<tr><td><code>arupa_kernel_set_extension_enabled</code><br>
+        <span style="color:var(--mut);font-size:12px">MINOR 12</span></td>
+    <td><code>SetExtensionEnabled(string id, bool on)</code></td>
+    <td>单个扩展的启停。关掉 = ① 之后的扫描跳过它 ② 对<b>已经开着的页面</b>发卸载
+        （<b>立刻失效</b>，不用等下一个页面）③ 从"已下发"记录里摘掉，重新启用时发得回去。
+        用户在你的插件管理页点开关时调。</td></tr>
+<tr><td><code>arupa_kernel_set_extension_permission_consent</code><br>
+        <span style="color:var(--mut);font-size:12px">MINOR 22</span></td>
+    <td><span style="color:var(--mut)">.NET 门面<b>暂无</b>，先走 P/Invoke</span></td>
+    <td><b>按扩展、按权限记「用户点过头没有」。</b>你弹框问过用户之后调它告诉内核。
+        目前只有 <code>management</code> 用到：授权过 ⇒ <code>chrome.management.getAll</code>
+        转给你答真实名单；没授权 / 撤销 / 从没问过 ⇒ <b>内核替代应答空数组</b>（不泄露已装扩展清单）。
+        <span style="color:var(--mut);font-size:13px">⚠ 判定码不变（<code>management</code> 仍是 3）——
+        判定说"这条是什么风险"，这里说"用户对它点了什么头"，是两件事。<br>
+        ⚠ 内核<b>只记在内存、不落盘</b> ⇒ 授权记录的真值在你那儿，<b>每次起内核后要重新告诉它</b>。</span></td></tr>
+<tr><td><code>arupa_kernel_set_extension_install_generation</code><br>
+        <span style="color:var(--mut);font-size:12px">MINOR 24</span></td>
+    <td><span style="color:var(--mut)">.NET 门面<b>暂无</b>，先走 P/Invoke</span></td>
+    <td><b>把某个扩展的安装代次告诉内核</b>（内核不保存安装史 ⇒ 真值在你那儿）。
+        内核只做<b>单调校验</b>，变小的代次拒收并记日志；代次一变，
+        <b>该扩展旧代次的在途请求一律作废</b>，并经取消回调通知你。
+        <span style="color:var(--mut);font-size:13px">装 / 升级 / 重装之后调一次。
+        它也会进「可信调用上下文」，让你分得清"这次调用来自哪一代安装"。</span></td></tr>
+<tr><td><code>arupa_kernel_rescan_extensions</code><br>
+        <span style="color:var(--mut);font-size:12px">MINOR 12</span></td>
+    <td><code>RescanExtensions()</code></td>
+    <td>重扫扩展根，把新发现的扩展补发给<b>已经开着的页面</b>。
+        刚装完一个新扩展、想让它立刻生效时调。
+        <span style="color:var(--mut);font-size:13px">⚠ 已下发过的不会重复下发，多调几次安全；
+        被禁用的<b>不会</b>被重扫带回来（有意的）。</span></td></tr>
+<tr><td><code>arupa_kernel_extension_sw_state</code><br>
+        <span style="color:var(--mut);font-size:12px">MINOR 13</span></td>
+    <td><code>ExtensionServiceWorkerState(string id)</code><br>→ <code>ExtensionSwState</code></td>
+    <td>这个扩展的 <b>background service worker 到底起没起</b>。
+        <b>不改变任何状态，随时可调。</b>四态见下表。</td></tr>
+</table>
+
+<h3 id="action" class="anchor-target">Action 面的六个入口（<b>2026-08-30 新加</b>，FB-A060）</h3>
+
+<p>只有工具栏入口、没有独立主页的 MV3 扩展（截图 / 快速收藏 / 密码填充……）全靠这一组。
+在这之前它们<b>装得上、启得动、SW 显示"已注册"，而用户点不动</b> ——
+<code>chrome.action.onClicked.addListener</code> 挂得上，但<b>没有任何东西会去触发它</b>。</p>
+
+<div class="callout warn"><b>🔴 为什么点击派发必须内核做，你们模拟不了。</b>
+<code>onClicked</code> 的监听器活在<b>扩展的 service worker 里</b>。你们拿不到那个 JS 函数，
+也不知道哪个监听器属于哪个权威扩展 id。按插件 id 写死业务逻辑的话，用户"看起来能用"
+而<b>插件代码一次都没跑</b> —— 那不是 MV3 Action 支持，是仿造。</div>
+
+<p style="color:var(--mut);font-size:13px">⚠ 与安卓
+<code>ArupaPluginBridge</code> 的同名方法<b>逐条同源</b>（内核那一层逐字节相同，
+只差"宿主在哪一侧"）—— 同一个第三方插件装到两端，行为、错误码、"没人接"时的表现都必须一样。
+两端分叉请立刻报回来。</p>
+
+<table class="kv">
+<tr><th>C ABI</th><th>做什么</th></tr>
+
+<tr><td><code>arupa_kernel_list_extension_actions</code><br>
+        <span style="color:var(--mut);font-size:12px">→ JSON 数组</span></td>
+    <td>所有<b>该在工具栏画出来的</b>扩展，要画几个入口就是几条。每条形如<br>
+        <code>{"extensionId":"…","canonicalDirectory":"…","title":"逐风截图",
+        "iconPath":"icon.svg","badgeText":"1","enabled":true,"visible":true,
+        "popupPath":null,"sequence":12}</code>
+        <span style="color:var(--mut);font-size:13px"><br>
+        ⚠ <code>popupPath</code> 为 <b>null 表示没有 popup</b> ⇒ 点击应派发 <code>onClicked</code>。<br>
+        ⚠ <b>MV3 扩展都在里面</b>：上游对 MV3 会给一个默认 Action（清单里没写
+        <code>action</code> 键也一样），与 Chrome 一致。别读成"清单里写了 action 键的那些"。<br>
+        ⚠ 返回的指针是 <b>thread_local</b> 的，<b>拷走再用</b>。</span></td></tr>
+
+<tr><td><code>arupa_kernel_get_extension_action</code><br>
+        <span style="color:var(--mut);font-size:12px">→ JSON 对象 / 空串</span></td>
+    <td>单个查询，字段同上。
+        <span style="color:var(--mut);font-size:13px"><br>
+        ⚠ 扩展不存在时返回<b>空串</b>（不是 <code>"{}"</code>）—— 你们要能分清
+        "没这个扩展"与"有但状态是空的"。</span></td></tr>
+
+<tr><td><code>arupa_kernel_set_action_state_observer</code></td>
+    <td>订阅状态变化。内核推<b>完整快照</b>（不是增量 —— 增量丢一条就永远对不上，
+        而快照天然自愈）。传 <code>NULL</code> = 撤销。
+        <span style="color:var(--mut);font-size:13px"><br>
+        ⚠ 注册的<b>那一刻</b>内核会把现有入口先推一遍；否则要等到下一次状态变化才知道有
+        哪些入口，而"装好之后一直没人改 badge"是最常见的情形。<br>
+        ⚠ 进程级、只在 UI 线程调。</span></td></tr>
+
+<tr><td><code>arupa_kernel_dispatch_action_click</code><br>
+        <span style="color:var(--mut);font-size:12px">→ int</span></td>
+    <td>用户/AI 点了某个扩展的 Action。第二参形如<br>
+        <code>{"tabId":"tab-42","navigationId":"nav-108","url":"https://example.com/a",
+        "title":"…","userGesture":true}</code><br>
+        返回码（<b>0 和 1 都不是失败</b>）：
+        <code>0 DISPATCHED</code> · <code>1 OPEN_POPUP_INSTEAD</code>（<b>你们去开 popup</b>）·
+        <code>2 EXTENSION_NOT_FOUND</code> · <code>3 EXTENSION_DISABLED</code> ·
+        <code>4 ACTION_NOT_FOUND</code> · <code>5 NO_USER_GESTURE</code> ·
+        <code>6 TAB_NOT_FOUND</code> · <code>7 SERVICE_WORKER_UNAVAILABLE</code></td></tr>
+
+<tr><td><code>arupa_kernel_revoke_active_tab_document</code><br>
+        <code>arupa_kernel_revoke_active_tab_tab</code><br>
+        <code>arupa_kernel_revoke_active_tab_extension</code></td>
+    <td>撤销 activeTab 授权。<b>三个时机都要调</b>：①导航（document 变了）
+        ②标签页关闭 ③扩展被停用/卸载。</td></tr>
+
+<tr><td><code>arupa_kernel_active_tab_grant_count</code><br>
+        <span style="color:var(--mut);font-size:12px">→ int</span></td>
+    <td>当前 activeTab 授权条数。<b>给判据 / 排查用</b> ——
+        反测要能看见"撤销之后真的少了一条"。</td></tr>
+</table>
+
+<h4>四条纪律（每条都有它防的那个具体故障）</h4>
+
+<ol>
+<li><b><code>userGesture</code> 必须 <code>true</code>，缺省按拒处理。</b>
+内核<b>不猜</b>手势 —— 由你们如实断言。你们是可信嵌入方：手指点的、还是产品的 AI 点的，
+都算你们的手势。<b>插件侧没有任何入口能走到这条路</b> ⇒
+<b>AI 驱动不需要另一套授权模型</b>。</li>
+
+<li>🔴 <b><code>navigationId</code> 每次导航必须换新值。</b>
+它就是 activeTab 绑定的 <b>document</b> 维度。不换的话，旧授权会跟着用户
+<b>从新闻站走到网银站</b> —— 那正是 MV3 最小授权模型要防的。</li>
+
+<li>🔴 <b>撤销是你们的责任，内核不监听你们的标签页生命周期。</b>
+漏掉上面那三个 <code>revoke</code> <b>不会报错</b>，
+但插件会在它不该有权限的页面上<b>继续有权限</b>。</li>
+
+<li><b><code>popupPath</code> 非 null ⇒ 你们去开 popup，内核不派发 <code>onClicked</code></b>（返回 1）。
+MV3 里两者<b>互斥</b>，两样都做的话插件会以为被点了两次。<br>
+⚠ 这一支内核<b>已经授了 activeTab</b> —— popup 里的脚本同样要读当前页。</li>
+</ol>
+
+<h4><code>sequence</code> 怎么用（有一处<b>反直觉</b>）</h4>
+
+<ul>
+<li>✅ <b>同一个 <code>extensionId</code> 的两条快照</b>：号大的是新的 ⇒ 只认号更大的那条，
+迟到的旧事件就覆盖不了新状态。<b>这是它唯一的用途。</b></li>
+<li>✅ 号<b>全局唯一</b>（一个进程一个计数器，不是每扩展一个）⇒ 不会撞号。</li>
+<li>❌ <b>别拿它跨扩展排先后</b>：注册观察者那一刻的<b>重放</b>推的是各扩展<b>各自的当前号</b>
+（历史值），顺序是内部 map 的 id 字典序 ⇒ 在全局看来是乱序的（实测拿到过 5,7,3）。
+它们是"现状"不是"刚发生的变化"。<b>按 <code>extensionId</code> 各存各的就无害。</b></li>
+</ul>
+
+<h4>activeTab 与 <code>host_permissions</code> 是<b>两件事</b>，别混</h4>
+
+<p><code>host_permissions</code>（含 <code>&lt;all_urls&gt;</code>）＝清单里声明 →
+装的时候用户同意一次 → <b>常驻</b>；<code>activeTab</code> ＝<b>一次真实手势</b> →
+只对<b>那个扩展 + 那一个 document</b> 有效 → 导航/关闭/停用即失效。</p>
+
+<p>⇒ <b>activeTab 不是 <code>host_permissions</code> 的严格版，它是替代品。</b>
+插件想"一直有权限"，标准做法是声明 <code>host_permissions</code>，
+<b>不该由 activeTab 去补偿</b>。
+⚠ 内核 <code>HostPolicy</code> 的默认档 <b>2026-08-30 由 <code>kStrict</code> 改成
+<code>kConsent</code></b>（产品拍板）——<code>&lt;all_urls&gt;</code> 现在<b>保留</b>，
+不再被无声剥掉。改的理由：剥掉之后内容脚本没有可匹配的站点、<b>且哪儿都不报错</b>，
+三方看到的是「装上了但什么都没发生」，那是最难查的形态，不是更安全的形态。</p>
+
+<p>🔴 <b>这一条必须跟着上面那句一起读，别读成「已经征得用户同意」</b>：
+内核侧 <code>kConsent</code> 与 <code>kAllowAll</code> <b>行为完全一样</b>
+（两档都原样保留 pattern，只是日志措辞不同），差别<b>只在宿主要不要弹一次授权框</b>——
+而<b>宿主那个授权框还没做</b>。⇒ 当下 <code>kConsent</code> 的<b>实际效果等同
+<code>kAllowAll</code></b>，用户此刻不会被问。选它是因为语义诚实、且给宿主留了接口，
+<b>不是</b>因为已经有同意流程了。要改档位用 <code>arupa_set_host_policy</code>
+（0=STRICT / 1=CONSENT / 2=ALLOW_ALL）；读回当前档位用 <code>arupa_get_host_policy</code>。
+⚠ 这两个都是**配置**接口，可以在 <code>arupa_kernel_create</code> <b>之前</b>调用
+（2026-09-04 修好的 —— 此前按"先设档位、再建内核"这个最自然的顺序调用会崩）。</p>
+
+<h4>API 权限的档位 <code>ApiPolicy</code>（2026-09-04 新增）</h4>
+
+<p>上面那个开关管的是 <b>host 权限</b>（<code>&lt;all_urls&gt;</code>）。
+本节这个管的是 <b>API 权限</b>（<code>webRequest</code> / <code>cookies</code> /
+<code>management</code>…）。两者此前<b>待遇差很多</b>：host 那条早就有三档，
+而 API 那条<b>一档都没有</b> —— 判 DENY 就无条件剥。</p>
+
+<p>🔴 <b>剥掉一个 API 权限的后果比剥 host 重得多</b>：上游据 PermissionSet 生成绑定，
+权限没了 ⇒ <code>chrome.&lt;ns&gt;</code> <b>整个对象不存在</b> ⇒ 扩展在 background
+<b>顶层就 <code>TypeError</code></b> ⇒ SW 注册失败 ⇒ <b>整个扩展起不来</b>
+（实测：真实商店网络加速类扩展在 background 顶层写 <code>chrome.webRequest.onAuthRequired</code>，
+就是这样死的）。而在 Chrome 上，<b>没有权限时对象照样存在，是调用才拒</b>。</p>
+
+<p>档位：<code>arupa_set_api_policy</code> / <code>arupa_get_api_policy</code>
+（<code>0=STRICT</code> / <code>1=CONSENT</code> / <code>2=ALLOW_ALL</code>，
+<b>默认 <code>1 = CONSENT</code></b>，产品 2026-09-04 拍板：
+「chrome 既然允许开放我们也允许，只是指纹泄露之前必须是权限之类经过用户明确同意的」）。
+越界值<b>按最严处理</b>并如实报，不许"看不懂就放行"。</p>
+
+<p>🔴 <b>三条边界，请连着上面一起读：</b></p>
+<ul>
+<li><b>「同意」这件事内核不强制</b> —— 与 <code>HostPolicy</code> 那段说的完全一样：
+<code>kConsent</code> 只是<b>保留权限 + 在日志里说"宿主应当就此弹一次授权"</b>，
+内核<b>既不弹也不记</b>，<b>宿主那个授权框还没做</b>。
+⇒ 当下 <code>kConsent</code> 的实际效果等同 <code>kAllowAll</code>，用户此刻不会被问。
+选它是因为<b>语义诚实、且给宿主留了接口</b>，<b>不是</b>因为已经有同意流程了。</li>
+
+<li>🔴 <b>「面在」不等于「能用」</b> —— 保留权限之后 <code>chrome.webRequest</code>
+<b>对象会存在</b>（顶层不再炸、SW 能注册），但<b>调用拦不到任何东西</b>：
+判定仍然是 <code>DENY_UNSUPPORTED(6)</code> = 我们还没实现。
+<b>界面上必须把这两件事分开说</b>，否则用户会以为"能用了"。</li>
+
+<li><b>特权逃逸类不受本开关影响</b> —— <code>nativeMessaging</code>（去起宿主机上的本地进程）
+与 <code>debugger</code>（把 CDP 交给扩展）判 <code>DENY_PRIVILEGED</code>，
+<b>任何档位都照剥</b>。产品那句话说的是<b>指纹泄露</b>面，而这两条是另一个风险类别 ——
+不是用户点一下头就能抵消的。要开它们需要产品单独拍板。</li>
+</ul>
+
+<h4>🔴 隐私说明由内核给：<code>arupa_mv3_perm_privacy_note</code>（2026-09-08 新增，<b>宿主必须显示</b>）</h4>
+
+<p>传一个<b>权限名</b>（不是判定码 —— 与上下两条刚好相反，别传混），回一句
+<b>给普通用户看的中文</b>：这条权限<b>能读到你的什么</b>。静态串，不用释放；
+没有说明回 <code>NULL</code>。</p>
+
+<p><b>由来</b>：2026-09-08 产品拍板「<b>说明隐私风险，而不是拒绝</b>；涉及隐私问题都提示
+用户，隐私当前泄露路径；优先保障功能可用」。此前
+<code>management</code> / <code>clipboardRead</code> / <code>system.*</code> /
+<code>&lt;all_urls&gt;</code> 这 8 条<b>一律阻装</b> —— 而实测两千多个真实商店扩展里有
+<b>678 个</b>只被一条权限挡住，其余功能全好而用户一个都用不了。现在放行，而把风险说给用户。</p>
+
+<p>🔴 <b>宿主必须把这句话显示出来。</b>不显示的话，我们就是<b>把保护去掉了而什么都没换上</b>
+—— 那比原来那个一刀切拒<b>更糟</b>，因为用户连"这里有过一道门"都不知道。
+⚠ 而"宿主真的显示了"这一格<b>内核验不了</b>，要你那边的判据盯着。</p>
+
+<p>⚠ 回 <code>NULL</code> = <b>这条权限没写隐私说明</b>，<b>不等于</b>"它没有隐私风险"。
+两者压成一个读数的话，宿主会把"我们还没写"显示成"这个插件很安全"。
+⇒ <b>缺说明不等于缺风险</b>：拿不到时该显示一句通用提醒，而不是什么都不显示。</p>
+
+<p>⚠ <b>只逐字匹配权限名</b>：<code>&lt;all_urls&gt;</code> 取得到，而
+<code>https://*.example.com/*</code> 这类 host pattern <b>一律回 NULL</b> ——
+逐站点的授权文案是<b>站点权限</b>那条路的事，内核这张表不做通配匹配
+（做了就是第二处解析 host 模式的地方，而本仓已经因为"两处各认一套拼写"栽过一次）。</p>
+
+<p>⚠ 它<b>不改变</b>"这条能力能不能用"：那 8 条在内核里<b>一行实现都没有</b>，
+<code>arupa_mv3_perm_usable</code> 仍回 <code>0</code>。产品那句「优先保障功能可用」指的是
+<b>别用拒绝去挡</b>，不是"假装已经做了"。</p>
+
+<h4>判定码的名字由内核给：<code>arupa_mv3_verdict_name</code>（2026-09-04 新增）</h4>
+
+<p>传一个判定码，回它的名字（<code>"ALLOW_MAPPED"</code> / <code>"DENY_UNSUPPORTED"</code>…）。
+<b>静态串，不用释放。</b></p>
+
+<p>存在的理由是<b>别让每一端各抄一份码表</b>。抄一份的代价已经收过两次利息：
+内核自己的判据抄漏过两次（加码 5、加码 6），两次都是"判据全绿而证据印成 <code>?</code>"；
+对接端 2026-09-04 也报他们那份只声明了 0/1/5，于是内核在 ALLOW 一族加码的那一刻，
+他们会<b>静默</b>判成"被拒"（方向安全，但<b>不可观测</b>）。</p>
+
+<p>🔴 <b>越界/认不出的码回 <code>NULL</code></b>，不回任何字符串 ——
+因为 <code>4</code> 本身就叫 <code>DENY_UNKNOWN</code>，回它就<b>分不出"码是 4"和
+"这个码我不认识"</b>。回 <code>NULL</code> 才分得开，而且<b>不可能被静默当成一个判定名
+印到界面上</b>。</p>
+
+<p>⚠ 它<b>不解决</b>"客户端比内核旧"：旧客户端拿到一个新码仍然不认识。那一半要靠你自己的
+"未知码"分支 —— 正确处理是<b>按拒 + 明说"本版本不认识这个码"</b>，
+<b>不许猜成放行</b>（deny-by-default 的同一条）。</p>
+
+<p>⚠ 采用这个导出的条件是<b>生产基线含它</b>，<b>不是</b>"我这台机器上的 current 有了" ——
+在含它的那一版成为生产基线之前，直接 P/Invoke 会 <code>EntryPointNotFound</code>。</p>
+
+<h4>还没做 / 刻意不收的</h4>
+
+<p><b>按标签页的 Action 状态</b>没做。MV3 允许 <code>setBadgeText({text, tabId})</code>
+只改一个标签页，而内核现在只有"每扩展一份"。⇒ 带 <code>tabId</code> 的调用内核
+<b>如实报错</b>，不静默当成全局设 —— 静默的话插件以为只改了一个标签页，其实改了全部。</p>
+
+<p><b>划给你们的那几个内核刻意不收</b>：<code>setIcon</code> / badge 颜色 /
+<code>openPopup</code> / <code>getUserSettings</code> —— 纯渲染或纯 UI 动作，
+内核既答不出也不该记。</p>
+
+
+<h3><code>ExtensionSwState</code> 的四态 —— <b>别合成一个布尔</b></h3>
+
+<table class="kv">
+<tr><th>值</th><th>.NET</th><th>含义</th><th>你该怎么读</th></tr>
+<tr><td><code>1</code></td><td><code>Registered</code></td>
+    <td>清单里有 SW，<b>且注册成功过</b>
+        <br>🔴 <b>它答不了"此刻在不在跑"</b> —— 内核那边读的是一个
+        <b>只增不减</b>的"注册过"集合。<b>不要</b>把它读成"SW 可用"</td>
+    <td>见下面那条红框</td></tr>
+<tr><td><code>0</code></td><td><code>NotRegistered</code></td>
+    <td>清单里<b>有</b> SW，<b>但没注册上</b> —— 装是装上了，background 一行没跑</td>
+    <td>看内核日志 <code>[arupa][sw] 注册失败 … status=&lt;n&gt;</code></td></tr>
+<tr><td><code>2</code></td><td><code>NoServiceWorker</code></td>
+    <td>清单里<b>本来就没有</b> <code>background.service_worker</code> —— 内容脚本型扩展</td>
+    <td><b>正常，不是故障</b></td></tr>
+<tr><td><code>-1</code></td><td><code>Unknown</code></td>
+    <td>内核<b>不认识这个 id</b> —— 没装，或者<b>清单在解析那一层就没过</b></td>
+    <td>见下面那条红框</td></tr>
+</table>
+
+<div class="trap">
+<b>🔴 <code>0</code> 与 <code>2</code> 必须分开看。</b>合成一个布尔的话，
+"内容脚本型扩展"与"SW 起不来"长得一模一样 —— <b>FB-P090 那次对接侧正是被这种静默
+逼着拿三份只差一个字段的清单做对照，查了三轮</b>。这个导出就是为了正面回答你们那句
+"请让它如实说明"。
+<br><br>
+<b>🔴 <code>-1</code> 又是另一回事</b>：它说的是"内核压根没登记这个扩展"，
+而 <code>0</code> 说的是"登记了、SW 没起来"。<b><code>-1</code> 正是 FB-P090 的原病形态</b> ——
+<code>chrome-extension</code> scheme 没注册 ⇒ <code>Extension::Create</code> 整个失败
+⇒ 连 id 都不存在，而当时唯一的表现是"<code>ListExtensions</code> 里没有它"，
+报出来的错<b>长得像"这份 manifest 写错了"</b>。
+<br><br>
+⚠ 还有一种同形：<b>旧 dll（&lt; MINOR 13）没有这个导出，门面也把它归到 <code>-1</code></b>。
+也就是说"问不出来"与"内核不认识"在这一档是同形的 —— 拿它写判据前先确认 dll 版本。
+</div>
+
+<div class="trap">
+<b>🔴 <code>Registered</code> ≠ "SW 现在能用" —— 中间还隔着一层（FB-P091）。</b>
+<br><br>
+这个查询读的是内核里一个<b>只增不减</b>的"注册成功过"集合，
+<b>它不回答"此刻在不在跑"</b>。而 MV3 的 background SW 是<b>按需启动、空闲即停</b>的。
+<br><br>
+2026-08-26 实撞：SW 报 <code>Registered</code>，而 content script 的
+<code>chrome.runtime.sendMessage</code> <b>拿不到任何回应</b> ——
+读回是 <b><code>null</code> 而不是 no-response</b>，说明<b>回调压根没被调用</b>，
+连 <code>lastError</code> 都没走到。
+<br><br>
+⇒ <b>现在别按"拿到 Registered 就等于消息通道可用"来设计。</b>
+要判"消息真的通得了"，判据只能落在<b>一次真实的往返</b>上
+（发一条、在回调里写进 DOM、再读那个值），
+而且<b>初值要先写一个哨兵</b>（否则"回调没触发"与"读不到属性"在 <code>null</code> 上同形）。
+<span style="color:var(--mut);font-size:13px">内核侧已经把这条往返做成判据了
+（<code>arupa_extdispatch_test</code> 的 T5f），结论出来会回到 FB-P091 上。</span>
+</div>
+
+<h3>配套的四组静态门面</h3>
+
+<p style="font-size:13px;color:var(--mut);margin-top:-2px">
+两列都给了：走门面用左边那个名字，自己 P/Invoke 用右边那个。</p>
+
+<table class="kv">
+<tr><th>类 · 方法（.NET）</th><th>C ABI</th><th>用途</th></tr>
+<tr><td><code>ArupaInject.Check(url, declaredCsv, grantedCsv, managedHostsCsv)</code> → int</td>
+    <td><code>arupa_inject_check</code></td>
+    <td>这次注入准不准（见第六节）</td></tr>
+<tr><td><code>ArupaInject.NeedsReconsent(oldCsv, newCsv, grantedCsv)</code> → bool</td>
+    <td><code>arupa_inject_needs_reconsent</code></td>
+    <td>插件更新后声明范围<b>扩大</b>了，要不要重新征得同意（缩小不算变更）</td></tr>
+<tr><td>（直接 P/Invoke）→ int</td>
+    <td><code>arupa_inject_check_active_tab</code></td>
+    <td>带 activeTab 的注入判定（FB-P178）：与 <code>arupa_inject_check</code> 同参同返回码，末尾多给 <code>extension_id, tab_id, navigation_id</code>。受保护页面与被代理接管的站点仍然先拒；其余的“没声明 / 没授权”，只要该扩展对这个标签的这次导航持有 activeTab（用户点过扩展按钮）就放行。末三参传空 = 等同 <code>arupa_inject_check</code>。</td></tr>
+<tr><td><code>ArupaMv3.MapPermission(perm)</code> → int</td>
+    <td><code>arupa_mv3_map_permission</code></td><td>清单里这个权限给不给</td></tr>
+<tr><td><code>ArupaMv3.PermissionCapability(perm)</code> → string</td>
+    <td><code>arupa_mv3_permission_capability</code></td>
+    <td>它映射到哪个 <code>cap.*</code>（非 ALLOW_MAPPED 时空串）</td></tr>
+<tr><td><code>ArupaMv3.IsPermUsable(verdict)</code> → bool</td>
+    <td><code>arupa_mv3_perm_usable</code></td>
+    <td>① <b>这条能力能不能用</b>。<code>0</code>/<code>1</code> 能用 ·
+        <b><code>7</code> 也能用</b>（走替代）· <code>8</code> 不能用。
+        <span style="color:var(--mut);font-size:13px">🔴 拿到 7 时必须同时读上一行的缺口。</span></td></tr>
+<tr><td><code>ArupaMv3.IsPluginInstallable(verdict)</code> → bool</td>
+    <td><code>arupa_mv3_plugin_installable</code></td>
+    <td>② <b>这插件装不装得上</b>。<code>0</code>/<code>1</code>/<code>7</code> 装得上 ·
+        <b><code>8</code> 也装得上</b>。
+        <span style="color:var(--mut);font-size:13px">🔴 <b>与上一条只在码 8 上不同</b> ——
+        而 8 与 6 的唯一区别就是 6 阻装、8 不阻装。判反的话，这一版本来能救回来的
+        那批插件会被原样拒掉。⚠ <b>别自己按码写 if</b>: 真值在内核一处，这两条只是转发；
+        自己写一份的话九个码里判错任何一个都<b>不报错</b>。</span></td></tr>
+<tr><td><code>ArupaMv3.SubstitutionGap(perm)</code> → string</td>
+    <td><code>arupa_mv3_substitution_gap</code></td>
+    <td>判定码 <b>7 <code>SUBSTITUTED</code></b> 时，“替代实现<b>顶不到哪儿</b>”。
+        <b>空串 = 替代是完整的</b>（不是“没查”）。
+        <span style="color:var(--mut);font-size:13px">与上一行是<b>一对</b>：
+        那个答“替代走哪条能力”，这个答缺口。
+        只读前者会以为两者等价于是<b>不提示</b>，
+        而覆盖不到的那半照样静默失效。<b>缺口非空就必须给可见提示。</b></span></td></tr>
+<tr><td><code>ArupaMv3.CheckDeclarativeRule(urlPattern, actionType, managedHostsCsv)</code> → int</td>
+    <td><code>arupa_mv3_check_declarative_rule</code></td>
+    <td>DNR 规则护栏：把插件规则接进拦截链<b>之前</b>逐条校验，DENY 的丢弃 + 记审计。
+        <span style="color:var(--mut);font-size:13px">它是<b>护栏</b>不是规则引擎本体。</span></td></tr>
+<tr><td><code>ArupaRoute.Check(pluginId, scope, declared)</code> → int</td>
+    <td><code>arupa_route_check</code></td>
+    <td>能不能拿这一档出口路由（scope 取
+        <code>"global"</code>|<code>"tab"</code>|<code>"domain"</code>|<code>"profile"</code>）</td></tr>
+<tr><td><code>ArupaPluginStorage.Get / GetAll / Set / Remove / Clear(pluginId, …)</code></td>
+    <td><code>arupa_plugin_storage_get</code><br>
+        <code>arupa_plugin_storage_get_all</code><br>
+        <code>arupa_plugin_storage_set</code><br>
+        <code>arupa_plugin_storage_remove</code><br>
+        <code>arupa_plugin_storage_clear</code></td>
+    <td>per-plugin 隔离存储 —— <code>chrome.storage</code> 的后端。
+        A 读不到 B · 持久 profile 落盘 <code>&lt;udd&gt;/PluginStorage/&lt;id&gt;.json</code> ·
+        OTR 纯内存（反取证）· 卸载调 <code>Clear</code> 擦除。</td></tr>
+<tr><td colspan="3" style="color:var(--mut);font-size:13px">
+    🔴 <b><code>value</code> 必须是 JSON 串</b>，这是 <code>capi.h</code> 写死的契约不是建议：
+    内核 <code>set</code> 先 <code>JSONReader::Read</code> 解析（解析不了才当字符串存），
+    <code>get</code> 一律 <code>WriteJson</code> 输出 ⇒ 传裸 <code>hello</code> 读回来是
+    <code>"hello"</code>（带引号）。统一 <code>JSON.stringify</code> 写 /
+    <code>JSON.parse</code> 读，非法 JSON 直接拒，<b>别指望原样往返</b>。
+    <br>⚠ <code>Get</code> 键不存在返回 <code>null</code>：内核那侧<b>永不返回 NULL 指针</b>，
+    miss 时返回的是<b>空串</b>；门面把空串折成 null，好让 <code>chrome.storage</code> shim
+    区分「没这个键」与「有值」—— 那是 MV3 语义要求的。</td></tr>
+<tr><td><code>ArupaWebView.InjectIsolatedJsAsync(worldId, script)</code></td>
+    <td><code>arupa_webview_inject_isolated_js</code></td>
+    <td>隔离世界注入。⚠ <code>worldId</code> 必须在 <b>[1, 11]</b>，越界当场拒
+        （browser 侧此 API 最多约 11 个并发隔离世界/帧）。</td></tr>
+</table>
+
+<h3 id="wake">后台唤醒版发事件（ABI MINOR 23，2026-09-19 起）</h3>
+<table class="kv">
+<tr><th>.NET 门面</th><th>C ABI</th><th>说明</th></tr>
+<tr><td><code>ArupaBrowser.FireExtEventWithWake(extId, eventName, argsJson, ticket)</code></td>
+    <td><code>arupa_kernel_fire_ext_event_wake</code></td>
+    <td>与 <code>arupa_kernel_fire_ext_event</code> 入参、校验相同（1 / 2 / 4 同义）；区别在扩展 SW <b>不在</b>时<b>先起再投</b>，不再回 3。
+        SW 不在的情形：宿主冷启动时扩展还没注册完 · 进程被回收或崩溃 · 停用后再启用。<br>
+        返回：<b>0</b> 已投递 · <b>10</b> 已排队唤醒（最终结果经观察者回）· <b>12</b> 扩展已停用 · 门面在旧 dll 上回 <b>-1</b>。</td></tr>
+<tr><td><code>ArupaBrowser.SetExtEventResultObserver(Action&lt;int,int,string&gt;)</code></td>
+    <td><code>arupa_kernel_set_ext_event_result_observer</code></td>
+    <td>排队那一类的最终结果 <code>(ticket, result, detail)</code>：<b>0</b> 唤醒后已投递 · <b>11</b> 30 秒内没起来 ·
+        <b>12</b> 等待期间被停用 · <b>14</b> 起来了但投不出去。回调在内核 UI 线程。<code>ticket</code> 由你们编号。<br>
+        ⚠ 「已投递」= 事件交到了 SW；插件是否处理完，以插件自己的回执为准。</td></tr>
+</table>
+
+<p style="color:var(--mut);font-size:13px">
+⚠ <code>ArupaRoute</code> 在<b>老交付件上没有对应导出</b>（内核 2026-08-19 才落地）——
+直接调会抛 <code>EntryPointNotFoundException</code>，调用方要先探测，探不到就如实降级。</p>
+
+<h2 id="quickstart" class="anchor-target">三、从零走一遍</h2>
+
+<div class="step">
+<b>① 初始化时设扩展根，并<b>当场回显确认</b></b>
+<pre><code>var kernel = new ArupaKernel(new ArupaKernelOptions { /* … */ });
+
+string extDir = Path.Combine(appDataDir, "extensions");
+Directory.CreateDirectory(extDir);
+kernel.SetExtensionRoot(extDir);
+
+// 🔴 这一行别省 —— 它是这条线上唯一能当场发现"没生效"的地方
+if (!string.Equals(kernel.GetExtensionRoot(), extDir, StringComparison.OrdinalIgnoreCase))
+    Log.Warn($"扩展根没设进去: 期望 {extDir}, 内核回显 {kernel.GetExtensionRoot()}");</code></pre>
+<p style="font-size:13px;color:var(--mut)">
+⚠ 别和 <code>SetPluginRoot</code> 传同一个目录（坑 1）。
+⚠ 回显为空串有两种可能：真没设进去，或者 <b>dll 太旧没有这个导出</b>（坑 5）。</p>
+</div>
+
+<div class="step">
+<b>② 写一个最小扩展（先用它验通路，别一上来就上真插件）</b>
+<pre><code>extensions/hello/manifest.json
+{
+  "manifest_version": 3,
+  "name": "hello",
+  "version": "1.0",
+  "content_scripts": [{
+    "matches": ["https://*/*"],
+    "js": ["cs.js"],
+    "run_at": "document_end"
+  }]
+}
+
+extensions/hello/cs.js
+document.title = "EXT_RAN";</code></pre>
+<p style="font-size:13px;color:var(--mut)">
+把 <code>document.title</code> 当哨兵是有意的：内容脚本跑在<b>隔离世界</b>，
+但 DOM 是共享的 ⇒ 你在主世界（或 devtools）读 title 就能判断它跑没跑。
+读某个隔离世界里的变量反而验不了。
+<br>⚠ MV3 的 <code>content_scripts</code> 只匹配 http/https，
+<b>拿 <code>data:</code> 页去验会得到一个永远不注入的假红</b> —— 内核自己那份 runtime 判据
+就是为此在进程内起了一个本机 HTTP 服务。</p>
+</div>
+
+<div class="step">
+<b>③ 开一个页面，看哨兵在不在</b>
+<p>就这样，<b>不需要调任何"装载"</b>。内核在 renderer 进程 ready 时扫扩展根，逐个下发。</p>
+<pre><code>var view = kernel.CreateWebView();
+view.LoadUrl("https://example.com/");
+
+// 页面加载完之后, 从**主世界**读回 title
+string r = await view.SendCdpAsync(
+    "Runtime.evaluate",
+    "{\"expression\":\"document.title\",\"returnByValue\":true}");
+// 期望 r 里的 value == "EXT_RAN"</code></pre>
+<div class="warnbox" style="margin:10px 0 0">
+<b>⚠ 为什么这里绕了 CDP：主世界 eval 在 .NET 门面里<b>没有公共包装</b></b>（2026-08-26 现读）。
+C ABI <code>arupa_webview_eval_js</code> <b>是有的</b>（在交付件的导出表里），
+<code>Interop.cs</code> 里也声明了 —— 但 <code>ArupaBrowser.cs</code> 没往外给一个
+<code>EvalJsAsync</code> 之类的方法。<b>门面里有的是
+<code>InjectIsolatedJsAsync</code>（隔离世界）</b>，那个读不回主世界的 <code>document.title</code>。
+<br>⇒ 两条路都行：<b>走 CDP <code>Runtime.evaluate</code></b>（上面这样，门面现成），
+或<b>自己 P/Invoke <code>arupa_webview_eval_js</code></b>（签名在 <code>capi.h</code>）。
+<br>⚠ 这条缺口已记进内核侧待办，别读成"内核没这个能力" —— 缺的只是托管侧那一层包装。
+</div>
+</div>
+
+<div class="warnbox">
+<b>⚠ 别只看日志里那句「N 成功 / 0 失败」。</b>
+它只证明<b>发过去了</b>，不证明<b>跑起来了</b>。本仓栽过：日志报 N 成功而页面里一个都没生效。
+判据要落在<b>页面内容</b>上（就是上面那个哨兵）——
+2026-08-25 PC 侧那次 5/5 的回执正是这么做的，做法是对的。
+</div>
+
+<div class="step">
+<b>④ 要做启停？先拿 id</b>
+<pre><code>var exts = kernel.ListExtensions();          // List&lt;(string Id, string Dir)&gt;
+foreach (var (id, dir) in exts)
+    Log.Info($"扩展 {id} ← {dir}");
+
+kernel.SetExtensionEnabled(exts[0].Id, false);   // 立刻失效
+kernel.SetExtensionEnabled(exts[0].Id, true);    // 装回来</code></pre>
+</div>
+
+<div class="step">
+<b>⑤ 装了带 background 的扩展？问一句它到底起没起</b>
+<pre><code>var st = kernel.ExtensionServiceWorkerState(id);
+switch (st)
+{
+    case ArupaKernel.ExtensionSwState.Registered:      /* 正常 */              break;
+    case ArupaKernel.ExtensionSwState.NoServiceWorker: /* 内容脚本型, 正常 */   break;
+    case ArupaKernel.ExtensionSwState.NotRegistered:   /* 有 SW 但没起来 */     break;
+    case ArupaKernel.ExtensionSwState.Unknown:         /* 内核不认识这个 id */   break;
+}</code></pre>
+</div>
+
+<h2 id="traps" class="anchor-target">四、五个坑</h2>
+
+<p>坑 1（两个根别混）在第一节。下面是另外四个。</p>
+
+<div class="trap">
+<b>🔴 坑 2：扩展 id 不是目录名。</b>
+MV3 的 id 有<b>两种</b>来源 —— manifest 里有 <code>key</code> 时从 key 派生，
+否则才从路径派生。本仓实测过 TunnelBear 的 id
+（<code>omdakjcmkglenbhjadbccaookpfjihpa</code>）就来自 key。
+<br><br>
+所以：<b>按你自己起的目录名去调 <code>SetExtensionEnabled</code>，会静默不生效</b> ——
+不报错，用户点了"禁用"而扩展照样在跑。
+⇒ 一律先 <code>ListExtensions()</code> 拿权威 id。
+</div>
+
+<div class="trap">
+<b>🔴 坑 3：内核不是文件系统监听。</b>
+自动下发发生在<b>新 renderer 进程 ready 的那一刻</b> —— 它扫一次盘，就这一次。
+<br><br>
+两个直接后果：
+<ul>
+<li><b>同一个页面里刷新不会重扫。</b>刚装完的扩展，用户在当前标签页按刷新 —— <b>不生效</b>。
+    要立刻生效就调 <code>RescanExtensions()</code>。</li>
+<li><b>设根晚了不要紧。</b>你在页面已经开着之后才调 <code>SetExtensionRoot</code>，
+    内核会<b>回头补发</b>给那些已经 ready 的进程。
+    <span style="color:var(--mut)">这条 2026-08-25 才真正接上 —— 在那之前
+    "先起页面、后设根"的进程<b>永远拿不到扩展，且零日志</b>。</span></li>
+</ul>
+⚠ 桌面这边还有一条安卓没有的：<b>换 partition 会开新 renderer</b> ⇒ 那条路走的是"扫盘"
+而不是"补发"。写判据时这两条路要分开验，否则你以为在验补发、实际验的是扫盘
+（内核自己那份 runtime 判据的第一版正是这么错的，摘掉补发它照样绿）。
+</div>
+
+<div class="trap">
+<b>🔴 坑 4：<code>ListExtensions()</code> 回答的是"内核已经认识哪些"，不是"当前根下有哪些"。</b>
+<br><br>
+两条都别当判据用错：
+<ul>
+<li><b>"已登记" ≠ "当前启用"</b> —— 被 <code>SetExtensionEnabled(id,false)</code> 禁用的<b>仍在表里</b>。</li>
+<li><b>"已登记" ≠ "在当前扩展根下"</b> —— <b>换了根之后，旧根那些扩展仍在表里</b>。
+    登记发生在"解析成功并下发过至少一次"那一刻，而这张表<b>只增不减</b>。</li>
+</ul>
+🔴 第二条是 2026-08-25 <b>你们实撞</b>的：反测拿"换成空根之后列表应该变空"当判据，当场红 ——
+<b>判据本身错了，不是内核错了</b>。内核此前只写了「已登记 ≠ 当前<b>启用</b>」，少的正是这条，
+所以这不是你们的问题，是文档缺口，已补进 <code>capi.h</code> 与门面注释。
+<br>⇒ 要判"当前根下有什么"，请自己扫目录；<code>ListExtensions()</code> 只用来<b>拿权威 id</b>。
+</div>
+
+<div class="trap">
+<b>🔴 坑 5（PC 独有）：旧 dll 上，门面是<b>静默失败</b>的。</b>
+<br><br>
+这几个方法在 .NET 门面里都 <code>catch (EntryPointNotFoundException)</code> 后<b>不抛</b> ——
+因为宿主对内核版本无能为力，抛了只会让整个初始化失败。但这意味着：
+<table class="kv" style="margin-top:8px">
+<tr><th>dll 版本不够时</th><th>你看到的</th><th>实际后果</th></tr>
+<tr><td><code>SetExtensionRoot</code>（&lt; MINOR 11）</td><td>什么都没有</td>
+    <td><b>扩展一个都装不上</b>（内核日志里有一条 "扩展根未设置" 的 WARNING 兜底）</td></tr>
+<tr><td><code>SetExtensionEnabled</code>（&lt; MINOR 12）</td><td>什么都没有</td>
+    <td><b>禁用不生效</b> —— 该按内核版本把 UI 上的开关置灰，而不是假装它成功了</td></tr>
+<tr><td><code>ListExtensions</code>（&lt; MINOR 12）</td><td>空列表</td>
+    <td>与"没有扩展"<b>同形</b>，分不开</td></tr>
+<tr><td><code>GetExtensionRoot</code>（&lt; MINOR 11）</td><td>空串</td>
+    <td>与"没设"<b>同形</b>，分不开</td></tr>
+<tr><td><code>ExtensionServiceWorkerState</code>（&lt; MINOR 13）</td><td><code>Unknown(-1)</code></td>
+    <td>与"内核不认识这个 id"<b>同形</b>。<b>不是</b>"没有 SW"，也<b>不是</b>"起来了"</td></tr>
+</table>
+⇒ <b>拿这几个方法写判据之前，先确认手上 dll 的 ABI MINOR。</b>
+最省事的做法是启动时读一次导出表或调一次 <code>GetExtensionRoot</code> 探测。
+</div>
+
+<div class="warnbox">
+<b>⚠ 还有一条不是坑、是版本线：带 <code>background.service_worker</code> 的清单，
+在 <code>152.0.7977.42+11</code> 之前<b>整个装不上</b></b>（FB-P090）。
+两层根因都在内核侧、都已修：① <code>chrome-extension</code> 没注册成 scheme ⇒
+<code>Extension::Create</code> 整个失败；② SW 注册报 <code>kErrorNetwork(10)</code> ——
+扩展 URL loader 工厂写了但零注册点。
+<br>⇒ <b>拿更早的件试会得到"扫不到"，那不是三方写错了清单。</b>
+</div>
+
+<h2 id="whats-in" class="anchor-target">五、内核提供了什么（以及没提供什么）</h2>
+
+<p>内核抽了 chromium 自己的 <code>extensions</code> 层，所以<b>不是我们另写了一套近似实现</b>：</p>
+
+<table class="kv">
+<tr><th>能力</th><th>由谁执行</th></tr>
+<tr><td>内容脚本（<code>matches</code> / <code>run_at</code> / <code>css</code> / <code>all_frames</code>）</td>
+    <td>上游 <code>ContentScriptsInfo</code> → <code>UserScript</code> →
+        <code>UserScriptSet::UpdateUserScripts</code> ⇒ <b>官方语义</b></td></tr>
+<tr><td>manifest 解析、权限模型、扩展 id 派生</td><td>上游 <code>extensions/common</code></td></tr>
+<tr><td>background service worker</td>
+    <td>内核起（<code>chrome-extension://</code> 资源 loader 已接，
+        <code>152.0.7977.42+11</code> 起）</td></tr>
+<tr><td><code>chrome.storage</code></td><td>内核 per-plugin 隔离存储（<code>ArupaPluginStorage</code>）</td></tr>
+<tr><td><code>chrome.*</code> bindings / 消息通道</td><td>内核（renderer 侧 Dispatcher 已装配）</td></tr>
+</table>
+
+<div class="okbox">
+<b>✅ 一句话：标准 MV3 扩展的内容脚本这条路，你不用自己再注入一遍。</b>
+如果宿主里还留着"页面加载完自己 <code>InjectIsolatedJsAsync</code> 注内容脚本"那半，
+可以让内核官方路径独占 —— 它更完整（带 SW / <code>chrome.*</code> / 消息通道）。
+<br><span style="font-size:13px;color:var(--mut)">
+⚠ 但<b>内置插件</b>（不在扩展根之下、内核扫不到的那些）仍走你自己的注入，这个分工是对的。</span>
+</div>
+
+<p><b>没提供的 / 要你自己接的：</b></p>
+<ul>
+<li><b>启停状态不落盘。</b>内核不替你记住用户的选择 —— 那是你的插件管理页该持久化的。
+    <b>宿主每次起来后按自己的记录重设一遍。</b></li>
+<li><b>权限判定内核只给结论，不弹 UI。</b>见下节。</li>
+<li><b>DNR 规则引擎本体是你的</b>，内核只给逐条护栏（<code>CheckDeclarativeRule</code>）。</li>
+</ul>
+
+<h3><code>nomad.*</code> 那组产品扩展指令 —— <span class="pill warn">目标形态，端上尚未切换</span></h3>
+
+<div class="warnbox">
+<b>⚠ 这一小节写的是 <b>(甲) 方案落地之后</b>的形态，不是今天桌面跑的形态。</b>
+产品 2026-08-25 拍板：桌面改用内核交付件里那份
+<code>plugin-runtime/nomad-plugin-runtime.js</code>（FB-P082 甲）。
+<b>但 PC 侧还没切</b> —— 今天跑的仍是自有等价实现（<code>NomadWebUI</code> 里那约 2,100 行
+清单解析 / 装载 / 登记）。<b>照下面写完发现端上不是这样，是因为还没切，不是文档错。</b>
+</div>
+
+<p><code>nomad.*</code> 这个 JS 命名空间<b>只有那一份实现</b>；内核 C++ 提供的是<b>执行面</b>，
+不提供 <code>nomad.*</code> 本身。四条对接要点（都现读自源码）：</p>
+
+<table class="kv">
+<tr><th>①</th><th>加载入口</th><td>交付件里那份就是，不用另找：
+    <code>dist/win/current/plugin-runtime/nomad-plugin-runtime.js</code>（随每次交付更新）。
+    两种拿法都行 —— ESM
+    <code>import { NomadPluginRuntime } from './nomad-plugin-runtime.js'</code>，
+    或页面里用它自己挂的 <code>window.NomadPluginRuntime</code> +
+    <code>window.__nomadPluginRuntimeVersion</code>。</td></tr>
+<tr><th>②</th><th>宿主要实现 <code>host.*</code></th>
+    <td>这是四端唯一不同的那一块，由各端宿主注入。运行时现采 <b>22 个方法名</b>。
+    桌面已有的等价物（权限判定 / 存储 / 出口路由 / 位置查询）接过去即可，主要是改名与签名。
+    <br>⚠ 宿主<b>可以少实现</b> —— 运行时对缺失有四档处理
+    （<code>notSupported</code> / 返回 null / 抛错 / 按拒），但<b>不能改运行时怎么调它</b>。</td></tr>
+<tr><th>③</th><th>自己扩展指令</th>
+    <td>走 <code>registerNomadCommand(name, impl, meta)</code>（页面里拿不到 ESM import 时用
+    <code>window.registerNomadCommand</code>）。
+    <br>⚠ 只给宿主 —— 插件跑在自己的上下文里，看到的是 <code>nomad.*</code>，摸不到这个 window。</td></tr>
+<tr><th>④</th><th>三个名字永远注册不上</th>
+    <td><code>route</code> / <code>transport</code> / <code>identity</code>（特权轨）。
+    这不是风格约束是<b>安全边界</b>，见 <code>docs/spec/kernel-plugin-security-model.md</code>。</td></tr>
+</table>
+
+<h2 id="perm" class="anchor-target">六、权限判定（内核给结论，UI 归你）</h2>
+
+<p><code>ArupaMv3.MapPermission(perm)</code> 逐条判清单里的权限。
+🔴 <b>判定在内核（三端同一份），宿主不重写</b> —— 各端各写一份必漂。</p>
+
+<table class="kv">
+<tr><th>返回</th><th>含义</th><th>你该做什么</th></tr>
+<tr><td><code>0</code> AllowMapped</td><td>映射到某个受控 <code>cap.*</code>
+    （用 <code>PermissionCapability</code> 拿名字）</td><td>按那个 cap 授权</td></tr>
+<tr><td><code>1</code> AllowLowRisk</td><td>低风险，直接给</td><td>放行</td></tr>
+<tr><td><code>2</code> DenyPrivileged</td><td>特权（<code>debugger</code> /
+    <code>nativeMessaging</code> / 阻塞式 <code>webRequest</code> / <code>proxy</code>…）</td>
+    <td>拒装或剥权 + 审计</td></tr>
+<tr><td><code>3</code> DenyFingerprintRisk</td><td>指纹风险（<code>management</code> /
+    <code>cookies</code> / <code>history</code> / <code>&lt;all_urls&gt;</code>）</td><td>同上。<br>
+    🔴 <b><code>management</code> 例外（2026-09-19 起, ABI MINOR 22）</b>：<b>不拒</b>，允许启用并弹授权框；
+    用户选完调 <code>SetExtensionPermissionConsent(id, "management", 同意?)</code>。
+    同意 ⇒ <code>management.getAll</code> 转你们的扩展 API 处理器答真实名单；不同意 ⇒ 内核替代应答 <code>[]</code>。
+    授权记录由你们持久化，每次起内核后重新告诉一遍。见 FB-P181。</td></tr>
+<tr><td><code>4</code> DenyUnknown</td><td>内核不认识 ⇒ 保守拒</td><td>拒</td></tr>
+<tr><td><code>5</code> VendorNamespace</td><td><code>nomad.*</code>：认识，但<b>不该由它答</b></td>
+    <td><b>去问对应那套判定</b>（<code>nomad.route</code> → <code>ArupaRoute.Check</code>）</td></tr>
+</table>
+
+<div class="trap">
+<b>🔴 <code>5</code> 不是放行。</b>拿到它就当放行，等于凭一个名字前缀发能力。
+也别把它当 <code>4</code>（保守拒）处理 —— <b>桌面 2026-08-19 实跑撞过</b>：
+那样做会让加速类插件<b>在装的那一刻就被摘掉权限</b>。
+⚠ 也<b>别自己写前缀判断</b>：边界由内核给。
+</div>
+
+<p><code>ArupaInject.Check(...)</code> 判每次注入。
+判定顺序是<b>先红线、再声明、后授权</b>，顺序不能反 ——
+没声明的域名连问用户的资格都没有，否则插件可以靠"运行时请求任意域名"绕开清单审核。</p>
+
+<table class="kv">
+<tr><td><code>0</code></td><td>Allow</td><td>放行</td></tr>
+<tr><td><code>1</code></td><td>DenyNotDeclared</td><td>清单没声明 —— <b>不该弹授权</b>，直接拒</td></tr>
+<tr><td><code>2</code></td><td>DenyNotGranted</td><td>声明了没授权 —— <b>这个才该弹授权</b></td></tr>
+<tr><td><code>3</code></td><td>DenyProtectedScheme</td><td>非 http(s)：内核页 / devtools / file / about</td></tr>
+<tr><td><code>4</code></td><td>DenyProxiedHost</td><td>被代理接管的域名（与 DNR 护栏同一条红线）</td></tr>
+<tr><td><code>5</code></td><td>DenyBroadNotGranted</td><td>声明含 <code>&lt;all_urls&gt;</code> 但未给全站授权
+    —— 单列一类，好让 UI 把"要读你所有网页"讲清楚</td></tr>
+</table>
+
+<p style="font-size:13px;color:var(--mut)">
+还有 <code>NeedsReconsent(old, new, granted)</code>：插件更新后声明范围<b>扩大</b>了要重新征求同意。
+防的是一条真实可走的路 —— 装时只声明一个站、用户点了同意，更新后清单悄悄加
+<code>&lt;all_urls&gt;</code>，于是它能读全网，而用户什么都没再点过。</p>
+
+<h3>出口路由的档位（<code>ArupaRoute.Check</code>）</h3>
+
+<table class="kv">
+<tr><td><code>0</code></td><td>Allow</td><td>放行</td></tr>
+<tr><td><code>1</code></td><td>AllowNeedsConsent</td><td>未签名 + <code>global</code>：先要用户点头一次</td></tr>
+<tr><td><code>2</code></td><td>DenyScopeNeedsSign</td><td>未签名 + 更细作用域：拒</td></tr>
+<tr><td><code>3</code></td><td>DenyNotDeclared</td><td>清单没声明 <code>nomad.route</code> / <code>proxy</code></td></tr>
+<tr><td><code>4</code></td><td>DenyUnknown</td><td>认不出的作用域 / 参数不全 / 兜底</td></tr>
+</table>
+
+<div class="trap">
+<b>🔴 拿到 <code>2</code>（DenyScopeNeedsSign）时<b>必须报错，不许静默降级成 global</b>。</b>
+那会让插件以为分流生效了，而实际<b>全局出口都变了</b>。
+<br>⚠ <code>is_signed</code> <b>不是入参</b> —— 内核自己查 active 签名包。
+做成入参等于把信任交给调用方，那就没有门控了。
+</div>
+
+<h2 id="selftest" class="anchor-target">六点五、我的插件装不装得上 —— 一条命令自己验</h2>
+
+<p><strong>交付件里带了这个工具</strong>：<code>arupa_plugintest.exe</code>，
+与内核同目录（解开的交付包里是 <code>kernel/</code>）。
+⚠ 2026-09-18 起交付包分两份：它只在<strong>测试包</strong> <code>arupa-win-&lt;交付id&gt;-test.zip</code> 里，
+<strong>生产包</strong> <code>arupa-win-&lt;交付id&gt;.zip</code>（集成进发给用户的 App 用的那份）不带它。
+<strong>2026-08-28（交付 id <code>+17</code>）起才有</strong> —— 在那之前它只编进内核仓的开发目录、
+从没随件发出来，所以「没有内核就没法测插件」这句话在字面上是成立的。现在不成立了。</p>
+
+<pre><code>cd &lt;解开的交付包&gt;\kernel     ← 必须在这个目录里跑（它要找同目录的 pak / render.exe）
+arupa_plugintest.exe &lt;放插件的目录&gt; &lt;插件 id&gt;
+
+例:  arupa_plugintest.exe D:\my-plugins my-accel
+     ⇒ 找 D:\my-plugins\my-accel.arupa-plugin\</code></pre>
+
+<table class="kv">
+<tr><th>退出码</th><th>屏幕上</th><th>意思</th><th>下一步</th></tr>
+<tr><td><strong>0</strong></td><td><code>核心(加载器) PASS ✅</code></td>
+    <td>验签过了 · 引擎在<strong>独立沙箱进程</strong>里起来了 · SOCKS 端口在 listen</td>
+    <td>装得上，往下做功能</td></tr>
+<tr><td><strong>2</strong></td><td><code>BLOCKED: 前置资产不在</code></td>
+    <td>目录/包不在，或包里少 <code>manifest.json</code></td>
+    <td><strong>不是内核问题</strong>：包没放对，或没签</td></tr>
+<tr><td><strong>3</strong></td><td><code>核心(加载器) FAIL</code></td>
+    <td>走进加载链之后失败了</td>
+    <td>把<strong>整段输出</strong>发内核会话，那是内核该看的</td></tr>
+</table>
+
+<p class="note">⚠ <strong>它验的是装载链</strong>（验签 → 起沙箱子进程 → 端口 listen），
+<strong>不验</strong>引擎转发得对不对 —— 那是插件方自己的功能测试。
+过了只说明「这个包在这个内核上装得上」。</p>
+
+<p class="note">🟢 通过时输出里会有一个 <code>engine_pid=…</code> —— 那是<strong>另一个进程</strong>：
+引擎跑在<strong>低完整性令牌的子进程</strong>里（交付 id <code>+15</code> 起），不在内核进程内。
+⇒ <strong>沙箱与「引擎自己起本地 SOCKS」是同时成立的</strong>，
+你们和插件方<strong>都不用为沙箱改任何东西</strong>。</p>
+
+<p class="note">⚠ 这一节讲的是<strong>传输类插件</strong>（<code>.arupa-plugin</code> 包，带 native 引擎）。
+MV3 扩展那条线不走这个工具 —— 两条线的区别见本文第一节。</p>
+
+<h2 id="debug" class="anchor-target">七、出问题时看什么</h2>
+
+<table class="kv">
+<tr><th>现象</th><th>先做这一步</th><th>多半是</th></tr>
+<tr><td>一个扩展都没生效</td><td>调 <code>GetExtensionRoot()</code> 看回显</td>
+    <td>空串 ⇒ 根没设进去（坑 1），或 dll 太旧（坑 5）</td></tr>
+<tr><td>回显对，但页面里没反应</td><td>看内核日志里内容脚本待发那条的 <code>匹配模式=[…]</code></td>
+    <td><code>matches</code> 没匹配上当前 URL（尤其：拿非 http(s) 页面验）</td></tr>
+<tr><td>装完新扩展刷新没用</td><td>调 <code>RescanExtensions()</code></td><td>坑 3 —— 内核不是文件系统监听</td></tr>
+<tr><td>点了禁用还在跑</td><td>把传进去的 id 与 <code>ListExtensions()</code> 的对一下</td>
+    <td>传的是目录名（坑 2）</td></tr>
+<tr><td>带 background 的扩展"扫不到"</td><td>调 <code>ExtensionServiceWorkerState(id)</code></td>
+    <td>拿到 <code>-1</code> 且 id 确实对 ⇒ 清单在解析层就没过；件早于 <code>+11</code> 的话就是 FB-P090</td></tr>
+<tr><td>SW 装上了但 background 没跑</td><td>拿到 <code>0</code>，去看
+    <code>[arupa][sw] 注册失败 … status=</code></td><td>SW 注册本身失败，把 status 报回内核会话</td></tr>
+<tr><td>某个方法"不存在"</td><td>对一下 dll 导出表与 <code>capi.h</code></td>
+    <td>wrapper 快照旧了（第二节那条红框），或 dll 版本不够</td></tr>
+</table>
+
+<p style="font-size:13px;color:var(--mut)">
+⚠ 另外：<code>ArupaKernel.LastErrorJson()</code> 是 <b>thread_local</b> 的 ——
+谁调的谁读，且<b>只在紧接着的失败之后读才有意义</b>。
+<code>null</code> <b>不等于</b>"上一次成功了"，只是本线程没记录过失败。
+对 async 宿主尤其要小心：<code>await</code> 之后的续体常常已经换线程了。</p>
+
+<h2 id="verified" class="anchor-target">八、内核侧验到哪一步（<b>别读成"都验过了"</b>）</h2>
+
+<div class="note">
+<b>桌面这一端有 runtime 判据</b>（<code>arupa_extdispatch_test</code>）：起真内核 + 真 renderer +
+进程内一个本机 HTTP 页，装一个改 <code>document.title</code> 的探针扩展，从主世界读回 title。
+在 <code>152.0.7977.42+11</code> 的<b>交付集</b>上 <b>12 PASS / 0 FAIL</b>。覆盖：
+<ul style="margin:6px 0">
+<li>观测本身有效（页面真加载出来了）+ 没设根时的对照组</li>
+<li>设扩展根 ⇒ 内容脚本<b>真跑了</b></li>
+<li>先起页面、<b>后</b>设根 ⇒ <b>补发生效</b></li>
+<li>内核交得出<b>权威 id</b></li>
+<li>禁用之后内容脚本<b>不再跑</b>；重新启用<b>又跑起来</b></li>
+<li>带 <code>background.service_worker</code> 的清单<b>装得上、SW 注册得上</b>（T5a–T5e，FB-P090）</li>
+</ul>
+<b>反测实做过</b>：同一个 test exe 配交付原件那份 dll ⇒ T5b/T5c 当场红、其余 8 条全绿。
+摘掉补发 ⇒ 补发那条 FAIL；让禁用不记进禁用集合 ⇒ 禁用那条 FAIL。
+</div>
+
+<div class="warnbox">
+<b>⚠ 它<b>不验</b>这些，别读成验过了：</b>
+<ul style="margin:6px 0">
+<li><b>"禁 A 不影响 B"</b> —— 只有一个探针扩展，装两个只禁一个这件事没覆盖</li>
+<li><b>SW 里的 <code>chrome.*</code> 到底能用到什么程度</b> —— 验到"SW 注册得上"为止。
+    <code>chrome.proxy</code> 真去换出口<b>没验</b>（那要权限映射 + 出口路由两条线）
+    <br>🔴 <b>这一格 2026-08-26 当天就被撞上了（FB-P091）</b>：SW 已经
+    <code>Registered</code>，而 content script 的 <code>chrome.runtime.sendMessage</code>
+    <b>拿不到任何回应</b> —— 读回是 <b><code>null</code> 而不是 no-response</b>，
+    说明回调压根没触发、<b>连 <code>lastError</code> 都没走到</b>。
+    <br>⇒ <b>消息通道这一层现在是不通的</b>，别按"SW 起来了就等于 <code>chrome.*</code> 能用"来设计。
+    <span style="color:var(--mut);font-size:13px">它挡着 <code>chrome.proxy</code> 那条线
+    （background 与外界唯一通路就是消息），但不必然挡死 —— 若 SW 能在启动时自己调
+    <code>chrome.proxy</code>，那条仍可单独验。</span></li>
+<li><b>css 注入 / 权限映射在真扩展上的表现</b> —— 权限映射有独立的单元判据，
+    但没有"真扩展装上去按这个结论走"的端到端</li>
+<li><b>你们那一层</b> —— 自己的安装流程、partition 策略、真实扩展而非探针</li>
+</ul>
+</div>
+
+<p>所以下面这几条<b>只有你们验得了</b>，也正是最该验的：</p>
+<ol>
+<li>一个<b>真实</b>扩展（有 SW、有 <code>chrome.*</code>、有 css）装上去，页面里真的跑起来</li>
+<li>装两个扩展<b>只禁一个</b> ⇒ 被禁的停、另一个照常</li>
+<li>装完新扩展 → <code>RescanExtensions()</code> → 已开着的页面里生效</li>
+<li>宿主重启后按自己的记录<b>重设一遍</b>启停状态（内核不落盘）</li>
+</ol>
+
+<p style="font-size:13px;color:var(--mut);margin-top:26px;border-top:1px solid var(--bd);padding-top:12px">
+本页对应内核 <code>152.0.7977.42+11</code>（<code>dist/win/current/</code>）。
+C ABI 表读自该件的 PE 导出表（<code>arupa_</code> 前缀 93 个 / 全表 97 项，差别见开头那条）；判定码与语义读自
+<code>chromium-patches/desktop/arupa/public/arupa_kernel_capi.h</code>；
+.NET 门面签名读自 <code>shells/dotnet/ArupaKernel/ArupaBrowser.cs</code>。
+⚠ 能力"有没有"一律以<b>实况镜像页</b>为准（那几页读交付件现测），本页讲的是<b>怎么用、要注意什么</b>。
+</p>
+
+</div>
+</body>
+</html>

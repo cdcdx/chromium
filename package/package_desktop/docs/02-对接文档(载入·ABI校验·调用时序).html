@@ -1,0 +1,1229 @@
+<!DOCTYPE html>
+<!-- doc-type: reference -->
+<!-- owner: 内核会话 -->
+<!-- updated: 2026-08-26 -->
+<!-- ssot-for: none -->
+<!-- integration-line: pc -->
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arupa 内核 PC 对接文档 · 2026-06-04</title>
+<style>
+  :root{color-scheme:light;
+    --bg:#fff;--bg2:#fafafa;--card:#fff;--card2:#f9fafb;--bd:#e5e7eb;
+    --fg:#18181b;--mut:#71717a;--faint:#a1a1aa;
+    --acc:#7c3aed;--acc2:#6d28d9;--acc-bg:#f5f3ff;--acc-bd:#ddd6fe;
+    --ok:#059669;--ok-bg:#ecfdf5;--ok-bd:#6ee7b7;
+    --warn:#d97706;--warn-bg:#fffbeb;--warn-bd:#fcd34d;
+    --bad:#dc2626;--bad-bg:#fef2f2;--bad-bd:#fca5a5;
+    --info:#0284c7;--info-bg:#f0f9ff;--info-bd:#bae6fd;
+    --code-bg:#f4f4f5;--code-fg:#5b21b6;--pre-bg:#fafafa;--pre-bd:#e5e7eb;}
+  [data-theme="dark"]{color-scheme:dark;
+    --bg:#0b0d16;--bg2:#0f111d;--card:#161a2b;--card2:#1b2030;--bd:#262b40;
+    --fg:#e7e9f3;--mut:#9499b5;--faint:#6b7090;
+    --acc:#a78bfa;--acc2:#8b5cf6;--acc-bg:#1d1740;--acc-bd:#3f3170;
+    --ok:#34d399;--ok-bg:#0c2a1f;--ok-bd:#065f46;
+    --warn:#fbbf24;--warn-bg:#2a230c33;--warn-bd:#92400e55;
+    --bad:#f87171;--bad-bg:#2a121333;--bad-bd:#991b1b55;
+    --info:#38bdf8;--info-bg:#0c1e2a;--info-bd:#0369a155;
+    --code-bg:#0c0e18;--code-fg:#c9cdff;--pre-bg:#0a0c15;--pre-bd:#262b40;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{font:14.5px/1.65 -apple-system,"Noto Sans CJK SC","PingFang SC","Segoe UI",sans-serif;
+    background:var(--bg);color:var(--fg)}
+  a{color:var(--acc);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:ui-monospace,"SF Mono","Fira Code",Menlo,monospace;font-size:.85em;
+    color:var(--code-fg);background:var(--code-bg);border:1px solid var(--bd);
+    border-radius:4px;padding:1px 5px}
+  pre{background:var(--pre-bg);border:1px solid var(--pre-bd);border-radius:10px;
+    padding:14px 16px;overflow-x:auto;font-family:ui-monospace,"SF Mono","Fira Code",Menlo,monospace;
+    font-size:12.5px;line-height:1.65;color:var(--fg);margin:10px 0}
+  pre code{background:none;border:none;padding:0;color:inherit;font-size:inherit}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:12px 0}
+  th,td{padding:8px 11px;text-align:left;border-bottom:1px solid var(--bd);vertical-align:top}
+  th{color:var(--mut);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em;
+    background:var(--bg2)}
+  tr:hover td{background:var(--card2)}
+  h1{font-size:26px;letter-spacing:-.02em;font-weight:800;margin:0 0 8px}
+  h2{font-size:19px;font-weight:700;letter-spacing:-.01em;margin:36px 0 12px;padding:18px 0 12px;
+    border-top:1px solid var(--bd)}
+  h2:first-of-type{margin-top:18px;padding-top:0;border-top:none}
+  h3{font-size:15px;font-weight:700;margin:22px 0 8px;color:var(--fg)}
+  h4{font-size:13.5px;font-weight:600;margin:16px 0 6px;color:var(--mut)}
+  p{margin:8px 0;line-height:1.7}
+  ul,ol{padding-left:22px;margin:8px 0}
+  li{margin:4px 0;line-height:1.65}
+
+  /* layout */
+  .page-wrap{display:flex;min-height:100vh}
+  nav.sidebar{width:270px;flex:none;background:var(--bg2);border-right:1px solid var(--bd);
+    padding:20px 12px 60px;position:sticky;top:0;height:100vh;overflow-y:auto}
+  nav.sidebar .brand{display:flex;align-items:center;gap:9px;margin-bottom:18px;padding:0 6px}
+  nav.sidebar .logo{width:34px;height:34px;border-radius:8px;background:var(--acc-bg);
+    border:1px solid var(--acc-bd);display:grid;place-items:center;
+    color:var(--acc);font-weight:900;font-size:15px;flex:none}
+  nav.sidebar .brand-text b{display:block;font-size:13.5px;letter-spacing:-.01em}
+  nav.sidebar .brand-text small{color:var(--faint);font-size:11px}
+  nav.sidebar .grp{color:var(--faint);font-size:10px;text-transform:uppercase;letter-spacing:.1em;
+    font-weight:700;margin:18px 8px 5px}
+  nav.sidebar a{display:block;color:var(--mut);padding:5px 10px;border-radius:7px;font-size:12.5px;
+    border-left:2px solid transparent;transition:all .12s}
+  nav.sidebar a:hover{background:var(--card);color:var(--fg);text-decoration:none}
+  nav.sidebar a.active{background:var(--acc-bg);color:var(--acc);border-left-color:var(--acc)}
+  main.content{flex:1;padding:40px 52px;max-width:980px;min-width:0}
+  .header-row{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:6px}
+  .theme-btn{padding:5px 12px;border-radius:7px;background:var(--card);border:1px solid var(--bd);
+    color:var(--mut);cursor:pointer;font-size:12px;flex:none;margin-top:4px}
+  .theme-btn:hover{color:var(--acc);border-color:var(--acc-bd);background:var(--acc-bg)}
+
+  /* badges & callouts */
+  .pill{display:inline-block;padding:1px 8px;border-radius:5px;font-size:11px;font-weight:600;
+    border:1px solid var(--bd);white-space:nowrap}
+  .pill.ok{background:var(--ok-bg);border-color:var(--ok-bd);color:var(--ok)}
+  .pill.warn{background:var(--warn-bg);border-color:var(--warn-bd);color:var(--warn)}
+  .pill.bad{background:var(--bad-bg);border-color:var(--bad-bd);color:var(--bad)}
+  .pill.info{background:var(--info-bg);border-color:var(--info-bd);color:var(--info)}
+  .pill.acc{background:var(--acc-bg);border-color:var(--acc-bd);color:var(--acc)}
+  .callout{border-radius:9px;padding:12px 16px;margin:12px 0;border:1px solid}
+  .callout.warn{background:var(--warn-bg);border-color:var(--warn-bd)}
+  .callout.bad{background:var(--bad-bg);border-color:var(--bad-bd)}
+  .callout.ok{background:var(--ok-bg);border-color:var(--ok-bd)}
+  .callout.info{background:var(--info-bg);border-color:var(--info-bd)}
+  .callout b{font-weight:700}
+  .callout p{margin:4px 0;color:var(--fg)}
+  .callout .pill{margin-left:4px}
+
+  .sec{padding-top:8px}
+  .anchor-target{scroll-margin-top:24px}
+
+  /* milestone timeline */
+  .milestone{display:flex;gap:0;margin:16px 0;flex-wrap:wrap}
+  .ms-item{flex:1;min-width:160px;padding:12px 14px;border:1px solid var(--bd);
+    background:var(--card);position:relative}
+  .ms-item:first-child{border-radius:9px 0 0 9px}
+  .ms-item:last-child{border-radius:0 9px 9px 0}
+  .ms-item + .ms-item{border-left:none}
+  .ms-item.ok{background:var(--ok-bg);border-color:var(--ok-bd)}
+  .ms-item.warn{background:var(--warn-bg);border-color:var(--warn-bd)}
+  .ms-item.bad{background:var(--bad-bg);border-color:var(--bad-bd)}
+  .ms-item b{display:block;font-size:12.5px;margin-bottom:3px}
+  .ms-item small{font-size:11.5px;color:var(--mut);display:block}
+
+  /* footer */
+  footer{margin-top:56px;padding:20px 0 8px;border-top:1px solid var(--bd);
+    color:var(--faint);font-size:12px;line-height:1.7}
+  footer a{color:var(--mut)}
+
+  @media(max-width:820px){
+    .page-wrap{flex-direction:column}
+    nav.sidebar{width:100%;height:auto;position:relative;border-right:none;border-bottom:1px solid var(--bd)}
+    main.content{padding:24px 20px}
+  }
+</style>
+</head>
+<body>
+<div style="max-width:900px;margin:16px auto;padding:14px 18px;border-left:4px solid #e0a400;background:#fff8e6;color:#3a2f00;border-radius:6px;font:14px/1.7 system-ui,sans-serif"><b>🔴 时效(2026-08-12 核)</b><br>本页的里程碑与对接语境是<b>更早一轮</b>的(那时 PC 还在讲 CefSharp 形态), 需要按现役形态复核。<br>PC 现在走 <code>arupa_kernel.dll</code> 的 C ABI, 不是 CefSharp。API 面看主线的 API 参考章, 逐个函数有没有看「实况 · CefSharp 覆盖度」。<br>📍 <b>入口已经有了</b>: 主线「对接线地图」那一章说明 PC 两份各回答什么、按什么顺序读。本份回答的是<b>宿主进程怎么把动态库跑起来</b>(加载与 ABI 校验 / 调用时序 / 结构体与回调 / 离屏帧 / 输入注入 / P-Invoke 写法); 「我原来那个 CefSharp 的东西对应哪个」查 parity 那份。</div>
+
+<div class="page-wrap">
+
+<!-- ── 左侧导航 ─────────────────────────────────────────── -->
+<nav class="sidebar" id="sidebar">
+  <div class="brand">
+    <div class="logo">A</div>
+    <div class="brand-text"><b>Arupa Kernel</b><small>PC 对接文档</small></div>
+  </div>
+
+  <div class="grp">快速入口</div>
+  <a href="#overview">产品定位 &amp; 架构</a>
+  <a href="#milestone">当前里程碑状态</a>
+  <a href="#dll-load">DLL 加载 &amp; ABI 校验</a>
+  <a href="#call-flow">调用时序</a>
+
+  <div class="grp">C ABI 参考</div>
+  <a href="#types">枚举 &amp; 结构体</a>
+  <a href="#kernel-api">内核生命周期 API</a>
+  <a href="#webview-api">WebView API 全集</a>
+  <a href="#callbacks">回调结构体详解</a>
+  <a href="#osr-sink">OSR 帧回调</a>
+  <a href="#input-api">输入注入 API</a>
+
+  <div class="grp">P/Invoke 绑定</div>
+  <a href="#pinvoke-structs">C# 结构体绑定</a>
+  <a href="#pinvoke-funcs">C# 函数绑定</a>
+  <a href="#pinvoke-example">完整示例</a>
+
+  <div class="grp">能力 &amp; 差距</div>
+  <a href="#fb-p001">FB-P001：进度 &amp; 状态</a>
+  <a href="#fb-p002">FB-P002：22 能力域差距</a>
+  <a href="#roadmap">路线图</a>
+
+  <div class="grp">参考</div>
+  <a href="#footer-meta">文档元数据</a>
+</nav>
+
+<!-- ── 正文 ─────────────────────────────────────────────── -->
+<main class="content">
+
+<div class="header-row">
+  <div>
+    <h1>Arupa 内核 PC 对接文档</h1>
+    <p style="color:var(--mut);font-size:13.5px;margin:4px 0 0">
+      面向 NomadBrowser.PC / ArupaBrowser .NET 工程师 ·
+      <span class="pill acc">C ABI v1.0</span>
+      <span class="pill ok">里程碑A✅ B1✅ B2✅</span>
+    </p>
+  </div>
+  <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">☾ 切换主题</button>
+</div>
+
+<!-- ═══════ 0. 过期声明 (2026-08-26 加) ═══════ -->
+<div class="callout bad" style="margin:18px 0 6px">
+  <b>🔴 先读这一条：本文正文停在 2026-06-04，只有一部分还作数。</b>
+  <p>文档头的日期被改过几次，<b>正文没跟</b> —— 于是它一直看起来是新的。
+  2026-08-26 核过一遍，如实标出来：</p>
+  <table style="margin:10px 0">
+  <thead><tr><th>这一段</th><th>还作数吗</th><th>不作数的话去哪</th></tr></thead>
+  <tbody>
+  <tr><td>1. 产品定位 &amp; 架构 / 进程模型 / OSR 渲染模型</td>
+      <td><span class="pill ok">作数</span></td><td>—— 这些是结构，没变</td></tr>
+  <tr><td>加载与 ABI 校验、调用时序、生命周期、回调结构体、
+          离屏帧回调、输入注入、P/Invoke 绑定写法</td>
+      <td><span class="pill ok">作数</span></td>
+      <td>—— <b>接第一次仍看这里</b></td></tr>
+  <tr><td><b>2. 里程碑状态</b>（"7 个已实装导出"、"余 ~30 函数未实现"）</td>
+      <td><span class="pill bad">早已不成立</span></td>
+      <td>2026-08-26 现读交付件 <code>dist/win/current/arupa_kernel.dll</code>：
+          <code>arupa_</code> 前缀的 C ABI <b>93 个</b>（PE 导出表全表 97 项，另 4 项是
+          chromium/sqlite 自带符号，不是给你调的）。
+          要现算的数看「实况 · CefSharp 覆盖度」镜像页，别引用本文正文里的数字。</td></tr>
+  <tr><td><b>MV3 插件线</b>（扩展根 / 启停 / 列 id / 重扫 / SW 状态 / 权限判定 / 隔离存储）</td>
+      <td><span class="pill bad">本文一个字都没有</span></td>
+      <td>👉 <a href="integration-guide-pc-plugins.html"><b>PC · MV3 插件对接文档</b></a>
+          —— 那份是 2026-08-26 新出的，API 表读自交付件本身</td></tr>
+  <tr><td><b>C ABI 全量声明</b></td><td><span class="pill warn">本文只覆盖 6 月那一批</span></td>
+      <td>唯一真值源是头文件本身：
+          <code>chromium-patches/desktop/arupa/public/arupa_kernel_capi.h</code>
+          （含每个函数的语义、返回码、线程约定与踩坑记录）</td></tr>
+  </tbody>
+  </table>
+  <p>🔴 <b>本文不接受打补丁式的增补</b>。往一份 6 月的文档里插几段 8 月的内容，
+  只会延长"它是现役的"这个错觉 —— 要么整份重出（那是独立立项），要么明确退役。
+  在那之前，它的职责已收窄成上表第 1、2 行那两块。</p>
+</div>
+
+<!-- ═══════ 1. 产品定位 ═══════ -->
+<section id="overview" class="anchor-target">
+<h2>1. 产品定位 &amp; 架构</h2>
+
+<h3>定位："我们自己的 CefSharp"</h3>
+<p>桌面端定调（用户 2026-06-03 拍板）：<strong>类 CefSharp 的 .NET 内核封装库</strong>，像 CefSharp 一样易用，但叠加我们差异化的护城河能力。</p>
+
+<table>
+<thead><tr><th>维度</th><th>方案</th><th>原因</th></tr></thead>
+<tbody>
+<tr><td>子进程模型</td><td><strong>CefSharp 式 subprocess 壳 exe（<code>render.exe</code>）</strong><br>非 <code>--single-process</code></td><td>dotnet.exe 不能当 chromium 子进程；保多进程崩溃隔离，符合反取证策略</td></tr>
+<tr><td>跨端 UI</td><td><strong>Avalonia</strong>（非 WinForms/WPF only）</td><td>拿到 Win/Mac/Linux 跨平台；OSR 帧 blit 到 Avalonia surface</td></tr>
+<tr><td>差异化能力</td><td>指纹反检测 + 代理（per-tab/transport）+ 插件系统</td><td>CefSharp 没有，是护城河核心价值</td></tr>
+<tr><td>交付形式</td><td><code>arupa_kernel.dll</code> + <code>render.exe</code>（第三方可直接引用）</td><td>BrowserKernel 仓维护，类 CefSharp NuGet 包模式</td></tr>
+</tbody>
+</table>
+
+<h3>进程模型</h3>
+<pre><code>宿主进程（.NET / Avalonia）
+  │  P/Invoke
+  ▼
+arupa_kernel.dll            ← C ABI 层（本文档接口）
+  │  content API
+  ▼
+browser 主线程              ← RunContentProcess (std::thread) 内跑 UI loop
+  │  IPC
+  ├─ render.exe (renderer 子进程，--browser-subprocess-path)
+  ├─ render.exe (gpu 子进程)
+  └─ render.exe (utility 子进程)   ← --no-sandbox 模式（库式嵌入，LPAC 无效）</code></pre>
+
+<h3>OSR 渲染模型</h3>
+<p>桌面无原生窗口。内核离屏合成（<code>ArupaOffscreenWindowTreeHost</code> + Aura），每帧通过 <code>ArupaOsrSink.on_paint</code> 回调 BGRA 像素，由宿主 .NET 层 blit 到 Avalonia Surface/WriteableBitmap。</p>
+</section>
+
+<!-- ═══════ 2. 里程碑 ═══════ -->
+<section id="milestone" class="anchor-target">
+<h2>2. 当前里程碑状态</h2>
+
+<div class="milestone">
+  <div class="ms-item ok">
+    <b>✅ 里程碑 A（已通）</b>
+    <small>arupa_kernel_create → content 真启动<br>webview_create 返 OK（脱离 ErrNotInited）<br>smoke.exe 干净 exit 0</small>
+  </div>
+  <div class="ms-item ok">
+    <b>✅ 里程碑 B1（已通）</b>
+    <small>render.exe 子进程链路打通<br>load_url → on_page_started / finished 回调<br>get_url 返回正确 URL</small>
+  </div>
+  <div class="ms-item ok">
+    <b>✅ 里程碑 B2（已完成 runtime-verified 2026-06-04）</b>
+    <small>字体门已解（--disable-features=FontDataServiceAllWebContents）<br>OSR FrameSinkVideoCapturer → on_paint 真触发<br>首帧 1280×800 BGRA — e2e 打通</small>
+  </div>
+  <div class="ms-item bad">
+    <b>⏳ 余 ~30 函数（Phase2+）</b>
+    <small>C ABI 头声明已定（keystone）<br>impl 层 PostTask 模式逐批填<br>不影响已实装的 7 个联调</small>
+  </div>
+</div>
+
+<div class="callout warn">
+  <b>⚠ 下面这一整节是 2026-06-04 的快照，<b>数字已失效</b>（2026-08-26 标注）。</b>
+  <p>留着是为了让人看得见"当时是什么状态"，<b>不是</b>当前状况。
+  现在的导出数是 <b>97</b>（现读交付件 PE 导出表），
+  "余 ~30 函数为接口占位"那句<b>整个不成立</b>了。
+  要判断某个函数现在有没有，读
+  <code>dist/win/current/arupa_kernel.dll</code> 的导出表或看实况镜像页 —— 别读本节。</p>
+</div>
+
+<div class="callout bad" style="opacity:.72">
+  <b>🔴 重要：真实可用函数数量</b>
+  <span class="pill bad">已失效 · 2026-06-04 快照</span>
+  <p>当前 <code>dumpbin /exports arupa_kernel.dll</code> 显示 <strong>7 个</strong>已实装导出（runtime-verified）；头文件声明的其余 ~30 个函数为 <strong>接口占位，未在 impl 层实现</strong>，调用会返回 <code>ARUPA_ERR_NOT_INITED</code> 或无效果。</p>
+  <p>对接侧现阶段只能联调这 7 个；Phase2 内核每导出一个通知对接侧即可联调，P/Invoke binding 无需改。</p>
+</div>
+
+<h3>7 个已实装 + Runtime-Verified 导出</h3>
+<table>
+<thead><tr><th>函数</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>arupa_kernel_create</code></td><td><span class="pill ok">✅ runtime-verified</span></td><td>content 真启动，BrowserContext 发布</td></tr>
+<tr><td><code>arupa_kernel_destroy</code></td><td><span class="pill ok">✅ runtime-verified</span></td><td>detach + leak 单例（干净关停待 Phase2）</td></tr>
+<tr><td><code>arupa_webview_create</code></td><td><span class="pill ok">✅ runtime-verified</span></td><td>里程碑 A 后返回 OK；里程碑 B1 后可真渲染</td></tr>
+<tr><td><code>arupa_webview_destroy</code></td><td><span class="pill ok">✅ runtime-verified</span></td><td>干净 exit 0 验证</td></tr>
+<tr><td><code>arupa_webview_load_url</code></td><td><span class="pill ok">✅ runtime-verified</span></td><td>B1 里程碑验证，data: URL 导航完成</td></tr>
+<tr><td><code>arupa_webview_get_url</code></td><td><span class="pill ok">✅ runtime-verified</span></td><td>B1 后返回正确 URL（记得 arupa_free）</td></tr>
+<tr><td><code>arupa_free</code></td><td><span class="pill ok">✅ runtime-verified</span></td><td>内核分配字符串/缓冲的调用方释放接口</td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ═══════ 3. DLL 加载 ═══════ -->
+<section id="dll-load" class="anchor-target">
+<h2>3. DLL 加载 &amp; ABI 校验</h2>
+
+<h3>部署结构</h3>
+<pre><code>应用目录/
+├─ arupa_kernel.dll          ← 主内核 DLL（~130 MB）
+├─ render.exe                ← 子进程壳（--browser-subprocess-path 指向它）
+├─ arupa_kernel.pak          ← 资源 pak（或 content_shell.pak 临时替代）
+├─ icudtl.dat                ← ICU 国际化数据
+├─ snapshot_blob.bin         ← V8 快照（Windows x64）
+└─ v8_context_snapshot.bin   ← V8 Context 快照</code></pre>
+
+<h3>加载注意事项</h3>
+<ol>
+  <li>使用 <code>LoadLibraryEx(..., LOAD_WITH_ALTERED_SEARCH_PATH)</code>，让 chromium 的 DLL 依赖在应用目录中解析（而非系统目录）。</li>
+  <li><code>arupa_kernel_create</code> 调用前必须完成 DLL 加载。</li>
+  <li>ABI MAJOR 校验：从头文件取 <code>ARUPA_KERNEL_ABI_MAJOR</code>（当前 = <strong>1</strong>），在 <code>ArupaKernelConfig.abi_major</code> 填入，内核会校验。</li>
+  <li><code>pak_dir</code> 须指向包含 <code>arupa_kernel.pak</code>（或 <code>content_shell.pak</code>）的目录，否则内核启动时 <code>ResourceBundle</code> 初始化崩溃。</li>
+</ol>
+
+<pre><code class="language-csharp">// DLL 加载示例（ArupaKernelHost.cs 节选）
+[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+static extern IntPtr LoadLibraryExW(string lpFileName, IntPtr hFile, uint dwFlags);
+
+const uint LOAD_WITH_ALTERED_SEARCH_PATH = 0x00000008;
+
+public static void LoadDll(string dllPath) {
+    var handle = LoadLibraryExW(dllPath, IntPtr.Zero, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (handle == IntPtr.Zero)
+        throw new Exception($"LoadLibraryEx failed: {Marshal.GetLastWin32Error()}");
+}
+</code></pre>
+</section>
+
+<!-- ═══════ 4. 调用时序 ═══════ -->
+<section id="call-flow" class="anchor-target">
+<h2>4. 调用时序</h2>
+
+<pre><code>// 里程碑 A+B1 已验证的最小时序
+宿主进程
+  │
+  ├─ LoadLibraryEx("arupa_kernel.dll", LOAD_WITH_ALTERED_SEARCH_PATH)
+  │
+  ├─ arupa_kernel_create(&amp;cfg, &amp;kernel)
+  │     内部：裸 std::thread 跑 RunContentProcess(browser main loop)
+  │           阻塞等 BrowserContext 发布（WaitableEvent）再返回
+  │     返回 ARUPA_OK → content 真就绪
+  │
+  ├─ arupa_webview_create(kernel, &amp;cfg, &amp;cbs, &amp;osr, &amp;view)
+  │     内部：PostTask 到 UI 线程同步建离屏 WebContents
+  │           注册 WebContentsObserver（导航回调）
+  │     返回 ARUPA_OK → WebView 就绪
+  │
+  ├─ arupa_webview_load_url(view, "https://example.com")
+  │     内部：UI 线程导航
+  │           ↳ 触发 on_page_started 回调
+  │           ↳ render.exe 子进程 spawn（真渲染时）
+  │           ↳ on_paint 回调出帧（✅ B2 runtime-verified）
+  │           ↳ 触发 on_page_finished 回调
+  │
+  ├─ on_paint(pixels, width, height, dirty_x, dirty_y, dirty_w, dirty_h)
+  │     ✅ B2 已验证：首帧 1280×800 BGRA；宿主将像素 blit 到 Avalonia WriteableBitmap
+  │
+  ├─ arupa_webview_destroy(view)
+  └─ arupa_kernel_destroy(kernel)
+</code></pre>
+
+<div class="callout warn">
+  <b>⚠️ 线程规则：</b>
+  <p><code>should_intercept_request</code> 回调在<strong>网络 IO 线程</strong>触发（同 AOSP），必须线程安全且快速返回。</p>
+  <p>其余导航/渲染回调在 UI 线程。.NET 侧对 UI 操作须通过 <code>Dispatcher</code>/<code>InvokeAsync</code> 封送。</p>
+</div>
+</section>
+
+<!-- ═══════ 5. 枚举 & 结构体 ═══════ -->
+<section id="types" class="anchor-target">
+<h2>5. 枚举 &amp; 结构体</h2>
+
+<h3>ArupaResult 返回码</h3>
+<table>
+<thead><tr><th>值</th><th>常量名</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td>0</td><td><code>ARUPA_OK</code></td><td>成功</td></tr>
+<tr><td>1</td><td><code>ARUPA_ERR_ABI_MISMATCH</code></td><td>ABI MAJOR 不匹配，拒绝初始化</td></tr>
+<tr><td>2</td><td><code>ARUPA_ERR_ALREADY_INITED</code></td><td>内核已初始化（进程级单例）</td></tr>
+<tr><td>3</td><td><code>ARUPA_ERR_NOT_INITED</code></td><td>content 未启动（create 前调 webview_create 会命中此）</td></tr>
+<tr><td>4</td><td><code>ARUPA_ERR_INVALID_ARG</code></td><td>参数无效</td></tr>
+<tr><td>5</td><td><code>ARUPA_ERR_INTERNAL</code></td><td>内核内部错误</td></tr>
+</tbody>
+</table>
+
+<h3>ArupaKernelConfig（内核初始化配置）</h3>
+<table>
+<thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>abi_major</code></td><td><code>int</code></td><td>必须 == <code>ARUPA_KERNEL_ABI_MAJOR</code>（当前=1）</td></tr>
+<tr><td><code>user_data_dir</code></td><td><code>const char*</code></td><td>用户数据目录（UTF-8 路径）；空 = incognito 模式（反取证默认）</td></tr>
+<tr><td><code>locale</code></td><td><code>const char*</code></td><td>例 <code>"zh-CN"</code>、<code>"en-US"</code>；空 = 系统默认</td></tr>
+<tr><td><code>pak_dir</code></td><td><code>const char*</code></td><td>资源 pak 目录（ResourceBundle 路径，必须非空）</td></tr>
+<tr><td><code>enable_fingerprint_hardening</code></td><td><code>int</code></td><td>反指纹 hook 总开关（默认 1 开启）</td></tr>
+</tbody>
+</table>
+
+<h3>ArupaWebViewConfig（WebView 创建配置）</h3>
+<table>
+<thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>width</code></td><td><code>int</code></td><td>离屏宽度（像素）</td></tr>
+<tr><td><code>height</code></td><td><code>int</code></td><td>离屏高度（像素）</td></tr>
+<tr><td><code>partition_name</code></td><td><code>const char*</code></td><td>per-view StoragePartition 名（Cookie 隔离）；null = 默认分区</td></tr>
+<tr><td><code>off_the_record</code></td><td><code>int</code></td><td>1 = incognito（默认开启，反取证）；0 = 持久化</td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ═══════ 6. 内核生命周期 API ═══════ -->
+<section id="kernel-api" class="anchor-target">
+<h2>6. 内核生命周期 API</h2>
+
+<table>
+<thead><tr><th>函数签名</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>ArupaResult arupa_kernel_create(<br>&nbsp;&nbsp;const ArupaKernelConfig* cfg,<br>&nbsp;&nbsp;ArupaKernel** out_kernel)</code></td>
+  <td><span class="pill ok">✅ runtime-verified</span></td>
+  <td>进程级一次性初始化。内部起 std::thread 跑 RunContentProcess，阻塞等 BrowserContext 就绪后返回。返回 OK 即可安全调 webview_create。</td>
+</tr>
+<tr>
+  <td><code>void arupa_kernel_destroy(<br>&nbsp;&nbsp;ArupaKernel* kernel)</code></td>
+  <td><span class="pill ok">✅ runtime-verified</span></td>
+  <td>当前实现：detach browser 线程 + leak 单例（content 无公开"退 main-loop"嵌入 API，干净关停待 Phase2）。进程退出前调。</td>
+</tr>
+<tr>
+  <td><code>void arupa_free(void* p)</code></td>
+  <td><span class="pill ok">✅ runtime-verified</span></td>
+  <td>释放内核分配的字符串/缓冲（get_url/get_title/save_state 等回传的指针）。调用方负责调 arupa_free，内核不自动管理对端所有权。</td>
+</tr>
+</tbody>
+</table>
+</section>
+
+<!-- ═══════ 7. WebView API 全集 ═══════ -->
+<section id="webview-api" class="anchor-target">
+<h2>7. WebView API 全集</h2>
+
+<div class="callout info">
+  <b>说明：</b>下表中状态列区分实际可用性。<strong>对接侧只应联调 ✅ runtime-verified 的函数</strong>；⏳ 标记为接口已定、impl 占位，调用无效果。
+</div>
+
+<h3>7.1 WebView 生命周期</h3>
+<table>
+<thead><tr><th>函数</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>arupa_webview_create(kernel, cfg, cbs, osr, out_view)</code></td><td><span class="pill ok">✅</span></td><td>创建离屏 WebView；cbs 回调/osr 帧回调可为 null（对应能力不触发）</td></tr>
+<tr><td><code>arupa_webview_destroy(view)</code></td><td><span class="pill ok">✅</span></td><td>销毁 WebView + 相关 WebContents</td></tr>
+</tbody>
+</table>
+
+<h3>7.2 导航 / 加载</h3>
+<table>
+<thead><tr><th>函数</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>arupa_webview_load_url(view, url)</code></td><td><span class="pill ok">✅</span></td><td>B1 验证，data: URL 页面导航完成</td></tr>
+<tr><td><code>arupa_webview_load_data(view, html, base_url)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>同 loadDataWithBaseURL</td></tr>
+<tr><td><code>arupa_webview_reload(view)</code></td><td><span class="pill ok">✅ 已导出</span></td><td></td></tr>
+<tr><td><code>arupa_webview_stop(view)</code></td><td><span class="pill ok">✅ 已导出</span></td><td></td></tr>
+<tr><td><code>arupa_webview_go_back(view)</code></td><td><span class="pill ok">✅ 已导出</span></td><td></td></tr>
+<tr><td><code>arupa_webview_go_forward(view)</code></td><td><span class="pill ok">✅ 已导出</span></td><td></td></tr>
+<tr><td><code>int arupa_webview_can_go_back(view)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>返 1/0</td></tr>
+<tr><td><code>int arupa_webview_can_go_forward(view)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>返 1/0</td></tr>
+<tr><td><code>arupa_webview_clear_history(view)</code></td><td><span class="pill ok">✅ 已导出</span></td><td></td></tr>
+<tr><td><code>int arupa_webview_is_loading(view)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>返 1/0</td></tr>
+<tr><td><code>char* arupa_webview_get_url(view)</code></td><td><span class="pill ok">✅</span></td><td>返回 UTF-8 字符串，调方须 <code>arupa_free</code></td></tr>
+<tr><td><code>char* arupa_webview_get_title(view)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>返 UTF-8，须 arupa_free</td></tr>
+<tr><td><code>arupa_webview_resize(view, width, height)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>OSR 尺寸变更，触发 on_paint</td></tr>
+</tbody>
+</table>
+
+<h3>7.3 状态持久化</h3>
+<table>
+<thead><tr><th>函数</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>uint8_t* arupa_webview_save_state(view, out_len)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>返 null = 无历史/未就绪；须 arupa_free</td></tr>
+<tr><td><code>int arupa_webview_restore_state(view, data, len)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>内核格式（非 AOSP Bundle）</td></tr>
+</tbody>
+</table>
+
+<h3>7.4 UA / WebPrefs</h3>
+<table>
+<thead><tr><th>函数</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>arupa_webview_set_user_agent(view, ua)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>下次导航生效</td></tr>
+<tr><td><code>arupa_webview_set_web_prefs(view, prefs_json)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>JSON 字典，支持键：force_dark / load_images / javascript_enabled / ...（完整键清单待 Phase2 文档）</td></tr>
+</tbody>
+</table>
+
+<h3>7.5 Cookie</h3>
+<table>
+<thead><tr><th>函数</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>arupa_webview_get_cookies(view, url, cb, user)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>异步回 <code>"; "</code> 分隔字符串</td></tr>
+<tr><td><code>arupa_webview_set_cookie(view, url, cookie_line)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>per-partition，非全局</td></tr>
+<tr><td><code>arupa_webview_remove_all_cookies(view)</code></td><td><span class="pill ok">✅ 已导出</span></td><td></td></tr>
+<tr><td><code>arupa_webview_flush_cookies(view)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>持久化到磁盘</td></tr>
+</tbody>
+</table>
+
+<h3>7.6 内核特权：代理 / 传输路由 / 身份</h3>
+<p>桌面端无 Android 的 VendorAuthn 包名门控；授权改由 .NET 宿主签名 + ADP PSK 实现。</p>
+<table>
+<thead><tr><th>函数</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>arupa_webview_set_proxy(view, socks5_url)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>per-tab 代理（<code>socks5://host:port</code>，null=直连）</td></tr>
+<tr><td><code>arupa_webview_set_pending_proxy(view, socks5_url)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>延迟生效（下次导航 apply，用于身份/出口轮换）</td></tr>
+<tr><td><code>arupa_webview_set_transport_route(view, route_json)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>split-tunnel JSON 配置</td></tr>
+<tr><td><code>arupa_webview_set_pending_identity(view, identity_json)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>首次导航前预置 per-tab 指纹身份</td></tr>
+</tbody>
+</table>
+
+<h3>7.7 回调应答</h3>
+<table>
+<thead><tr><th>函数</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>arupa_webview_respond_js_dialog(view, dialog_id, accept, prompt_text)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>应答 on_js_alert/confirm/prompt。accept=1 确认，0 取消</td></tr>
+<tr><td><code>arupa_webview_respond_http_auth(view, auth_id, proceed, user, password)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>应答 on_http_auth</td></tr>
+<tr><td><code>arupa_webview_respond_geolocation(view, geo_id, granted)</code></td><td><span class="pill ok">✅ 已导出</span></td><td></td></tr>
+<tr><td><code>arupa_webview_respond_media_permission(view, perm_id, granted)</code></td><td><span class="pill ok">✅ 已导出</span></td><td></td></tr>
+<tr><td><code>arupa_webview_on_file_chooser_result(view, chooser_id, paths, path_count)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>path_count=0/paths=null 表示用户取消</td></tr>
+</tbody>
+</table>
+
+<h3>7.8 find / JS eval / JS 桥</h3>
+<table>
+<thead><tr><th>函数</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>arupa_webview_find_all(view, text)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>结果经 on_find_result 回调</td></tr>
+<tr><td><code>arupa_webview_find_next(view, forward)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>forward=1 向前</td></tr>
+<tr><td><code>arupa_webview_clear_matches(view)</code></td><td><span class="pill ok">✅ 已导出</span></td><td></td></tr>
+<tr><td><code>arupa_webview_eval_js(view, script, cb, user)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>异步；cb(user, json_result)；结果是 JSON 编码字符串</td></tr>
+<tr><td><code>arupa_webview_add_javascript_interface(view, name)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>注册全局名 → 页面 window.name 可见；JS 调用经 on_js_bridge_call 同步回调</td></tr>
+<tr><td><code>arupa_webview_remove_javascript_interface(view, name)</code></td><td><span class="pill ok">✅ 已导出</span></td><td></td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ═══════ 8. 回调结构体 ═══════ -->
+<section id="callbacks" class="anchor-target">
+<h2>8. ArupaWebViewCallbacks 回调结构体详解</h2>
+
+<p><code>ArupaWebViewCallbacks</code> 在 <code>arupa_webview_create</code> 时传入，内核调用其中的函数指针通知宿主。</p>
+
+<div class="callout warn" style="border-left:4px solid #e11d48;padding:12px 16px;margin:16px 0">
+<p><strong>🔴 2026-08-31 全面订正过这一列 —— 之前它错得很离谱，而且害过人。</strong></p>
+<p>这份文档的「阶段」列是 2026-06 写的，<strong>之后再没跟过代码</strong>。
+2026-08-31 逐条核过：标着「⏳ Phase2（未实现）」的 <strong>50 条里有 49 条其实早就实现了</strong>。</p>
+<p><strong>它的代价是实打实的</strong>（FB-P105）：对接侧读到 <code>on_received_error</code> 标着"未实现"，
+以为内核没有导航失败回调，于是<strong>在每一次加载结束后往页面里 eval 一次</strong> <code>location.href</code>
+去反推——正常网页也照做。用户报「地址栏跳转特别慢」，把该功能关掉之后用户复测「不怎么慢了」。
+⇒ <strong>一整条产品线（错误页）因为一句过期的文档而下线。</strong></p>
+<p><strong>现在每种标记的证据强度（别读混）</strong>：</p>
+<ul>
+<li><code>✅ 已实现</code> —— <strong>内核源码里有派发点</strong>（回调用这个口径）。</li>
+<li><code>✅ 已导出</code> —— <strong>交付件 dll 的导出表里有这个符号</strong>。
+    ⚠ 这是<strong>必要不充分</strong>：空实现照样有符号。逐个的行为证据要看判据
+    （<code>arupa_capi_*_test</code> / <code>arupa_navfail_test</code> 那一批）。</li>
+<li><code>✅ runtime-verified</code> —— 有判据真跑过。<strong>这一档最硬。</strong></li>
+<li><code>🔴 声明了但从不派发</code> —— capi.h 里有声明，<strong>内核从来没调用过</strong>。
+    注册它不会报错，只是永远不触发。</li>
+</ul>
+<p>⚠ 这一列现在由闸 <strong>C60</strong> 守着（<code>build/roll/doc-impl-status-check.py</code>）：
+再标错会被当场拦下。<strong>但闸只判"有没有"，不判"好不好使"</strong> —— 后者是判据的事。</p>
+</div>
+
+<h3>字段概览</h3>
+<table>
+<thead><tr><th>字段</th><th>触发时机</th><th>阶段</th></tr></thead>
+<tbody>
+<tr><td><code>void* user</code></td><td>透传给每个回调（.NET 侧传 GCHandle 固定的对象指针）</td><td>—</td></tr>
+<tr><td><code>on_page_started(user, url)</code></td><td>导航开始（URL 已提交）</td><td><span class="pill ok">✅ B1</span></td></tr>
+<tr><td><code>on_page_finished(user, url)</code></td><td>导航完成（hasCommitted 门控，#234）</td><td><span class="pill ok">✅ B1</span></td></tr>
+<tr><td><code>on_progress(user, progress_0_100)</code></td><td>加载进度 0..100</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_title(user, title)</code></td><td>页面 title 变更</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_received_icon(user, icon_url)</code></td><td>favicon URL（非 Bitmap）</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_received_error(user, url, error_code, description)</code></td><td>网络错误（error_code = net error 负值）</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_render_process_gone(user, crashed)</code></td><td>renderer 进程崩溃/终止</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_ssl_state_changed(user, secure)</code></td><td>SSL 状态变化（1=安全）</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>int should_override_url_loading(user, url, is_main_frame, is_redirect, has_gesture)</code></td><td>导航拦截；返 1 取消导航（同步）</td><td><span class="pill warn">🔴 声明了但<b>从不派发</b></span></td></tr>
+<tr><td><code>should_intercept_request(user, url, method, is_for_main_frame, headers)</code></td><td><strong>IO 线程</strong>；返 ArupaInterceptResponse* 替换响应，返 null 放行</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_js_alert/confirm/prompt/before_unload</code></td><td>JS 对话框；经 respond_js_dialog 应答</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_http_auth(user, auth_id, host, realm)</code></td><td>HTTP 基础认证；经 respond_http_auth 应答</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_geolocation_prompt / on_permission_request</code></td><td>地理位置/媒体权限</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_download_start(user, url, mime, suggested_name, content_length)</code></td><td>下载拦截通知</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_find_result(user, active_match, num_matches, done)</code></td><td>find 结果</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_show_file_chooser(user, chooser_id, mode, accept_types)</code></td><td>文件选择对话框</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_show_fullscreen / on_hide_fullscreen</code></td><td>全屏切换</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>on_open_new_window(user, target_url)</code></td><td>新窗口/标签（弹窗）</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+<tr><td><code>const char* on_js_bridge_call(user, name, method, args_json)</code></td><td>JS 调 window.name.method(args) 同步触发；返 JSON 结果（回调期有效）或 null</td><td><span class="pill ok">✅ 已实现</span></td></tr>
+</tbody>
+</table>
+
+<h3>ArupaInterceptResponse 结构（should_intercept_request 返回用）</h3>
+<table>
+<thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>status_code</code></td><td><code>int</code></td><td>例 200</td></tr>
+<tr><td><code>mime_type</code></td><td><code>const char*</code></td><td>例 <code>"text/html"</code></td></tr>
+<tr><td><code>charset</code></td><td><code>const char*</code></td><td>例 <code>"utf-8"</code>；可空</td></tr>
+<tr><td><code>headers</code></td><td><code>const char*</code></td><td><code>\n</code> 分隔的 "K: V"；可空</td></tr>
+<tr><td><code>body</code></td><td><code>const uint8_t*</code></td><td>响应体（内核拷贝）；可空=空体</td></tr>
+<tr><td><code>body_len</code></td><td><code>size_t</code></td><td></td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ═══════ 9. OSR Sink ═══════ -->
+<section id="osr-sink" class="anchor-target">
+<h2>9. ArupaOsrSink（OSR 帧回调）</h2>
+
+<div class="callout ok">
+  <b>✅ B2 runtime-verified（2026-06-04）：on_paint 已出帧</b>
+  <p><code>ArupaOsrSink.on_paint</code> 回调已真实触发。smoke.exe 实测首帧 <strong>1280×800 BGRA</strong>，格式 <code>PIXEL_FORMAT_ARGB</code>（内存字节序 BGRA，与 .NET <code>Format32bppArgb</code> / Avalonia <code>Bgra8888</code> 一致，直接 blit 无需 swizzle）。</p>
+  <p>字体门已解：<code>--disable-features=FontDataServiceAllWebContents</code> 回退 DWriteFontProxy。<strong>渲染 e2e 已通 → 对接侧可开始 Avalonia 集成。</strong></p>
+  <pre><code>[smoke] arupa_kernel_create → arupa_webview_create → arupa_webview_load_url
+        → on_page_started → on_page_finished
+        → on_paint(首帧 1280x800 BGRA)
+        → destroy → done.   exit=0</code></pre>
+</div>
+
+<table>
+<thead><tr><th>字段</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>on_paint(user, pixels, width, height, dirty_x, dirty_y, dirty_w, dirty_h)</code></td><td>帧就绪回调。<code>pixels</code> = BGRA8888，行序 top-down，长度 = <code>width*height*4</code>。<strong>pixels 仅回调期间有效，必须同步拷走</strong>（不能持有指针异步使用）。dirty 区域为本帧实际更新的矩形（可直接 blit 脏区）。</td></tr>
+</tbody>
+</table>
+
+<h3>宿主 blit 示例（Avalonia WriteableBitmap）</h3>
+<pre><code class="language-csharp">// C# P/Invoke on_paint 回调实现示例（Avalonia）
+// ✅ B2 runtime-verified：on_paint 已真实触发（首帧 1280×800 BGRA，2026-06-04 smoke.exe 验证）
+static void OnPaint(IntPtr user, IntPtr pixels, int w, int h,
+                    int dx, int dy, int dw, int dh) {
+    // 将 pixels 指针内容拷到托管 byte[]（必须同步）
+    int byteLen = w * h * 4;
+    var buffer = new byte[byteLen];
+    Marshal.Copy(pixels, buffer, 0, byteLen);
+
+    // 发到 UI 线程 blit
+    Dispatcher.UIThread.Post(() => {
+        using var wb = _bitmap.Lock();
+        Marshal.Copy(buffer, 0, wb.Address, byteLen);
+        _bitmap.Invalidate(new Rect(dx, dy, dw, dh));
+    });
+}
+</code></pre>
+</section>
+
+<!-- ═══════ 10. 输入注入 ═══════ -->
+<section id="input-api" class="anchor-target">
+<h2>10. 输入注入 API</h2>
+<table>
+<thead><tr><th>函数</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>arupa_webview_send_mouse(view, type, x, y, button, modifiers)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>type: 0=move, 1=down, 2=up。button: 0=left, 1=mid, 2=right。modifiers: Ctrl/Shift/Alt 位掩码</td></tr>
+<tr><td><code>arupa_webview_send_key(view, type, windows_key_code, modifiers, text)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>type: 0=keydown, 1=keyup, 2=char。windows_key_code 为 VK_* 值</td></tr>
+<tr><td><code>arupa_webview_send_wheel(view, x, y, delta_x, delta_y)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>滚轮事件，delta 单位为像素</td></tr>
+<tr><td><code>arupa_webview_set_focus(view, focused)</code></td><td><span class="pill ok">✅ 已导出</span></td><td>1=获焦，0=失焦。Avalonia 窗口焦点变更时调用</td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ═══════ 11. P/Invoke 绑定 ═══════ -->
+<section id="pinvoke-structs" class="anchor-target">
+<h2>11. P/Invoke 绑定</h2>
+
+<h3>11.1 C# 结构体绑定</h3>
+<pre><code class="language-csharp">// ArupaInterop.cs — C ABI P/Invoke 声明
+using System;
+using System.Runtime.InteropServices;
+
+namespace ArupaBrowser.Core;
+
+public enum ArupaResult : int {
+    Ok = 0,
+    ErrAbiMismatch = 1,
+    ErrAlreadyInited = 2,
+    ErrNotInited = 3,
+    ErrInvalidArg = 4,
+    ErrInternal = 5,
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct ArupaKernelConfig {
+    public int AbiMajor;            // 必须 = 1
+    [MarshalAs(UnmanagedType.LPUTF8Str)]
+    public string? UserDataDir;     // null = incognito
+    [MarshalAs(UnmanagedType.LPUTF8Str)]
+    public string? Locale;          // e.g. "zh-CN"
+    [MarshalAs(UnmanagedType.LPUTF8Str)]
+    public string PakDir;           // 必须非空
+    public int EnableFingerprintHardening; // 默认 1
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct ArupaWebViewConfig {
+    public int Width;
+    public int Height;
+    [MarshalAs(UnmanagedType.LPUTF8Str)]
+    public string? PartitionName;   // null = 默认分区
+    public int OffTheRecord;        // 1 = incognito
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct ArupaOsrSink {
+    public IntPtr User;
+    public OnPaintDelegate OnPaint;
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnPaintDelegate(
+        IntPtr user, IntPtr pixels, int width, int height,
+        int dirtyX, int dirtyY, int dirtyW, int dirtyH);
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct ArupaWebViewCallbacks {
+    public IntPtr User;
+    // 页面生命周期
+    public OnPageStartedDelegate? OnPageStarted;
+    public OnPageFinishedDelegate? OnPageFinished;
+    public OnProgressDelegate? OnProgress;
+    public OnTitleDelegate? OnTitle;
+    public OnReceivedIconDelegate? OnReceivedIcon;
+    public OnReceivedErrorDelegate? OnReceivedError;
+    public OnRenderProcessGoneDelegate? OnRenderProcessGone;
+    public OnSslStateChangedDelegate? OnSslStateChanged;
+    // 导航拦截
+    public ShouldOverrideUrlLoadingDelegate? ShouldOverrideUrlLoading;
+    // 资源拦截（IO 线程！）
+    public ShouldInterceptRequestDelegate? ShouldInterceptRequest;
+    // JS 对话框
+    public OnJsAlertDelegate? OnJsAlert;
+    public OnJsConfirmDelegate? OnJsConfirm;
+    public OnJsPromptDelegate? OnJsPrompt;
+    public OnJsBeforeUnloadDelegate? OnJsBeforeUnload;
+    // HTTP 认证
+    public OnHttpAuthDelegate? OnHttpAuth;
+    // 权限
+    public OnGeolocationPromptDelegate? OnGeolocationPrompt;
+    public OnPermissionRequestDelegate? OnPermissionRequest;
+    // 其他
+    public OnDownloadStartDelegate? OnDownloadStart;
+    public OnFindResultDelegate? OnFindResult;
+    public OnShowFileChooserDelegate? OnShowFileChooser;
+    public OnShowFullscreenDelegate? OnShowFullscreen;
+    public OnHideFullscreenDelegate? OnHideFullscreen;
+    public OnOpenNewWindowDelegate? OnOpenNewWindow;
+    // JS 桥（同步）
+    public OnJsBridgeCallDelegate? OnJsBridgeCall;
+
+    // --- 委托类型定义 ---
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnPageStartedDelegate(IntPtr user,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string url);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnPageFinishedDelegate(IntPtr user,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string url);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnProgressDelegate(IntPtr user, int progress);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnTitleDelegate(IntPtr user,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string title);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnReceivedIconDelegate(IntPtr user,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string iconUrl);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnReceivedErrorDelegate(IntPtr user,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string url, int errorCode,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string description);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnRenderProcessGoneDelegate(IntPtr user, int crashed);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnSslStateChangedDelegate(IntPtr user, int secure);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int ShouldOverrideUrlLoadingDelegate(IntPtr user,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string url,
+        int isMainFrame, int isRedirect, int hasGesture);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate IntPtr ShouldInterceptRequestDelegate(IntPtr user,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string url,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string method,
+        int isForMainFrame,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string headers);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnJsAlertDelegate(IntPtr user, int dialogId,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string url,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string message);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnJsConfirmDelegate(IntPtr user, int dialogId,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string url,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string message);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnJsPromptDelegate(IntPtr user, int dialogId,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string url,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string message,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string defaultValue);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnJsBeforeUnloadDelegate(IntPtr user, int dialogId,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string url);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnHttpAuthDelegate(IntPtr user, int authId,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string host,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string realm);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnGeolocationPromptDelegate(IntPtr user, int geoId,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string origin);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnPermissionRequestDelegate(IntPtr user, int permId,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string origin,
+        int wantAudio, int wantVideo);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnDownloadStartDelegate(IntPtr user,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string url,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string mime,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string suggestedName,
+        long contentLength);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnFindResultDelegate(IntPtr user,
+        int activeMatch, int numMatches, int done);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnShowFileChooserDelegate(IntPtr user, int chooserId, int mode,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string acceptTypes);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnShowFullscreenDelegate(IntPtr user);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnHideFullscreenDelegate(IntPtr user);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void OnOpenNewWindowDelegate(IntPtr user,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string targetUrl);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate IntPtr OnJsBridgeCallDelegate(IntPtr user,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string method,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string argsJson);
+}
+</code></pre>
+</section>
+
+<section id="pinvoke-funcs" class="anchor-target">
+<h3>11.2 C# 函数绑定（P/Invoke 声明）</h3>
+<pre><code class="language-csharp">// 函数 P/Invoke 声明（NativeInterop.cs）
+// 实际加载方式用 NativeLibrary.TryLoad + NativeLibrary.GetExport
+// 此处使用 DllImport 示意签名
+
+const string DllName = "arupa_kernel";
+
+// ── 基础 ──
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern void arupa_free(IntPtr p);
+
+// ── 内核生命周期 ──
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern ArupaResult arupa_kernel_create(
+    in ArupaKernelConfig cfg, out IntPtr outKernel);
+
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern void arupa_kernel_destroy(IntPtr kernel);
+
+// ── WebView 生命周期 ──
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern ArupaResult arupa_webview_create(
+    IntPtr kernel,
+    in ArupaWebViewConfig cfg,
+    in ArupaWebViewCallbacks cbs,
+    in ArupaOsrSink osr,
+    out IntPtr outView);
+
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern void arupa_webview_destroy(IntPtr view);
+
+// ── 导航（已实装）──
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern void arupa_webview_load_url(
+    IntPtr view,
+    [MarshalAs(UnmanagedType.LPUTF8Str)] string url);
+
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern IntPtr arupa_webview_get_url(IntPtr view);
+// 使用：var ptr = arupa_webview_get_url(view);
+//        var url = Marshal.PtrToStringUTF8(ptr);
+//        arupa_free(ptr);
+
+// ── 导航（Phase2 占位，签名已定）──
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern void arupa_webview_reload(IntPtr view);
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern void arupa_webview_stop(IntPtr view);
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern void arupa_webview_go_back(IntPtr view);
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern void arupa_webview_go_forward(IntPtr view);
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern int arupa_webview_can_go_back(IntPtr view);
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern int arupa_webview_can_go_forward(IntPtr view);
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern void arupa_webview_clear_history(IntPtr view);
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern int arupa_webview_is_loading(IntPtr view);
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern IntPtr arupa_webview_get_title(IntPtr view); // arupa_free
+[DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+public static extern void arupa_webview_resize(IntPtr view, int width, int height);
+// ... 其余 Phase2 占位（完整清单见 ArupaInterop.cs commit 1868ae6）
+</code></pre>
+</section>
+
+<section id="pinvoke-example" class="anchor-target">
+<h3>11.3 完整冒烟示例</h3>
+<pre><code class="language-csharp">// ArupaKernelHost.cs — 完整冒烟测试示例（对应 smoke.exe 验证的 C# 等价）
+using System;
+using System.Runtime.InteropServices;
+
+var appDir = AppContext.BaseDirectory;
+
+// [1] DLL 加载
+// 实际项目中用 NativeLibrary.Load(path, ...) 以支持依赖链
+Console.WriteLine("[1] 加载 arupa_kernel.dll");
+
+// [2] 内核初始化
+var cfg = new ArupaKernelConfig {
+    AbiMajor = 1,                        // ARUPA_KERNEL_ABI_MAJOR
+    UserDataDir = null,                   // incognito 模式（反取证默认）
+    Locale = "zh-CN",
+    PakDir = appDir,                      // 须含 arupa_kernel.pak
+    EnableFingerprintHardening = 1,
+};
+
+var result = arupa_kernel_create(in cfg, out var kernel);
+Console.WriteLine($"[2] arupa_kernel_create => {result}");
+if (result != ArupaResult.Ok) return;
+
+// [3] 创建 WebView
+// 准备回调（只注册 on_page_started/finished 做冒烟）
+var callbacks = new ArupaWebViewCallbacks {
+    User = IntPtr.Zero,
+    OnPageStarted = (_, url) => Console.WriteLine($"   on_page_started: {url}"),
+    OnPageFinished = (_, url) => Console.WriteLine($"   on_page_finished: {url}"),
+};
+// OSR sink（✅ B2 已通，on_paint 真触发，首帧 1280×800 BGRA）
+var osrSink = new ArupaOsrSink {
+    User = IntPtr.Zero,
+    OnPaint = (_, pixels, w, h, dx, dy, dw, dh) =>
+        Console.WriteLine($"   on_paint: {w}x{h} dirty={dx},{dy},{dw},{dh}"),
+};
+var viewCfg = new ArupaWebViewConfig { Width = 1280, Height = 800, OffTheRecord = 1 };
+result = arupa_webview_create(kernel, in viewCfg, in callbacks, in osrSink, out var view);
+Console.WriteLine($"[3] arupa_webview_create => {result}");
+if (result != ArupaResult.Ok) return;
+
+// [4] 加载 URL（B1 里程碑验证路径）
+arupa_webview_load_url(view, "data:text/html,&lt;h1&gt;Hello Arupa&lt;/h1&gt;");
+
+// [5] 取 URL（须 arupa_free）
+var urlPtr = arupa_webview_get_url(view);
+var url = Marshal.PtrToStringUTF8(urlPtr) ?? "(null)";
+arupa_free(urlPtr);
+Console.WriteLine($"[4] get_url = {url}");
+
+// [6] 销毁
+arupa_webview_destroy(view);
+arupa_kernel_destroy(kernel);
+Console.WriteLine("[5] 销毁完成. exit 0");
+</code></pre>
+
+<p>对应内核侧 <code>arupa_kernel_smoke.exe</code> 实测输出（B2 e2e 里程碑，2026-06-04 runtime-verified）：</p>
+<pre><code>[smoke] (1) arupa_kernel_create   => result=0
+[smoke] (2) arupa_webview_create  => result=0   &lt;&lt;&lt; PASS: 脱离 ErrNotInited
+[smoke] (3) load_url(data:html) → on_page_started → on_page_finished   &lt;&lt;&lt; B1 PASS 导航完成
+           get_url=data:text/html,...
+           on_paint(首帧 1280x800 BGRA)   &lt;&lt;&lt; B2 PASS 出帧
+[smoke] (4) destroy => done.   exit=0</code></pre>
+</section>
+
+<!-- ═══════ 12. FB-P001 ═══════ -->
+<section id="fb-p001" class="anchor-target">
+<h2>12. FB-P001：进度 &amp; 状态</h2>
+
+<p><strong>状态：</strong><span class="pill ok">FIXED ✅</span> — 里程碑 A+B1+B2 全通；<code>on_paint</code> 出帧 runtime-verified（2026-06-04）；渲染 e2e 打通，对接侧可开始 Avalonia 集成</p>
+
+<h3>里程碑详情</h3>
+<table>
+<thead><tr><th>里程碑</th><th>状态</th><th>关键产出</th><th>已解技术门</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>A</strong><br>content 启动</td>
+  <td><span class="pill ok">✅ 2026-06-04</span></td>
+  <td>webview_create 返 OK（脱离 ErrNotInited）<br>smoke.exe 干净 exit 0</td>
+  <td>① pak 资源：fallback content_shell.pak<br>② network sandbox DCHECK：ShouldSandboxNetworkService→false<br>③ destroy use-after-free：detach+leak 单例</td>
+</tr>
+<tr>
+  <td><strong>B1</strong><br>子进程 + 导航</td>
+  <td><span class="pill ok">✅ 2026-06-04</span></td>
+  <td>render.exe 子进程链路<br>load_url → on_page_started/finished<br>干净 exit 0</td>
+  <td>① logging path-empty DCHECK：PreSandboxStartup 设 stderr-only logging<br>② 子进程 Error 64（SBOX_ERROR_INVALID_LINK_STATE）：--no-sandbox<br>③ CHECK(Screen::Get()) 崩：DesktopScreenWinHeadless<br>④ 离屏 aura：ArupaOffscreenWindowTreeHost（无 HWND，关 OcclusionTracker）</td>
+</tr>
+<tr>
+  <td><strong>B2</strong><br>真实出帧</td>
+  <td><span class="pill ok">✅ 2026-06-04</span></td>
+  <td>on_paint 已出帧：首帧 1280×800 BGRA<br>smoke.exe exit 0 e2e 全链路验证<br>FB-P001 转 FIXED</td>
+  <td>① 字体门：<code>--disable-features=FontDataServiceAllWebContents</code> 回退 DWriteFontProxy<br>② arupa_osr_view 实现 viz FrameSinkVideoConsumer；RenderWidgetHostView::CreateVideoCapturer → SetFormat(PIXEL_FORMAT_ARGB) → Start；OnFrameCaptured 读 ReadOnlySharedMemory → 按 content_rect 拷 BGRA → on_paint<br>③ 关键：web_contents-&gt;WasShown() + osr-&gt;Start() 在导航 commit 后</td>
+</tr>
+</tbody>
+</table>
+
+<h3>对接侧当前可做事项</h3>
+<ul>
+  <li>✅ DLL 加载 / ABI 1.0 校验 / kernel_create / webview_create 联调（B1 验证路径）。</li>
+  <li>✅ 按头文件写全套 P/Invoke 声明（Phase2 每导出一个无需改 binding 即可联调）。</li>
+  <li>✅ 参考对接侧 commit <code>1868ae6</code>（<code>NomadBrowser.Core/ArupaKernel/ArupaInterop.cs</code>）。</li>
+  <li>✅ on_paint / OSR blit → B2 已通，可开始 Avalonia 集成（BGRA 直接 blit，无需 swizzle）。</li>
+  <li>⏳ 余 ~30 函数联调 → Phase2 内核每填一批通知。</li>
+</ul>
+</section>
+
+<!-- ═══════ 13. FB-P002 ═══════ -->
+<section id="fb-p002" class="anchor-target">
+<h2>13. FB-P002：22 能力域差距表（NomadBrowser.PC 迁移 CefSharp → Arupa 需求基线）</h2>
+
+<p>对照 NomadBrowser.PC 全量 CefSharp 依赖审计（39 个 <code>using CefSharp</code> 文件，22 能力域），标注现有 C ABI 的覆盖状态。</p>
+
+<h3>A. 已覆盖 ✅（确认即可）</h3>
+<table>
+<thead><tr><th>#</th><th>能力域</th><th>对应 C ABI</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>导航（Load/Back/Forward/Reload/Stop/url/title）</td><td><code>load_url/reload/stop/go_back/go_forward/can_go_*/get_url/get_title</code></td></tr>
+<tr><td>2</td><td>OSR 出帧 / resize</td><td><code>ArupaOsrSink.on_paint</code>（BGRA top-down）+ <code>resize</code>（B2）</td></tr>
+<tr><td>3</td><td>输入注入（鼠/键/滚/焦点）</td><td><code>send_mouse/send_key/send_wheel/set_focus</code></td></tr>
+<tr><td>4</td><td>脚本 eval（取返回值）</td><td><code>eval_js</code> + <code>ArupaEvalCb(json_result)</code></td></tr>
+<tr><td>5</td><td>代理（per-tab / transport route）<span style="color:var(--acc)">★ 护城河</span></td><td><code>set_proxy/set_pending_proxy/set_transport_route/set_pending_identity</code></td></tr>
+<tr><td>6</td><td>JS 对话框 / HTTP 认证 / 权限 / 文件选择 / 全屏 / find</td><td>完整 on_js_* + respond_* + on_find_result 等</td></tr>
+<tr><td>7</td><td>导航生命周期 / 崩溃 / 状态持久化 / 错误页</td><td>on_page_started/finished/error/render_process_gone + save/restore_state</td></tr>
+</tbody>
+</table>
+
+<h3>B. 部分覆盖 ⚠️（需扩展/澄清）</h3>
+<table>
+<thead><tr><th>#</th><th>能力域</th><th>缺口</th><th>阻塞迁移？</th></tr></thead>
+<tbody>
+<tr>
+  <td>8</td>
+  <td><strong>JS↔宿主桥（异步 + frame origin）</strong></td>
+  <td>现有 <code>on_js_bridge_call</code> 是同步的；PC 侧 33 个 JsBridge 大多返回 <code>Task&lt;string&gt;</code>（异步）。且回调不带 frame origin，PC 无法做 <code>nomad://</code> 门控（安全洞）。需：① 异步应答 <code>respond_js_bridge(call_id, json)</code>；② 回调带 <code>frame_origin</code>。</td>
+  <td><span class="pill bad">🔴 是</span></td>
+</tr>
+<tr>
+  <td>9</td>
+  <td><strong>请求头改 + 响应观测</strong></td>
+  <td><code>should_intercept_request</code> 只能整体替换/放行。PC 需：① 放行同时注入 DNT/GPC 头；② <code>on_resource_load_complete(url, mime)</code> 供视频嗅探（响应阶段 MIME）。</td>
+  <td><span class="pill bad">🔴 是</span></td>
+</tr>
+<tr>
+  <td>10</td>
+  <td>第三方 Cookie 拦截</td>
+  <td>无 cookie-access-filter 回调。建议：<code>set_web_prefs</code> 加 <code>block_third_party_cookies</code> bool 键。</td>
+  <td><span class="pill warn">🟡</span></td>
+</tr>
+<tr>
+  <td>11</td>
+  <td>下载取消 + referer（aria2）</td>
+  <td><code>on_download_start</code> 无取消/放行应答，不带 referer。需 <code>download_id</code> + <code>respond_download(id, allow)</code>。</td>
+  <td><span class="pill warn">🟡</span></td>
+</tr>
+<tr>
+  <td>12</td>
+  <td>Cookie 枚举全部 / 按域删</td>
+  <td>现有仅 per-url <code>get_cookies</code>，缺 <code>get_all_cookies(cb)</code> + <code>delete_cookies(url_or_domain)</code>。</td>
+  <td><span class="pill warn">🟡</span></td>
+</tr>
+<tr>
+  <td>13</td>
+  <td>Profile / 分区隔离语义（待澄清）</td>
+  <td><code>partition_name</code> 是否覆盖全套存储隔离（cookie+localStorage+cache+IndexedDB）？同名 partition 是否跨 view 共享？<code>off_the_record=1</code>+空 user_data_dir 是否纯内存？</td>
+  <td><span class="pill warn">🟡 澄清</span></td>
+</tr>
+<tr>
+  <td>14</td>
+  <td>新窗口 disposition</td>
+  <td><code>on_open_new_window</code> 基本够用；建议增 <code>disposition</code> 字段（前台/后台/popup）。</td>
+  <td><span class="pill ok">— 基本可</span></td>
+</tr>
+</tbody>
+</table>
+
+<h3>C. 缺口 ❌（C ABI 暂无，迁移阻塞）</h3>
+<table>
+<thead><tr><th>#</th><th>能力域</th><th>需求说明</th><th>阻塞迁移？</th></tr></thead>
+<tbody>
+<tr>
+  <td>15</td>
+  <td><strong>document-start 脚本注入（反指纹 + 模块命脉）</strong></td>
+  <td>PC 反指纹 + FingerprintInjector + ModuleScriptInjector 必须在页面脚本之前注入，在每帧 V8 context 创建时自动运行（类比 Chrome extension content_scripts@document_start）。<code>on_page_started</code> 时机太晚，且不能在回调内重入控制函数。<br><strong>这是反指纹护城河 + 所有注入型模块的命脉，优先级最高。</strong></td>
+  <td><span class="pill bad">🔴🔴 是</span></td>
+</tr>
+<tr>
+  <td>16</td>
+  <td><strong>nomad:// 自定义协议注册（整个 WebUI）</strong></td>
+  <td>WebUI home/settings/微应用/B 空间全走 <code>nomad://</code> 自定义协议（standard + secure + fetch-enabled）。<code>should_intercept_request</code> 能替换响应但无法把 scheme 标为 standard/secure，影响 origin 计算与桥门控。<strong>没有它整个 WebUI 起不来。</strong></td>
+  <td><span class="pill bad">🔴🔴 是</span></td>
+</tr>
+<tr>
+  <td>17</td>
+  <td><strong>右键菜单 hit-test + 编辑命令</strong></td>
+  <td>OSR 下无原生菜单。需：① 右键时回调 <code>on_context_menu(link_url, image_url, selection_text, is_editable, media_type)</code>；② 编辑命令 <code>exec_command("copy"/"paste"/"cut"/"selectAll"/"undo"/"redo")</code>。</td>
+  <td><span class="pill bad">🔴 是</span></td>
+</tr>
+<tr>
+  <td>18</td>
+  <td>整页截图 / CDP 通道（🟡 中等优先）</td>
+  <td><code>on_paint</code> 仅视口帧。建议：专用 <code>capture_full_page(format, cb)</code> 或 CDP 通道 <code>send_devtools_command(method, params_json, cb)</code>（更通用）。</td>
+  <td><span class="pill warn">🟡</span></td>
+</tr>
+<tr>
+  <td>19</td>
+  <td>web_prefs 键覆盖确认（🟡）</td>
+  <td><code>set_web_prefs</code> 支持键清单待补齐。至少需确认：dns_over_https.mode/templates、safebrowsing.enabled/enhanced、block_third_party_cookies、force_dark、load_images、javascript_enabled。</td>
+  <td><span class="pill warn">🟡 澄清</span></td>
+</tr>
+<tr>
+  <td>20</td>
+  <td>版本查询（🟢 低优）</td>
+  <td>需 <code>arupa_kernel_version()</code> → chromium 版本串 + 内核版本串。</td>
+  <td><span class="pill ok">🟢 低</span></td>
+</tr>
+<tr>
+  <td>21</td>
+  <td>IME 合成（🟢 低优，待澄清）</td>
+  <td><code>send_key</code> 是否覆盖输入法 composition（setComposition/commitText）？若否，需 <code>send_ime_composition</code>。</td>
+  <td><span class="pill ok">🟢 低，澄清</span></td>
+</tr>
+<tr>
+  <td>22</td>
+  <td>WebRTC IP 泄露策略（🟢 低优，待澄清）</td>
+  <td>内核反指纹 hook 是否已处理 <code>force_webrtc_ip_handling_policy</code>（代理场景防泄真 IP）？若否，需开关。</td>
+  <td><span class="pill ok">🟢 低，澄清</span></td>
+</tr>
+</tbody>
+</table>
+
+<h3>最高优先三项（没有它整个壳跑不起）</h3>
+<ul>
+  <li><strong>C1（#15）document-start 脚本注入</strong>：反指纹护城河 + 所有注入型模块命脉。</li>
+  <li><strong>C2（#16）nomad:// 自定义协议</strong>：整个 WebUI 依赖。</li>
+  <li><strong>B1（#8）异步 JS 桥 + frame origin</strong>：33 个 JsBridge 依赖，含安全门控。</li>
+</ul>
+</section>
+
+<!-- ═══════ 14. 路线图 ═══════ -->
+<section id="roadmap" class="anchor-target">
+<h2>14. 路线图</h2>
+<table>
+<thead><tr><th>阶段</th><th>目标</th><th>状态</th></tr></thead>
+<tbody>
+<tr><td><strong>Phase 1</strong>（骨架）</td><td>C ABI keystone：7 函数导出 + 结构体 + 头文件锁定</td><td><span class="pill ok">✅ 完成</span></td></tr>
+<tr><td><strong>里程碑 A</strong></td><td>content 真启动，webview_create 脱离 ErrNotInited</td><td><span class="pill ok">✅ 2026-06-04</span></td></tr>
+<tr><td><strong>里程碑 B1</strong></td><td>render.exe 子进程 + load_url 导航 + on_page_started/finished</td><td><span class="pill ok">✅ 2026-06-04</span></td></tr>
+<tr><td><strong>里程碑 B2</strong></td><td>字体门 + OSR on_paint 出帧 → e2e 验证 → FB-P001 转 FIXED</td><td><span class="pill ok">✅ 2026-06-04</span></td></tr>
+<tr><td><strong>Phase 2A</strong></td><td>余 ~30 函数逐批 impl（PostTask-to-UI 模式）；UA/Cookie/WebPrefs/reload/stop/find/eval...</td><td><span class="pill bad">待排期</span></td></tr>
+<tr><td><strong>Phase 2B</strong></td><td>B1/C1/C2 三个阻塞项：异步 JS 桥 + document-start + nomad:// scheme</td><td><span class="pill bad">待排期</span></td></tr>
+<tr><td><strong>Phase 3</strong></td><td>.NET wrapper 库（类 CefSharp NuGet 包）；Avalonia OSR 控件；跨平台（Mac/Linux）</td><td><span class="pill bad">规划中</span></td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ── 页脚 ── -->
+<footer id="footer-meta">
+  <p><strong>生成日期：</strong>2026-06-04 &nbsp;|&nbsp;
+     <strong>数据来源：</strong>
+     <a href="../../chromium-patches/desktop/arupa/public/arupa_kernel_capi.h">arupa_kernel_capi.h</a> ·
+     <a href="../feedback/PC/FB-P001-capi-exports-incomplete.md">FB-P001</a> ·
+     <a href="../feedback/PC/FB-P002-wrapper-capability-requirements.md">FB-P002</a> ·
+     project_desktop_product_form_cefsharp_avalonia</p>
+  <p><strong>内核侧维护：</strong>kai5dev &lt;kai5.dev.ai@gmail.com&gt; · BrowserKernel 仓</p>
+  <p style="margin-top:8px;color:var(--faint)">本文档为自包含 HTML，无外部 CDN 依赖，可离线查阅。如有疑问请提对接工单（FB-P* 系列）。</p>
+</footer>
+
+</main>
+</div>
+
+<script>
+// 主题切换
+function toggleTheme() {
+  const html = document.documentElement;
+  const isDark = html.getAttribute('data-theme') === 'dark';
+  html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+  document.getElementById('themeBtn').textContent = isDark ? '☾ 切换主题' : '☀ 切换主题';
+}
+
+// 导航高亮
+const sections = document.querySelectorAll('.anchor-target');
+const navLinks = document.querySelectorAll('nav.sidebar a');
+function updateNav() {
+  let current = '';
+  sections.forEach(s => {
+    if (window.scrollY + 80 >= s.offsetTop) current = s.id;
+  });
+  navLinks.forEach(a => {
+    const href = a.getAttribute('href');
+    if (href === '#' + current) a.classList.add('active');
+    else a.classList.remove('active');
+  });
+}
+window.addEventListener('scroll', updateNav, { passive: true });
+updateNav();
+
+// 平滑滚动
+navLinks.forEach(a => {
+  a.addEventListener('click', e => {
+    const href = a.getAttribute('href');
+    if (href && href.startsWith('#')) {
+      e.preventDefault();
+      const target = document.querySelector(href);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+});
+</script>
+</body>
+</html>

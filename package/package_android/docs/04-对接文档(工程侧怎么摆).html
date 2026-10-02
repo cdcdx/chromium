@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<!-- doc-type: reference -->
+<!-- owner: 内核会话 -->
+<!-- updated: 2026-08-26 -->
+<!-- ssot-for: none -->
+<!-- integration-line: android -->
+<!-- version-literal-ok: 正文里剩下的三处 `148` **全是历史叙述**, 不是当前版本:
+     ① 顶部时效声明里两处 —— 讲的正是"本文此前顶着 Chromium 148 的徽章"这件事;
+     ② androidx 那一行 —— "**自** chromium 148 **起**需要 1.18.0", 那是起始版本(史实)。
+     🔴 豁免的是**这三处历史叙述**, 不是给本文开一张"可以抄版本号"的通行证:
+     当前版本一律看 canonical-paths 顶部四标记, 正文不许再写死。 -->
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arupa 内核 Android 对接文档 · 2026-06-04</title>
+<style>
+  :root{color-scheme:light;
+    --bg:#fff;--bg2:#fafafa;--card:#fff;--card2:#f9fafb;--bd:#e5e7eb;
+    --fg:#18181b;--mut:#71717a;--faint:#a1a1aa;
+    --acc:#7c3aed;--acc2:#6d28d9;--acc-bg:#f5f3ff;--acc-bd:#ddd6fe;
+    --ok:#059669;--ok-bg:#ecfdf5;--ok-bd:#6ee7b7;
+    --warn:#d97706;--warn-bg:#fffbeb;--warn-bd:#fcd34d;
+    --bad:#dc2626;--bad-bg:#fef2f2;--bad-bd:#fca5a5;
+    --info:#0284c7;--info-bg:#f0f9ff;--info-bd:#bae6fd;
+    --code-bg:#f4f4f5;--code-fg:#5b21b6;--pre-bg:#fafafa;--pre-bd:#e5e7eb;}
+  [data-theme="dark"]{color-scheme:dark;
+    --bg:#0b0d16;--bg2:#0f111d;--card:#161a2b;--card2:#1b2030;--bd:#262b40;
+    --fg:#e7e9f3;--mut:#9499b5;--faint:#6b7090;
+    --acc:#a78bfa;--acc2:#8b5cf6;--acc-bg:#1d1740;--acc-bd:#3f3170;
+    --ok:#34d399;--ok-bg:#0c2a1f;--ok-bd:#065f46;
+    --warn:#fbbf24;--warn-bg:#2a230c33;--warn-bd:#92400e55;
+    --bad:#f87171;--bad-bg:#2a121333;--bad-bd:#991b1b55;
+    --info:#38bdf8;--info-bg:#0c1e2a;--info-bd:#0369a155;
+    --code-bg:#0c0e18;--code-fg:#c9cdff;--pre-bg:#0a0c15;--pre-bd:#262b40;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{font:14.5px/1.65 -apple-system,"Noto Sans CJK SC","PingFang SC","Segoe UI",sans-serif;
+    background:var(--bg);color:var(--fg)}
+  a{color:var(--acc);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:ui-monospace,"SF Mono","Fira Code",Menlo,monospace;font-size:.85em;
+    color:var(--code-fg);background:var(--code-bg);border:1px solid var(--bd);
+    border-radius:4px;padding:1px 5px}
+  pre{background:var(--pre-bg);border:1px solid var(--pre-bd);border-radius:10px;
+    padding:14px 16px;overflow-x:auto;font-family:ui-monospace,"SF Mono","Fira Code",Menlo,monospace;
+    font-size:12.5px;line-height:1.65;color:var(--fg);margin:10px 0}
+  pre code{background:none;border:none;padding:0;color:inherit;font-size:inherit}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:12px 0}
+  th,td{padding:8px 11px;text-align:left;border-bottom:1px solid var(--bd);vertical-align:top}
+  th{color:var(--mut);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em;
+    background:var(--bg2)}
+  tr:hover td{background:var(--card2)}
+  h1{font-size:26px;letter-spacing:-.02em;font-weight:800;margin:0 0 8px}
+  h2{font-size:19px;font-weight:700;letter-spacing:-.01em;margin:36px 0 12px;padding:18px 0 12px;
+    border-top:1px solid var(--bd)}
+  h2:first-of-type{margin-top:18px;padding-top:0;border-top:none}
+  h3{font-size:15px;font-weight:700;margin:22px 0 8px;color:var(--fg)}
+  h4{font-size:13.5px;font-weight:600;margin:16px 0 6px;color:var(--mut)}
+  p{margin:8px 0;line-height:1.7}
+  ul,ol{padding-left:22px;margin:8px 0}
+  li{margin:4px 0;line-height:1.65}
+
+  /* layout */
+  .page-wrap{display:flex;min-height:100vh}
+  nav.sidebar{width:260px;flex:none;background:var(--bg2);border-right:1px solid var(--bd);
+    padding:20px 12px 60px;position:sticky;top:0;height:100vh;overflow-y:auto}
+  nav.sidebar .brand{display:flex;align-items:center;gap:9px;margin-bottom:18px;padding:0 6px}
+  nav.sidebar .logo{width:34px;height:34px;border-radius:8px;background:var(--acc-bg);
+    border:1px solid var(--acc-bd);display:grid;place-items:center;
+    color:var(--acc);font-weight:900;font-size:15px;flex:none}
+  nav.sidebar .brand-text b{display:block;font-size:13.5px;letter-spacing:-.01em}
+  nav.sidebar .brand-text small{color:var(--faint);font-size:11px}
+  nav.sidebar .grp{color:var(--faint);font-size:10px;text-transform:uppercase;letter-spacing:.1em;
+    font-weight:700;margin:18px 8px 5px}
+  nav.sidebar a{display:block;color:var(--mut);padding:5px 10px;border-radius:7px;font-size:12.5px;
+    border-left:2px solid transparent;transition:all .12s}
+  nav.sidebar a:hover{background:var(--card);color:var(--fg);text-decoration:none}
+  nav.sidebar a.active{background:var(--acc-bg);color:var(--acc);border-left-color:var(--acc)}
+  main.content{flex:1;padding:40px 52px;max-width:960px;min-width:0}
+  .header-row{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:6px}
+  .theme-btn{padding:5px 12px;border-radius:7px;background:var(--card);border:1px solid var(--bd);
+    color:var(--mut);cursor:pointer;font-size:12px;flex:none;margin-top:4px}
+  .theme-btn:hover{color:var(--acc);border-color:var(--acc-bd);background:var(--acc-bg)}
+
+  /* badges & callouts */
+  .pill{display:inline-block;padding:1px 8px;border-radius:5px;font-size:11px;font-weight:600;
+    border:1px solid var(--bd)}
+  .pill.ok{background:var(--ok-bg);border-color:var(--ok-bd);color:var(--ok)}
+  .pill.warn{background:var(--warn-bg);border-color:var(--warn-bd);color:var(--warn)}
+  .pill.bad{background:var(--bad-bg);border-color:var(--bad-bd);color:var(--bad)}
+  .pill.info{background:var(--info-bg);border-color:var(--info-bd);color:var(--info)}
+  .pill.acc{background:var(--acc-bg);border-color:var(--acc-bd);color:var(--acc)}
+  .callout{border-radius:9px;padding:12px 16px;margin:12px 0;border:1px solid}
+  .callout.warn{background:var(--warn-bg);border-color:var(--warn-bd);color:var(--warn)}
+  .callout.bad{background:var(--bad-bg);border-color:var(--bad-bd);color:var(--bad)}
+  .callout.ok{background:var(--ok-bg);border-color:var(--ok-bd);color:var(--ok)}
+  .callout.info{background:var(--info-bg);border-color:var(--info-bd);color:var(--info)}
+  .callout b{font-weight:700}
+  .callout p{margin:4px 0;color:var(--fg)}
+
+  /* section anchors */
+  .sec{padding-top:8px}
+  .anchor-target{scroll-margin-top:24px}
+
+  /* status dot */
+  .dot-ok::before{content:"●";color:var(--ok);margin-right:5px}
+  .dot-warn::before{content:"●";color:var(--warn);margin-right:5px}
+  .dot-bad::before{content:"●";color:var(--bad);margin-right:5px}
+  .dot-info::before{content:"●";color:var(--info);margin-right:5px}
+
+  /* footer */
+  footer{margin-top:56px;padding:20px 0 8px;border-top:1px solid var(--bd);
+    color:var(--faint);font-size:12px;line-height:1.7}
+  footer a{color:var(--mut)}
+
+  /* toc highlight on scroll */
+  @media(max-width:820px){
+    .page-wrap{flex-direction:column}
+    nav.sidebar{width:100%;height:auto;position:relative;border-right:none;border-bottom:1px solid var(--bd)}
+    main.content{padding:24px 20px}
+  }
+</style>
+</head>
+<body>
+<div style="max-width:900px;margin:16px auto;padding:14px 18px;border-left:4px solid #e0a400;background:#fff8e6;color:#3a2f00;border-radius:6px;font:14px/1.7 system-ui,sans-serif"><b>🔴 时效(2026-08-12 核)</b><br>本页里 <code>setTransportRoute</code> 相关的十余处描述是<b>自建加速线</b>的口径 —— 那条线已于 2026-08-10 弃用。<br>接口本身仍在(内核侧接缝有效), 但对面那一头现在是<b>三方自带的加速客户端</b>, 不是我们自己的插件。<br>📍 <b>入口已经有了</b>: 主线「对接线地图」那一章说明安卓三份各回答什么、按什么顺序读。本份回答的是<b>工程侧怎么摆</b>(工具链硬要求 / AAR 引入 / 初始化序列 / 运行时资产 / Manifest / 打包); 语义差异与验收用例看接入清单那份, 逐个 API 怎么调看 API 参考那份。</div>
+
+<div class="page-wrap">
+
+<!-- ── 左侧导航 ─────────────────────────────────────────── -->
+<nav class="sidebar" id="sidebar">
+  <div class="brand">
+    <div class="logo">A</div>
+    <div class="brand-text"><b>Arupa Kernel</b><small>Android 对接文档</small></div>
+  </div>
+
+  <div class="grp">快速入口</div>
+  <a href="#overview">项目概述 &amp; 架构</a>
+  <a href="#toolchain">工具链硬要求</a>
+  <a href="#aar-embed">AAR 引入方式</a>
+  <a href="#init">初始化序列</a>
+  <a href="#assets">运行时资产</a>
+  <a href="#manifest">Manifest 声明</a>
+  <a href="#packaging">Packaging 注意</a>
+
+  <div class="grp">API 参考</div>
+  <a href="#arch-jni-cdp">架构: JNI vs CDP</a>
+  <a href="#api-nav">导航 / 加载</a>
+  <a href="#api-state">状态序列化</a>
+  <a href="#api-client">Client 回调</a>
+  <a href="#api-find">页内查找</a>
+  <a href="#api-js">JS 桥 / eval</a>
+  <a href="#api-prefs">WebPreferences</a>
+  <a href="#api-priv">内核特权 API</a>
+  <a href="#api-cookie-ua">UA / Cookie (#233)</a>
+  <a href="#api-intercept">拦截 (#234/#235)</a>
+
+  <div class="grp">已知坑</div>
+  <a href="#fb-a001">FB-A001: setTransportRoute pending</a>
+  <a href="#fb-a002">FB-A002: AAR packaging 冲突</a>
+  <a href="#known-limits">其他已知限制</a>
+
+  <div class="grp">参考</div>
+  <a href="#verify-status">验证状态说明</a>
+  <a href="#capability-matrix">能力对照矩阵</a>
+  <a href="#footer-meta">文档元数据</a>
+</nav>
+
+<!-- ── 正文 ─────────────────────────────────────────────── -->
+<main class="content">
+
+<div class="header-row">
+  <div>
+    <h1>Arupa 内核 Android 对接文档</h1>
+    <p style="color:var(--mut);font-size:13.5px;margin:4px 0 0">
+      面向 NomadBrowser Android 工程师 ·
+      <span class="pill acc">ChromiumWebView API</span>
+      <span class="pill warn">版本以 canonical-paths 四标记为准</span>
+    </p>
+  </div>
+  <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">☾ 切换主题</button>
+</div>
+
+<div class="callout bad" style="margin:18px 0 6px">
+  <b>🔴 2026-08-26 核过一遍：本文此前顶着 <code>Chromium 148</code> 的版本徽章</b>
+  （而当时内核早已滚到 152），并写着 <code>M1~M3 device-verified</code> 这个久已过期的里程碑状态。
+  <p>🔴 <b>为什么没人发现</b>：本文里有一个**真的 NUL 字节**（一段 Kotlin 示例里
+  一处字符串 trim 调用 的转义被吃成了控制字符）⇒ 基于文本的工具把整份文件当成二进制、
+  <b>静默跳过</b>；而查"文档写死版本号"的那道闸当时只抓完整版本号
+  （<code>148.0.7827.54</code>），抓不到裸的 <code>Chromium 148</code>。
+  <b>两个洞叠在一起，让一份顶着旧版本号的现役对接文档一直报绿。</b>
+  两处当天都修了（NUL 还原 + 闸扩到裸大版本号）。</p>
+  <p>⇒ <b>版本号一律看 <code>docs/canonical-paths.md</code> 顶部四标记</b>
+  （<code>ACTIVE-VERSION</code> / <code>ROLL-TARGET</code> / <code>ACCEPTED-&lt;端&gt;</code>）。
+  本文正文只讲<b>怎么接</b>，不再抄版本。</p>
+  <p>⚠ 本文其余部分（工具链要求 / AAR 怎么引 / 初始化序列 / 运行时资产 / Manifest / 打包）
+  <b>仍然作数</b> —— 那些是结构，与 chromium 版本无关。</p>
+  <p>🔴 <b>但下面能力表里那批 <code>device-verified</code> 徽章要按"旧版本时代的验证结果"读</b>：
+  按本文图例，它的含义是"在真实 Pixel 7 设备上运行并人工验证通过"，
+  而那些验证做于 <b>148/149 时代</b>，<b>152 上没有逐条重验过</b>。
+  能力本身大概率还在（那些是结构性的 JNI 通路），但<b>"验过"这个状态是旧的</b>。
+  ⇒ 要判断某个能力**现在**有没有、验没验，看
+  <code>docs/kernel-status/</code> 的实况镜像页（那几页读交付件现测），别读本表的徽章。</p>
+</div>
+
+<!-- ═══════ 1. 概述 ═══════ -->
+<section id="overview" class="anchor-target">
+<h2>1. 项目概述 &amp; 架构</h2>
+
+<p><code>arupa-kernel.aar</code> 是 Chromium 魔改内核的 Android 交付包（<b>chromium 大版本以 <code>docs/canonical-paths.md</code> 顶部四标记为准，本文不抄</b>），核心类 <code>co.arupa.kernel.ChromiumWebView</code>。<strong>不是</strong> <code>android.webkit.WebView</code> 的子类，是 <code>content_public.browser.WebContents</code> 的薄 Java 封装，继承 <code>FrameLayout</code>。</p>
+
+<h3>双通道架构（必读）</h3>
+<p>内核对接面有两条互补通道，区分清楚再动手：</p>
+<table>
+<thead><tr><th>通道</th><th>是什么</th><th>适合场景</th><th>NomadBrowser 实际用法</th></tr></thead>
+<tbody>
+<tr><td><strong>ChromiumWebView JNI</strong>（本文档主体）</td><td>进程内 Java→JNI→native，同步</td><td>View 实例化/渲染/生命周期、per-tab 代理身份、WebViewClient 等价回调</td><td><code>setProxy</code>、导航/对话框/认证/下载/find/状态序列化 等</td></tr>
+<tr><td><strong>CDP bridge（#217 NativeBridge over ADP）</strong></td><td>加密 socket 控制面，异步</td><td>远程 agent 遥控：UA 覆盖、Cookie、请求拦截/改写、JS eval、截图</td><td>远程场景保留；in-app 走 JNI 替代</td></tr>
+</tbody>
+</table>
+
+<div class="callout info">
+  <b>选路口诀：</b>
+  <p>状态机 / 渲染 / 生命周期 / per-tab 代理身份 → <strong>JNI</strong></p>
+  <p>远程 agent 遥控 / UA / Cookie / 网络拦截 / eval / 截图 → <strong>CDP</strong></p>
+  <p>#231/#232/#233/#234/#235 已将 WebViewClient 全套 + UA/Cookie/拦截 JNI 化，in-app 脱离 CDP。CDP 仍是远程 agent 场景备用。</p>
+</div>
+
+<h3>关键差异（迁移前必知）</h3>
+<ul>
+  <li>没有 <code>WebViewClient</code>/<code>WebChromeClient</code>，改用 <code>ChromiumWebView.Client</code> 接口（语义等价）。</li>
+  <li>Cookie/存储是 <strong>per-partition（每 View 实例独立 StoragePartition）</strong>，不是全局 <code>CookieManager</code>。</li>
+  <li>多了 <code>setProxy</code>/<code>setTransportRoute</code>/<code>setPendingIdentity</code> 等内核特权 API。</li>
+  <li><strong>⚠️ 禁忌</strong>：in-process chromium 内核与系统 <code>android.webkit.WebView</code> <strong>不能同进程</strong>（JNI_OnLoad 时 SIGTRAP）。同一进程二选一。</li>
+  <li>迁移建议：<strong>B 方案并行宿主</strong>（与 AOSP WebView 共存灰度切），不一次性替换所有 controller。</li>
+</ul>
+</section>
+
+<!-- ═══════ 2. 工具链 ═══════ -->
+<section id="toolchain" class="anchor-target">
+<h2>2. 工具链硬要求（铁律）</h2>
+<div class="callout bad">
+  <b>🔴 以下版本不可降级，否则渲染即 fatal</b>
+  <p>内核 AAR M2 铁律，低于任一项会在运行时出现 <code>NoSuchMethodError</code> 或编译链级联报错。</p>
+</div>
+<table>
+<thead><tr><th>项目</th><th>要求版本</th><th>原因</th></tr></thead>
+<tbody>
+<tr><td>Android Gradle Plugin (AGP)</td><td><strong>8.9.1</strong></td><td><code>androidx.core 1.18</code> AAR-metadata 强制</td></tr>
+<tr><td>Gradle</td><td><strong>8.11.1</strong></td><td>AGP 8.9.1 依赖</td></tr>
+<tr><td><code>compileSdk</code></td><td><strong>36</strong></td><td>内核用 API 36</td></tr>
+<tr><td><code>minSdk</code></td><td><strong>26</strong></td><td>内核最低要求</td></tr>
+<tr><td><code>androidx.core</code></td><td><strong>1.18.0</strong>（+ <code>resolutionStrategy.force</code>）</td><td>自 chromium 148 起用 <code>setExpandedState(int)</code>（这是<b>起始版本</b>，不是当前版本）；低于 1.18 → 渲染时 <code>NoSuchMethodError</code> fatal</td></tr>
+<tr><td>Kotlin 编译器</td><td><strong>2.0.21</strong></td><td>androidx 1.18 拉 stdlib 2.1.20 metadata 2.1.0；旧版编译器读不了 → 全 stdlib 调用级联 unresolved</td></tr>
+<tr><td>Kotlin 编译参数</td><td><code>-Xskip-metadata-version-check</code></td><td>内核 aar 的 <code>co.arupa.*</code> metadata 2.4.0，须 skip-check</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-kotlin">// build.gradle (app)
+android {
+    compileSdk 36
+    defaultConfig { minSdk 26 }
+}
+dependencies {
+    implementation("androidx.core:core-ktx:1.18.0")
+}
+configurations.all {
+    resolutionStrategy.force("androidx.core:core:1.18.0")
+    resolutionStrategy.force("androidx.core:core-ktx:1.18.0")
+}
+// build.gradle (module) kotlin 编译参数
+tasks.withType&lt;KotlinCompile&gt; {
+    kotlinOptions.freeCompilerArgs += listOf("-Xskip-metadata-version-check")
+}</code></pre>
+
+<p>升级脚本：<code>tools/arupa-toolchain-bump.py</code>（幂等，可重复运行）。</p>
+</section>
+
+<!-- ═══════ 3. AAR 引入 ═══════ -->
+<section id="aar-embed" class="anchor-target">
+<h2>3. AAR 引入方式</h2>
+<p>将 <code>arupa-kernel.aar</code> 放置到 <code>app/libs/</code> 目录，然后在 <code>build.gradle</code> 中引用：</p>
+<pre><code class="language-groovy">// build.gradle (app)
+repositories {
+    flatDir { dirs("libs") }
+}
+dependencies {
+    implementation(fileTree(dir: "libs", include: ["*.aar"]))
+    // 或显式:
+    // implementation(files("libs/arupa-kernel.aar"))
+}
+
+android {
+    // 运行时资产不能压缩（必须，否则 ICU 初始化崩）
+    androidResources {
+        noCompress("dat", "bin", "pak", "apk")
+    }
+    // packaging 去重（见第 7 章）
+    packaging {
+        resources {
+            excludes += listOf(
+                "META-INF/*.kotlin_module",
+                "META-INF/MANIFEST.MF",
+                "META-INF/versions/**",
+                "META-INF/*.proto",
+                "DebugProbesKt.bin"
+            )
+        }
+    }
+}</code></pre>
+
+<div class="callout warn">
+  <b>⚠️ guava / jspecify 排除规则注意</b>
+  <p>AAR 内部 bundle 了 <code>com.google.common</code> / <code>jspecify</code>。若要排除，<strong>只排 compile/runtime，不排 annotationProcessor</strong>——全排会导致 AP <code>NoClassDefFoundError com.google.common.collect.Sets</code>。</p>
+</div>
+
+<h3>VendorAuthn 授权</h3>
+<p>内核特权 API（<code>setProxy</code>/<code>setTransportRoute</code>/<code>setPendingIdentity</code> 等）需要 vendor 包名 + 证书授信。对接阶段内核侧会将你的包名加入 <code>VendorAuthn.TRUSTED_VENDOR_IDS</code>，重编 AAR 交付。生产环境切为 cert hash 验证。</p>
+<p>未授信 vendor 调特权 API = <strong>静默 no-op</strong>（不抛异常），若调用没生效先检查 VendorAuthn 配置。</p>
+<p>开发机 <code>com.example.kernelapp</code> 已硬编为可信，可直接测试。</p>
+</section>
+
+<!-- ═══════ 4. 初始化序列 ═══════ -->
+<section id="init" class="anchor-target">
+<h2>4. 初始化序列（生命周期）</h2>
+
+<div class="callout bad">
+  <b>🔴 子进程守卫必做</b>
+  <p>chromium 子进程（<code>:sandboxed_processN</code> / <code>:privileged_processN</code>）<strong>只做</strong> <code>ArupaKernel.loadNativeLib()</code> 然后 return，不能走完整 <code>initialize</code>。AAR 不内嵌 <code>NativeLibraries</code>，子进程不自 load 会出 <code>UnsatisfiedLinkError</code>。</p>
+</div>
+
+<pre><code class="language-kotlin">// ① Application.onCreate —— 主进程一次性初始化（放任何 Activity 之前）
+class MyApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        if (isMainProcess()) {
+            // 主进程：完整初始化（加载 libarupakernel.so + 资源）
+            ArupaKernel.initialize(this)
+        } else {
+            // chromium 子进程：只加载 native lib，其余跳过
+            ArupaKernel.loadNativeLib()
+            return
+        }
+        // 主进程后续初始化...
+    }
+
+    private fun isMainProcess(): Boolean {
+        // 读 /proc/self/cmdline，首段 == packageName = 主进程
+        val cmdline = File("/proc/self/cmdline").readText().trim('\0')
+        return cmdline == packageName
+    }
+}
+
+// ② 每个 WebView 实例（Activity 内）
+val web = ChromiumWebView(activity)  // 单 Context 参数；内部自建 WindowAndroid
+setContentView(web)                    // 或 container.addView(web)
+web.loadUrl("https://example.com")
+
+// ③ 销毁（Activity.onDestroy，必调）
+web.destroy()  // 否则 WebContents 泄漏</code></pre>
+
+<h3>进程架构</h3>
+<p>内核启动后产生三类进程：</p>
+<ul>
+  <li><strong>browser 进程</strong>：你的 Application 主进程，运行 <code>ArupaKernel.initialize()</code>。</li>
+  <li><strong>privileged_process</strong>：GPU / 网络服务进程（5 个，需 Manifest 声明）。</li>
+  <li><strong>sandboxed_process</strong>：renderer 沙箱进程（40 个，需 Manifest 声明）。</li>
+</ul>
+</section>
+
+<!-- ═══════ 5. 运行时资产 ═══════ -->
+<section id="assets" class="anchor-target">
+<h2>5. 运行时资产（AAR 不含，必须手动拷）</h2>
+
+<div class="callout bad">
+  <b>🔴 缺少任一资产将在启动时 SIGTRAP（ice_util.cc CHECK 或 pak 加载失败）</b>
+</div>
+
+<p>从 chromium <code>out/</code> 构建目录拷以下 4 个文件到 <code>app/src/main/assets/</code>：</p>
+<table>
+<thead><tr><th>文件名</th><th>大小参考</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>icudtl.dat</code></td><td>~9.3 MB</td><td>ICU 数据文件（国际化，<strong>不可压缩</strong>）</td></tr>
+<tr><td><code>arupa_kernel.pak</code></td><td>—</td><td>资源 pak（content_shell.pak 改名）</td></tr>
+<tr><td><code>snapshot_blob_64.bin</code></td><td>—</td><td>V8 快照（arm64）</td></tr>
+<tr><td><code>v8_context_snapshot_64.bin</code></td><td>—</td><td>V8 Context 快照（arm64）</td></tr>
+</tbody>
+</table>
+
+<p><strong>noCompress 配置</strong>（<code>build.gradle</code> 中，见第 3 章）必须存在，否则 <code>icu_util.cc:232 Invalid fd → SIGTRAP</code>。</p>
+</section>
+
+<!-- ═══════ 6. Manifest ═══════ -->
+<section id="manifest" class="anchor-target">
+<h2>6. AndroidManifest 进程声明</h2>
+
+<p>内核子进程的 Service 类在 AAR <code>classes.jar</code> 中，但<strong>消费端 Manifest 必须逐字声明</strong>：40 个 sandboxed + 5 个 privileged chromium child-process service，以及 2 个 <code>NUM_*_SERVICES</code> meta-data。</p>
+
+<div class="callout info">
+  <b>💡 自动化工具</b>
+  <p>使用内核提供的脚本 <code>tools/arupa-kernel-manifest-patch.py</code> 自动向 <code>AndroidManifest.xml</code> 注入所有声明，无需手写 45 个 service 条目。</p>
+</div>
+
+<pre><code class="language-xml">&lt;!-- AndroidManifest.xml 片段示例（由工具生成，此处仅示意结构） --&gt;
+&lt;manifest&gt;
+    &lt;!-- NUM_*_SERVICES meta-data --&gt;
+    &lt;meta-data android:name="org.chromium.content.browser.NUM_SANDBOXED_SERVICES"
+               android:value="40" /&gt;
+    &lt;meta-data android:name="org.chromium.content.browser.NUM_PRIVILEGED_SERVICES"
+               android:value="5" /&gt;
+
+    &lt;!-- sandboxed 子进程（0~39，service0 含 useAppZygote）--&gt;
+    &lt;service android:name="org.chromium.content.app.SandboxedProcessService0"
+             android:process=":sandboxed_process0"
+             android:isolatedProcess="true"
+             android:useAppZygote="true"
+             android:exported="false" /&gt;
+    &lt;!-- ... service1 ~ service39 ... --&gt;
+
+    &lt;!-- privileged 子进程（0~4）--&gt;
+    &lt;service android:name="org.chromium.content.app.PrivilegedProcessService0"
+             android:process=":privileged_process0"
+             android:exported="false" /&gt;
+    &lt;!-- ... service1 ~ service4 ... --&gt;
+&lt;/manifest&gt;</code></pre>
+</section>
+
+<!-- ═══════ 7. Packaging 坑 ═══════ -->
+<section id="packaging" class="anchor-target">
+<h2>7. Packaging 注意（FB-A002 现场教训）</h2>
+
+<p>当前已知 AAR（<code>528d43bf</code> 版本）存在 packaging 问题，内核侧正在修复中（见 <a href="#fb-a002">FB-A002</a>）。</p>
+
+<h3>应对策略</h3>
+<ol>
+  <li><strong>使用旧版 AAR（<code>7776c3ce</code>）</strong>直到新版修复发布，日常开发不受阻塞。</li>
+  <li>升级新 AAR 后若遇到 <code>DuplicateRelativeFile</code> 错误，按下列配置排除：</li>
+</ol>
+
+<pre><code class="language-groovy">// build.gradle (app) — packaging 去重
+android {
+    packaging {
+        resources {
+            excludes += listOf(
+                "META-INF/*.kotlin_module",
+                "META-INF/MANIFEST.MF",
+                "META-INF/versions/**",
+                "META-INF/*.proto",
+                "DebugProbesKt.bin"
+            )
+        }
+    }
+    // 若遇 Material class duplicate，暂时排除（详见 FB-A002 最终修复方案）
+    // configurations.all {
+    //     exclude group: "com.google.android.material", module: "material"
+    // }
+    // 注意：全排 Material 会破坏内核内部引用，等内核侧 compileOnly 方案修复后再用
+}
+</code></pre>
+</section>
+
+<!-- ═══════ 8. JNI vs CDP 架构 ═══════ -->
+<section id="arch-jni-cdp" class="anchor-target">
+<h2>8. 架构：JNI vs CDP 决策矩阵（审计结论 2026-06-02）</h2>
+
+<p>以下是 NomadBrowser 实际走哪条通道的审计结论：</p>
+<table>
+<thead><tr><th>能力</th><th>通道</th><th>状态</th><th>备注</th></tr></thead>
+<tbody>
+<tr><td>页面事件（started/finished/progress/title/error）</td><td>JNI</td><td><span class="pill ok">device-verified</span></td><td>#231</td></tr>
+<tr><td>JS 对话框（alert/confirm/prompt）</td><td>JNI</td><td><span class="pill ok">device-verified</span></td><td>#232</td></tr>
+<tr><td>HTTP 认证</td><td>JNI</td><td><span class="pill ok">device-verified</span></td><td>#232</td></tr>
+<tr><td>下载</td><td>JNI</td><td><span class="pill ok">device-verified</span></td><td>#232</td></tr>
+<tr><td>UA 覆盖</td><td>JNI（主路）/ CDP（远程）</td><td><span class="pill ok">device-verified</span></td><td>#233 <code>setUserAgent()</code></td></tr>
+<tr><td>Cookie 增删查</td><td>JNI（主路）/ CDP（远程）</td><td><span class="pill ok">device-verified</span></td><td>#233 per-partition</td></tr>
+<tr><td>摄像头/麦克风权限</td><td>JNI</td><td><span class="pill ok">device-verified</span></td><td>#233</td></tr>
+<tr><td>favicon</td><td>JNI</td><td><span class="pill ok">device-verified</span></td><td>#233，传 URL 非 Bitmap</td></tr>
+<tr><td>导航拦截（shouldOverrideUrlLoading）</td><td>JNI（ArupaNavigationThrottle）</td><td><span class="pill ok">device-verified</span></td><td>#234</td></tr>
+<tr><td>资源拦截/改写（shouldInterceptRequest）</td><td>JNI（ArupaProxyingURLLoaderFactory）</td><td><span class="pill ok">device-verified</span></td><td>#235，IO 线程</td></tr>
+<tr><td>per-tab 代理</td><td>JNI（特权）</td><td><span class="pill ok">device-verified</span></td><td><code>setProxy</code></td></tr>
+<tr><td>文件上传/全屏</td><td>JNI</td><td><span class="pill info">C（符号已接线）</span></td><td>需真实手势触发</td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ═══════ 9. API 参考 ═══════ -->
+<section id="api-nav" class="anchor-target">
+<h2>9. API 参考</h2>
+
+<h3 id="api-nav-inner">9.1 导航 / 加载</h3>
+<table>
+<thead><tr><th>方法</th><th>WebView 等价</th><th>授权</th><th>验证</th></tr></thead>
+<tbody>
+<tr><td><code>loadUrl(String)</code></td><td><code>loadUrl</code></td><td>开放</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>loadDataWithBaseURL(baseUrl, data, mime, encoding, historyUrl)</code></td><td>同名</td><td>开放</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>reload()</code></td><td><code>reload</code></td><td>开放</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>stopLoading()</code></td><td><code>stopLoading</code></td><td>开放</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>canGoBack()</code> / <code>goBack()</code></td><td>同名</td><td>开放</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>canGoForward()</code> / <code>goForward()</code></td><td>同名</td><td>开放</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>clearHistory()</code></td><td><code>clearHistory</code></td><td>开放</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>isLoading()</code></td><td>（近似 progress&lt;100）</td><td>开放</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>getUrl()</code></td><td><code>getUrl</code></td><td>开放</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>getTitle()</code></td><td><code>getTitle</code></td><td>开放</td><td><span class="pill ok">D</span></td></tr>
+</tbody>
+</table>
+
+<h3 id="api-state">9.2 状态序列化（tab 持久化 / 进程重建）</h3>
+<table>
+<thead><tr><th>方法</th><th>WebView 等价</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>byte[] saveState()</code></td><td><code>saveState(Bundle)</code></td><td>返 null = 无历史/未就绪。内核格式（非 AOSP Bundle）</td></tr>
+<tr><td><code>boolean restoreState(byte[])</code></td><td><code>restoreState(Bundle)</code></td><td>须在 WebContents 就绪后调用。单页约 1.5 KB，多页线性增长</td></tr>
+</tbody>
+</table>
+
+<h3 id="api-client">9.3 Client 回调（WebViewClient / WebChromeClient 等价）</h3>
+<p>通过 <code>setClient(Client)</code> 注册（null 清除）。<code>Client</code> 接口全部方法有 default 空实现，按需 override。</p>
+
+<h4>页面 / 导航事件</h4>
+<table>
+<thead><tr><th>回调</th><th>WebView 等价</th><th>验证</th></tr></thead>
+<tbody>
+<tr><td><code>onPageStarted(url)</code></td><td><code>onPageStarted</code></td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>onPageFinished(url)</code></td><td><code>onPageFinished</code></td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>onLoadProgressChanged(int 0..100)</code></td><td><code>onProgressChanged</code></td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>onReceivedTitle(title)</code></td><td><code>onReceivedTitle</code></td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>onReceivedError(failingUrl, errorCode)</code></td><td><code>onReceivedError</code>（errorCode=net error 负值）</td><td><span class="pill info">C</span></td></tr>
+<tr><td><code>onRenderProcessGone()</code></td><td><code>onRenderProcessGone</code></td><td><span class="pill info">C</span></td></tr>
+<tr><td><code>onSslStateChanged()</code></td><td>（锁图标刷新时机）</td><td><span class="pill info">C</span></td></tr>
+<tr><td><code>onOpenNewWindow(url)</code></td><td><code>onCreateWindow</code></td><td><span class="pill info">C</span></td></tr>
+<tr><td><code>onShowFullscreen()</code> / <code>onHideFullscreen()</code></td><td><code>onShowCustomView</code></td><td><span class="pill info">C</span></td></tr>
+</tbody>
+</table>
+
+<h4>JS 对话框</h4>
+<table>
+<thead><tr><th>回调</th><th>WebView 等价</th><th>验证</th></tr></thead>
+<tbody>
+<tr><td><code>onJsAlert(url, message, JsResult)</code></td><td><code>WebChromeClient.onJsAlert</code></td><td><span class="pill ok">D (#232)</span></td></tr>
+<tr><td><code>onJsConfirm(url, message, JsResult)</code></td><td><code>onJsConfirm</code></td><td><span class="pill ok">D (#232)</span></td></tr>
+<tr><td><code>onJsPrompt(url, message, defaultValue, JsPromptResult)</code></td><td><code>onJsPrompt</code></td><td><span class="pill ok">D (#232)</span></td></tr>
+<tr><td><code>onJsBeforeUnload(url, JsResult)</code></td><td><code>onJsBeforeUnload</code></td><td><span class="pill info">C</span></td></tr>
+</tbody>
+</table>
+
+<div class="callout warn">
+  <b>⚠️ HTTP 认证铁律：</b>
+  <p><code>HttpAuthHandler.proceed()</code>/<code>cancel()</code> 可在 <code>onReceivedHttpAuthRequest</code> 内<strong>同步调用</strong>（内核已 PostTask 到下个事件循环，避免 LoginDelegate 重入 CHECK → SIGTRAP，#232 device 实证此坑）。JS 对话框 result 同理可同步应答。</p>
+</div>
+
+<h4>其他回调</h4>
+<table>
+<thead><tr><th>回调</th><th>WebView 等价</th><th>验证</th></tr></thead>
+<tbody>
+<tr><td><code>onReceivedHttpAuthRequest(HttpAuthHandler, host, realm)</code></td><td>同名</td><td><span class="pill ok">D (#232)</span></td></tr>
+<tr><td><code>onGeolocationPermissionsShowPrompt(origin, GeolocationCallback)</code></td><td>同名</td><td><span class="pill ok">D (#232)</span></td></tr>
+<tr><td><code>onPermissionRequest(origin, audio, video, PermissionRequestCallback)</code></td><td>同名（摄像头/麦克风）</td><td><span class="pill ok">D (#233)</span></td></tr>
+<tr><td><code>onDownloadStart(url, ua, contentDisposition, mime, contentLength)</code></td><td><code>DownloadListener.onDownloadStart</code></td><td><span class="pill ok">D (#232)</span></td></tr>
+<tr><td><code>onFindResult(active, total, isDoneCounting)</code></td><td><code>setFindListener</code></td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>onShowFileChooser(requestId, acceptTypes[], mode)</code></td><td><code>onShowFileChooser</code></td><td><span class="pill info">C</span></td></tr>
+<tr><td><code>onReceivedIcon(iconUrl)</code></td><td>同名（传 URL 非 Bitmap）</td><td><span class="pill ok">D (#233)</span></td></tr>
+</tbody>
+</table>
+
+<h4>导航拦截 &amp; 资源拦截</h4>
+<table>
+<thead><tr><th>回调</th><th>说明</th><th>验证</th></tr></thead>
+<tbody>
+<tr><td><code>shouldOverrideUrlLoading(url, isMainFrame, isRedirect, hasGesture)</code></td><td>返回 <code>true</code> = 取消导航。仅主框架 + renderer-initiated 触发（链接/JS 跳转/服务器重定向），不拦 App 自身 <code>loadUrl</code></td><td><span class="pill ok">D (#234)</span></td></tr>
+<tr><td><code>shouldInterceptRequest(url, method, isForMainFrame, headers)</code></td><td>返回 <code>ArupaWebResourceResponse</code> 替换响应；返回 <code>null</code> 放行。<strong>⚠️ 在网络 IO 线程调用，必须线程安全+快速返回</strong></td><td><span class="pill ok">D (#235)</span></td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-kotlin">// shouldInterceptRequest 典型用法
+web.setClient(object : ChromiumWebView.Client {
+    override fun shouldInterceptRequest(
+        url: String, method: String,
+        isForMainFrame: Boolean, headers: String
+    ): ArupaWebResourceResponse? {
+        // 注意：IO 线程，不可操作 UI，不可长时阻塞
+        if (url.startsWith("myapp://")) {
+            val body = handleAppScheme(url)
+            return ArupaWebResourceResponse(
+                mime = "text/html",
+                encoding = "utf-8",
+                status = 200,
+                headers = null,
+                body = body
+            )
+        }
+        return null  // 放行
+    }
+})</code></pre>
+
+<h3 id="api-find">9.4 页内查找</h3>
+<table>
+<thead><tr><th>方法</th><th>WebView 等价</th><th>验证</th></tr></thead>
+<tbody>
+<tr><td><code>findAllAsync(String)</code></td><td><code>findAllAsync</code></td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>findNext(boolean forward)</code></td><td><code>findNext</code></td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>clearMatches()</code></td><td><code>clearMatches</code></td><td><span class="pill ok">D</span></td></tr>
+</tbody>
+</table>
+<div class="callout warn">
+  <b>⚠️ 已知差异：</b>find 不索引 <code>loadDataWithBaseURL</code> 合成页文本（返回 0/0），真实 HTTP 页正常。
+</div>
+
+<h3 id="api-js">9.5 JS 桥 / eval</h3>
+<table>
+<thead><tr><th>方法</th><th>WebView 等价</th><th>验证</th></tr></thead>
+<tbody>
+<tr><td><code>addJavascriptInterface(obj, name, requiredAnnotation)</code></td><td><code>addJavascriptInterface</code></td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>removeJavascriptInterface(name)</code></td><td>同名</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>evaluateJavascript(script, Consumer&lt;String&gt; cb)</code></td><td>同名</td><td><span class="pill ok">D</span></td></tr>
+</tbody>
+</table>
+<ul>
+  <li><code>requiredAnnotation</code> 传 <code>JavascriptInterface::class.java</code>（仅暴露带注解方法）或 <code>null</code>（暴露全部 public 方法）。</li>
+  <li>注入在<strong>下次导航</strong>生效（先 add 再 navigate/reload）。</li>
+  <li><code>evaluateJavascript</code> 须主线程调；结果是 JSON 编码字符串。</li>
+</ul>
+
+<h3 id="api-prefs">9.6 WebPreferences（per-tab）</h3>
+<table>
+<thead><tr><th>方法</th><th>WebView 等价</th><th>验证</th></tr></thead>
+<tbody>
+<tr><td><code>setWebPrefs(Boolean forceDark, loadImages, javascript, domStorage, multipleWindows)</code></td><td><code>WebSettings</code> 多项</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>setForceDark(boolean)</code></td><td><code>setForceDark</code> / algorithmic darkening</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>setLoadImages(boolean)</code></td><td><code>setLoadsImagesAutomatically</code></td><td><span class="pill ok">D</span></td></tr>
+</tbody>
+</table>
+<p>每参为 <code>@Nullable Boolean</code>：null = 保持内核默认，true/false = 覆盖。</p>
+
+<h3 id="api-priv">9.7 内核特权 API（VendorAuthn 门控）</h3>
+<div class="callout bad">
+  <b>🔴 代理 URL 铁律：</b>
+  <p>用干净 <code>socks5://host:port</code>，<strong>不要拼 <code>cred@host</code></strong>——chromium net 栈不支持 SOCKS5 用户名密码认证，解析失败会回落直连，泄漏真实 IP。SOCKS inbound 须配置 noauth。</p>
+</div>
+<table>
+<thead><tr><th>方法</th><th>作用</th><th>验证</th></tr></thead>
+<tbody>
+<tr><td><code>setProxy(String?)</code></td><td>per-tab 代理（<code>socks5://host:port</code>，null/空=直连）</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>setTransportRoute(socksEndpoint, String[] managedHosts)</code></td><td>split-tunnel：名单内走代理，名单外 DIRECT</td><td><span class="pill ok">D (#229)</span></td></tr>
+<tr><td><code>setPendingProxy(String?)</code></td><td>首次导航<strong>前</strong>预置代理（避首导航直连泄漏）</td><td><span class="pill ok">D</span></td></tr>
+<tr><td><code>setPendingIdentity(String? json)</code></td><td>首次导航前预置 per-tab 指纹身份</td><td><span class="pill ok">D</span></td></tr>
+</tbody>
+</table>
+
+<h3 id="api-cookie-ua">9.8 UA / Cookie（#233，JNI 直路）</h3>
+<table>
+<thead><tr><th>方法</th><th>WebView 等价</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>setUserAgent(String?)</code></td><td><code>WebSettings.setUserAgentString</code></td><td>下次导航生效（设完通常 <code>reload()</code>）</td></tr>
+<tr><td><code>getCookies(url, Consumer&lt;String&gt;)</code></td><td><code>CookieManager.getCookie</code></td><td>异步回 <code>"name=value; name2=value2"</code></td></tr>
+<tr><td><code>setCookie(url, cookieLine)</code></td><td><code>CookieManager.setCookie</code></td><td>per-partition，非全局</td></tr>
+<tr><td><code>removeAllCookies()</code></td><td><code>CookieManager.removeAllCookies</code></td><td></td></tr>
+<tr><td><code>flushCookies()</code></td><td><code>CookieManager.flush</code></td><td></td></tr>
+</tbody>
+</table>
+<p>Cookie 是 <strong>per-view（per-partition）</strong>，不是全局。</p>
+</section>
+
+<!-- ═══════ 10. 典型用法 ═══════ -->
+<section id="usage" class="anchor-target">
+<h2>10. 典型用法示例</h2>
+
+<pre><code class="language-kotlin">// 完整 Client 回调注册示例
+web.setClient(object : ChromiumWebView.Client {
+    override fun onPageStarted(url: String) {
+        addressBar.setLoading(url)
+    }
+    override fun onPageFinished(url: String) {
+        addressBar.setDone(url)
+    }
+    override fun onLoadProgressChanged(p: Int) {
+        progressBar.progress = p
+    }
+    override fun onReceivedTitle(t: String) {
+        tab.title = t
+    }
+    override fun onReceivedError(u: String, code: Int) {
+        showErrorPage(u, code)
+    }
+    override fun onRenderProcessGone() {
+        // 必须处理：重建 view
+        recreateWebView()
+    }
+    override fun onShowFullscreen() { enterImmersive() }
+    override fun onHideFullscreen() { exitImmersive() }
+    override fun onOpenNewWindow(url: String) { openTab(url) }
+    override fun onFindResult(active: Int, total: Int, done: Boolean) {
+        findBar.show(active, total)
+    }
+    override fun onShowFileChooser(id: Int, types: Array&lt;String&gt;, mode: Int) {
+        pickFiles(types, mode) { paths ->
+            web.onFileChooserResult(id, paths)  // 取消传 null
+        }
+    }
+    override fun onDownloadStart(
+        url: String, ua: String, cd: String, mime: String, len: Long
+    ) {
+        downloadEngine.enqueue(url, mime, cd, len)  // 内核已拦截，App 自管下载
+    }
+    override fun onJsAlert(url: String, message: String, result: JsResult) {
+        showAlert(message) { result.confirm() }
+    }
+    override fun onReceivedHttpAuthRequest(
+        handler: HttpAuthHandler, host: String, realm: String
+    ) {
+        showAuthDialog(host, realm) { user, pass ->
+            handler.proceed(user, pass)  // 可同步调用，内核已规避重入 SIGTRAP
+        }
+    }
+})
+
+// JS 桥注入（先 add 后 navigate）
+web.addJavascriptInterface(object {
+    @JavascriptInterface fun token() = session.token
+}, "NomadBridge", JavascriptInterface::class.java)
+web.loadUrl("nomad://home")
+
+// 首导航前预置代理+指纹（防泄漏）
+web.setPendingProxy("socks5://127.0.0.1:1080")
+web.setPendingIdentity(identityJson)
+web.loadUrl("https://example.com")
+
+// split-tunnel（FB-A001 修复后须升级到 528d43bf+ AAR）
+web.setTransportRoute(
+    "socks5://127.0.0.1:55087",
+    arrayOf("api.example.com", "*.example.com")
+)
+
+// tab 状态持久化
+val blob = web.saveState()
+prefs.putBytes("tab_state", blob)
+// 恢复
+web.restoreState(prefs.getBytes("tab_state"))</code></pre>
+</section>
+
+<!-- ═══════ 11. FB-A001 ═══════ -->
+<section id="fb-a001" class="anchor-target">
+<h2>11. FB-A001：setTransportRoute 无效 / pending 兜底缺失</h2>
+
+<p><strong>状态：</strong><span class="pill ok">已修复（内核侧 528d43bf）</span><span class="pill warn">对接侧升级被 FB-A002 阻塞中</span></p>
+
+<h3>根因</h3>
+<p><code>ChromiumWebView(Context)</code> 构造函数<strong>不创建 WebContents</strong>（延迟到首次导航），<code>mWebContents</code> 初始为 null。旧版 <code>setTransportRoute</code> 的 Java 字节码在 <code>mWebContents==null</code> 时直接 return，无 pending 兜底字段（对比 <code>setPendingProxy</code> 有 <code>mPendingProxyUrl</code>），导致调用被静默丢弃。</p>
+
+<h3>修复内容（AAR 528d43bf）</h3>
+<ul>
+  <li>新增 <code>mPendingTransportEndpoint</code> / <code>mPendingTransportHosts</code> 字段（对称 <code>mPendingProxyUrl</code>）。</li>
+  <li><code>setTransportRoute</code> 无条件存 pending，再 <code>if mWebContents!=null</code> 立即 apply。</li>
+  <li><code>initFromNativeWebContents</code>（WebContents 就绪时）自动 re-apply pending，在首次 loadUrl 前生效。</li>
+</ul>
+
+<h3>对接侧行动</h3>
+<ul>
+  <li>等 FB-A002 内核侧修复后升级到新 AAR（sha <code>528d43bf…</code>）。</li>
+  <li>NomadBrowser 的 <code>setTransportRoute</code> 调用<strong>一行不用改</strong>，pending 兜底自动覆盖时序问题。</li>
+  <li>可去掉 <code>setPendingProxy</code> 全局兜底，改回真正的 split-tunnel。</li>
+</ul>
+
+<h3>临时规避（旧 AAR 期间）</h3>
+<pre><code class="language-kotlin">// 临时：用 setPendingProxy 全局兜底替代 setTransportRoute
+// 对接侧 ChromiumProxyPrefs commit 5e054b1 已实现
+web.setPendingProxy("socks5://127.0.0.1:55087")
+// 升级新 AAR 后改回：
+// web.setTransportRoute("socks5://127.0.0.1:55087", arrayOf("api.example.com"))
+</code></pre>
+</section>
+
+<!-- ═══════ 12. FB-A002 ═══════ -->
+<section id="fb-a002" class="anchor-target">
+<h2>12. FB-A002：新 AAR 528d43bf packaging 冲突</h2>
+
+<p><strong>状态：</strong><span class="pill bad">OPEN（P0 阻塞器）</span><span class="pill info">内核侧修复中</span></p>
+
+<h3>问题描述</h3>
+<p>升级到新 AAR（<code>528d43bf</code>）后 build fail，两阶段错误：</p>
+
+<h4>错误 1：res/values 跨文件 attr 重复声明</h4>
+<pre><code>:app:mergeDebugResources
+ERROR: [attr/cornerRadius] attrs_4.xml [attr/cornerRadius] values_13.xml: Duplicate resources
+ERROR: [attr/chipStrokeColor] attrs_4.xml [attr/chipStrokeColor] values_13.xml: Duplicate resources
+ERROR: [attr/chipStyle] attrs_4.xml [attr/chipStyle] values_13.xml: Duplicate resources
+... (共 8 个 attr Duplicate)</code></pre>
+
+<h4>错误 2：Material 库 class 重复</h4>
+<pre><code>:app:checkDebugDuplicateClasses
+Duplicate class com.google.android.material.transition.platform.MaterialSharedAxis
+  found in: arupa-kernel.aar / material-1.11.0.aar
+... (共 ~14 个)</code></pre>
+
+<h3>内核侧预期修复方向</h3>
+<ul>
+  <li><strong>res 问题</strong>：AAR ship 时跑 <code>aapt2 link</code> 去重，或改为 ref-only attr 引用（<code>&lt;attr name="X"/&gt;</code> 不带 format）。</li>
+  <li><strong>Material class 问题</strong>：将 <code>com.google.android.material:material</code> 改为 <code>compileOnly</code> 依赖，不打进 <code>classes.jar</code>。</li>
+</ul>
+
+<h3>验证标准</h3>
+<p>NomadBrowser 端<strong>零修改</strong>（含 <code>build.gradle</code> 仍依赖 <code>com.google.android.material:material:1.11.0</code>）<code>./gradlew :app:assembleDebug</code> 一次通过，APK 装机 cold start 不 crash。</p>
+</section>
+
+<!-- ═══════ 13. 其他已知限制 ═══════ -->
+<section id="known-limits" class="anchor-target">
+<h2>13. 其他已知限制</h2>
+<ul>
+  <li><strong>WebView 共存禁忌</strong>：in-process chromium 与系统 <code>android.webkit.WebView</code> 同进程 = <code>JNI_OnLoad SIGTRAP</code>。<code>ENABLED</code> 路径加载 <code>ArupaKernelImpl</code> 后必须 <strong>return</strong>，跳过 AOSP WebView 内核及其 eager new WebView 的 microapp/plugin 注册。</li>
+  <li><strong>find 不索引合成页</strong>：<code>loadDataWithBaseURL</code> 内容 findAllAsync 返回 0/0。真实 HTTP/HTTPS 页正常。</li>
+  <li><strong>地理位置权限以外的其他权限默认 deny</strong>（反指纹策略）：摄像头/麦克风通过 <code>onPermissionRequest</code> 回调，App 自行决定 grant/deny；其余权限（传感器等）default-deny。</li>
+  <li><strong><code>onReceivedIcon</code> 传 URL 非 Bitmap</strong>（#233）：与 AOSP 不同，需 App 自行下载 icon。</li>
+  <li><strong>首次导航前调特权 API 须用 Pending 版本</strong>：用 <code>setPendingProxy</code> / <code>setPendingIdentity</code>，避免 WebContents 尚未创建时丢失配置。</li>
+</ul>
+</section>
+
+<!-- ═══════ 14. 验证状态 ═══════ -->
+<section id="verify-status" class="anchor-target">
+<h2>14. 验证状态说明</h2>
+<table>
+<thead><tr><th>标记</th><th>含义</th><th>覆盖范围</th></tr></thead>
+<tbody>
+<tr><td><span class="pill ok">D</span> device-verified</td><td>在真实 Pixel 7 设备上运行并人工验证通过</td><td>导航/saveState/setClient 主回调/find/JS 桥/WebPrefs/setProxy/setTransportRoute/setPendingProxy/setPendingIdentity/UA/Cookie/权限/拦截等</td></tr>
+<tr><td><span class="pill info">C</span> 编译+符号验证</td><td>native delegate 已接线（WebContentsDelegateAndroid），符号注册确认，但未在设备上用真实场景触发过</td><td><code>onShowFullscreen</code>（需真视频全屏）、<code>onShowFileChooser</code>（需真 input[type=file] 点击）、<code>onRenderProcessGone</code>、<code>onOpenNewWindow</code>、<code>onSslStateChanged</code>、<code>onReceivedError</code></td></tr>
+</tbody>
+</table>
+<p>C 标记的回调在运行期预期可工作（native delegate 已正确接线），但对接方应在集成时自行触发验证。</p>
+</section>
+
+<!-- ═══════ 15. 能力矩阵 ═══════ -->
+<section id="capability-matrix" class="anchor-target">
+<h2>15. 能力对照矩阵（审计最终状态 2026-06-02）</h2>
+<table>
+<thead><tr><th>能力</th><th>WebView 等价</th><th>通道 / 状态</th></tr></thead>
+<tbody>
+<tr><td>页面事件</td><td>onPageStarted/Finished/Progress/Title/Error/RenderProcessGone</td><td><span class="pill ok">✅ JNI Client</span> #231 D</td></tr>
+<tr><td>JS 对话框</td><td>onJsAlert/onJsConfirm/onJsPrompt</td><td><span class="pill ok">✅ JNI</span> #232 D</td></tr>
+<tr><td>HTTP 基础认证</td><td>onReceivedHttpAuthRequest</td><td><span class="pill ok">✅ JNI</span> #232 D</td></tr>
+<tr><td>地理位置权限</td><td>onGeolocationPermissionsShowPrompt</td><td><span class="pill ok">✅ JNI</span> #232 D</td></tr>
+<tr><td>下载</td><td>DownloadListener.onDownloadStart</td><td><span class="pill ok">✅ JNI</span> #232 D</td></tr>
+<tr><td>find / 状态序列化 / WebPrefs</td><td>findAllAsync / saveState / WebSettings</td><td><span class="pill ok">✅ JNI</span> #231 D</td></tr>
+<tr><td>UA 覆盖</td><td>setUserAgentString</td><td><span class="pill ok">✅ JNI</span> setUserAgent() #233 D</td></tr>
+<tr><td>Cookie 增删查</td><td>CookieManager</td><td><span class="pill ok">✅ JNI</span> #233 D，per-partition</td></tr>
+<tr><td>摄像头/麦克风权限</td><td>onPermissionRequest</td><td><span class="pill ok">✅ JNI</span> #233 D</td></tr>
+<tr><td>favicon</td><td>onReceivedIcon</td><td><span class="pill ok">✅ JNI</span> #233 D，传 URL</td></tr>
+<tr><td>导航拦截</td><td>shouldOverrideUrlLoading</td><td><span class="pill ok">✅ JNI</span> #234 D，ArupaNavigationThrottle</td></tr>
+<tr><td>资源拦截/改写</td><td>shouldInterceptRequest</td><td><span class="pill ok">✅ JNI</span> #235 D，IO 线程</td></tr>
+<tr><td>文件上传 / 全屏</td><td>onShowFileChooser / onShowCustomView</td><td><span class="pill info">✅ API 接线</span>，需真实手势触发（标 C）</td></tr>
+</tbody>
+</table>
+<p style="color:var(--mut);font-size:13px;margin-top:8px">审计结论：<strong>无阻塞性 JNI 缺口</strong>。所有 WebViewClient/WebChromeClient 语义等价能力均已 JNI 化。</p>
+</section>
+
+<!-- ── 页脚 ── -->
+<footer id="footer-meta">
+  <p><strong>生成日期：</strong>2026-06-04 &nbsp;|&nbsp;
+     <strong>数据来源：</strong>
+     <a href="../spec/chromiumwebview-android-api.md">chromiumwebview-android-api.md</a>（审计 2026-06-02）·
+     <a href="../feedback/Android/FB-A001-settransportroute-mojo-push.md">FB-A001</a> ·
+     <a href="../feedback/Android/FB-A002-aar-packaging-res-and-material-class-dup.md">FB-A002</a> ·
+     reference_nomad_kernel_integration</p>
+  <p><strong>内核侧维护：</strong>kai5dev &lt;kai5.dev.ai@gmail.com&gt; · BrowserKernel 仓</p>
+  <p style="margin-top:8px;color:var(--faint)">本文档为自包含 HTML，无外部 CDN 依赖，可离线查阅。如有疑问请提对接工单（FB-A* 系列）。</p>
+</footer>
+
+</main>
+</div>
+
+<script>
+// 主题切换
+function toggleTheme() {
+  const html = document.documentElement;
+  const isDark = html.getAttribute('data-theme') === 'dark';
+  html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+  document.getElementById('themeBtn').textContent = isDark ? '☾ 切换主题' : '☀ 切换主题';
+}
+
+// 导航高亮（滚动时更新 active）
+const sections = document.querySelectorAll('.anchor-target');
+const navLinks = document.querySelectorAll('nav.sidebar a');
+function updateNav() {
+  let current = '';
+  sections.forEach(s => {
+    if (window.scrollY + 80 >= s.offsetTop) current = s.id;
+  });
+  navLinks.forEach(a => {
+    const href = a.getAttribute('href');
+    if (href === '#' + current) a.classList.add('active');
+    else a.classList.remove('active');
+  });
+}
+window.addEventListener('scroll', updateNav, { passive: true });
+updateNav();
+
+// 平滑滚动
+navLinks.forEach(a => {
+  a.addEventListener('click', e => {
+    const href = a.getAttribute('href');
+    if (href && href.startsWith('#')) {
+      e.preventDefault();
+      const target = document.querySelector(href);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+});
+</script>
+</body>
+</html>
