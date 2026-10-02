@@ -10,6 +10,7 @@ import tempfile
 import urllib.request
 
 import fetch as F
+from apple_tools import xcode_directory
 
 TARGETS = {'metal', 'dotnet', 'android-sdk', 'jdk'}
 
@@ -27,25 +28,6 @@ def android_paths(cfg):
     jdk = F.cget(cfg, 'java_home')
     return (Path(sdk).expanduser() if sdk else F.CHROMIUM_SRC / 'third_party/android_sdk/public',
             Path(jdk).expanduser() if jdk else F.CHROMIUM_SRC / 'third_party/jdk/current')
-
-
-def xcode_directory(cfg):
-    configured = F.cget(cfg, 'chromium_developer_dir') or os.environ.get('DEVELOPER_DIR')
-    if configured:
-        path = Path(configured).expanduser()
-        return path / 'Contents/Developer' if path.suffix == '.app' else path
-    if F.DRY_RUN:
-        return Path('/Applications/Xcode.app/Contents/Developer')
-    selected = subprocess.run(['xcode-select', '-p'], capture_output=True, text=True)
-    if selected.returncode == 0:
-        path = Path(selected.stdout.strip())
-        if (path / 'usr/bin/xcodebuild').is_file():
-            return path
-    candidates = {p / 'Contents/Developer' for base in (Path('/Applications'), Path.home() / 'Applications')
-                  for p in base.glob('Xcode*.app') if (p / 'Contents/Developer/usr/bin/xcodebuild').is_file()}
-    if len(candidates) == 1:
-        return candidates.pop()
-    F.err('请先安装完整 Xcode；多个版本时设置 chromium_developer_dir。Command Line Tools 不够。')
 
 
 def setup_metal(cfg):

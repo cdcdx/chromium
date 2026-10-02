@@ -21,6 +21,12 @@
 不再支持旧 `down/test/manifest/print-delivery` 动作。PC 外壳通过 .NET 发布，Android 浏览器通过 Gradle 生成 APK。
 业务仓库的下载仍属于 fetch。
 
+公共逻辑按职责集中维护：`scripts/platforms.py` 定义系统名称、架构矩阵和宿主要求；
+`scripts/apple_tools.py` 统一选择 Xcode 并检查 SDK/Metal；`scripts/native_tools.py` 检查宿主依赖；
+`scripts/toolchains.py` 准备可下载工具；`scripts/concurrency.py` 计算 Ninja 并发数。
+三个入口的 `--os` 均接受 `windows` / `macos` 别名，内部统一为 `win` / `mac`。
+`fetch android` 自动选择 Android 依赖；组合 `--install-host-deps` 时安装对应的 Linux 宿主依赖。
+
 ## 源码拉取
 
 查看**执行命令时当前目录的一级子目录**中的 Git 仓库，无需 `.env` 或仓库版本配置：
@@ -140,7 +146,8 @@ bash fetch.sh sysroots --os linux --arch arm64
 Windows 安装器使用 NativeDesktop、ATL/MFC，并按需添加 ARM64 工具和 MFC；SDK 和 Debugging Tools
 仍需在安装界面按 `src/docs/windows_build_instructions.md` 选择，安装后检查缺项，不自动接受许可或重启。
 VS/SDK 版本解析使用当前 Chromium 的 `build/vs_toolchain.py`，不在外层脚本写死版本。
-`--nohooks` 会跳过完整工具链验证，不能视为编译环境已就绪。
+`--nohooks` 仅用于源码/依赖同步，不能与 `toolchains`、`android-sdk`、`jdk` 同用；
+这些工具链准备命令需要执行 hooks，参数冲突会在下载或安装前报错。
 仅 package 不执行内核工具链检查；PC WebUI 构建会检查 Node.js/npm，`--no-web` 跳过此项。
 
 `.NET` 优先使用 `dotnet_version`，其次读取浏览器 `global.json`，均没有时使用 `dotnet_channel`（默认 10.0）。

@@ -9,7 +9,6 @@ from pathlib import Path
 import platform
 import re
 import shutil
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -17,62 +16,20 @@ import tempfile
 import fetch as F
 import native_tools
 from concurrency import automatic_jobs
+from apple_tools import prepare_mac_toolchain
+from platforms import MATRIX, normalize_os, architectures, host_for
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
-MATRIX = {"win": ("x86", "x64", "arm64"), "mac": ("x64", "arm64"),
-          "linux": ("x86", "x64", "arm64"), "android": ("x64", "arm64")}
 ALIASES = {"desktop": "arupa_desktop", "android": "arupa_android"}
 
-
-def prepare_mac_toolchain(cfg):
-    """Select full Xcode for this process and fail before modifying build files."""
-    configured = F.cget(cfg, "chromium_developer_dir") or os.environ.get("DEVELOPER_DIR", "")
-    if F.DRY_RUN:
-        F.log(f"(dry-run) 检查完整 Xcode: {configured or '系统选择或已安装 Xcode'}")
-        return
-    if configured:
-        developer = Path(configured).expanduser()
-    else:
-        selected = subprocess.run(['xcode-select', '-p'], capture_output=True, text=True)
-        developer = Path(selected.stdout.strip()) if selected.returncode == 0 else Path('/nonexistent')
-        if not (developer / 'usr/bin/xcodebuild').is_file():
-            candidates = sorted({p / 'Contents/Developer'
-                                 for base in (Path('/Applications'), Path.home() / 'Applications')
-                                 for p in base.glob('Xcode*.app')
-                                 if (p / 'Contents/Developer/usr/bin/xcodebuild').is_file()})
-            if len(candidates) > 1:
-                F.err('发现多个 Xcode，请在 .env 中设置 chromium_developer_dir: ' + ', '.join(map(str, candidates)))
-            if candidates:
-                developer = candidates[0]
-    if developer.suffix == '.app':
-        developer = developer / 'Contents/Developer'
-    if not (developer / 'usr/bin/xcodebuild').is_file():
-        F.err(f'未找到完整 Xcode（当前路径: {developer}）。Command Line Tools 不能用于此构建。'
-              '请安装完整 Xcode，并在 .env 设置 chromium_developer_dir=/Applications/Xcode.app/Contents/Developer'
-              '（按实际安装位置修改）。')
-    environment = dict(os.environ, DEVELOPER_DIR=str(developer))
-    for command in (['/usr/bin/xcodebuild', '-version'], ['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-path']):
-        result = subprocess.run(command, capture_output=True, text=True, env=environment)
-        if result.returncode:
-            F.err(f'Xcode 预检查失败: {" ".join(command)}\n{result.stderr.strip() or result.stdout.strip()}')
-    # xcrun --find can resolve a shim even when the downloadable toolchain is absent.
-    metal = subprocess.run(['/usr/bin/xcrun', '--sdk', 'macosx', 'metal', '--version'],
-                           capture_output=True, text=True, env=environment)
-    if metal.returncode:
-        install = shlex.join(['env', f'DEVELOPER_DIR={developer}', '/usr/bin/xcodebuild',
-                              '-downloadComponent', 'MetalToolchain'])
-        F.err(f'Metal 编译器不可用，请先安装当前 Xcode 的 Metal Toolchain：\n{install}\n'
-              f'{metal.stderr.strip() or metal.stdout.strip()}')
-    os.environ['DEVELOPER_DIR'] = str(developer)
-    F.log(f'Xcode: {developer}')
 
 
 def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("project", choices=("arupa_desktop", "arupa_android", "nomadbrowser.pc", "nomadbrowser.android", "desktop", "android"))
     p.add_argument("actions", nargs="*", help="gen / build / package / all（默认 all；浏览器仅 build + package）")
-    p.add_argument("--os", choices=(*MATRIX, "windows", "macos"), default="")
+    p.add_argument("--os", type=normalize_os, choices=tuple(MATRIX), default="")
     p.add_argument("--args", type=Path, help="build 目录内的 GN 配置；默认 build/<os>/args.gn")
     p.add_argument("--arch", choices=("x86", "x64", "arm64", "all"), default="", help="默认：桌面为当前芯片，arupa_android 为 all，Android 浏览器为 arm64")
     p.add_argument("--delivery", type=Path, help="PC 浏览器使用的桌面内核交付包")
@@ -223,14 +180,16 @@ def main(argv=None):
     is_browser = project.startswith("nomadbrowser.")
     is_android = project in ("arupa_android", "nomadbrowser.android")
     target_os = args.os or ("android" if is_android else F.HOST_OS)
-    target_os = {"macos": "mac", "windows": "win"}.get(target_os, target_os)
+    target_os = normalize_os(target_os)
     if target_os not in MATRIX or is_android != (target_os == "android"):
         p.error("桌面项目仅支持 win/mac/linux；Android 项目仅支持 android")
     machine = (os.environ.get("PROCESSOR_ARCHITEW6432") if F.HOST_OS == "win" else None) or platform.machine()
     host_cpu = {"aarch64": "arm64", "amd64": "x64", "x86_64": "x64", "i386": "x86", "i686": "x86"}.get(machine.lower(), machine.lower())
     arch = args.arch or ("all" if project == "arupa_android" else "arm64" if is_android else host_cpu)
-    if arch != "all" and arch not in MATRIX[target_os]:
-        p.error(f"{target_os} 支持的架构: {', '.join(MATRIX[target_os])}")
+    try:
+        arches = architectures(target_os, arch)
+    except ValueError as exc:
+        p.error(str(exc))
     actions = args.actions or ["all"]
     if set(actions) - {"gen", "build", "package", "all"}:
         p.error("动作只支持 gen / build / package / all；依赖下载请使用 fetch")
@@ -249,7 +208,7 @@ def main(argv=None):
             args.jobs = 8 if is_browser else 1
     elif "build" in actions:
         F.log(f"使用指定并发任务数: {args.jobs}")
-    required_host = "linux" if target_os == "android" else target_os
+    required_host = host_for(target_os)
     if not args.dry_run and F.HOST_OS != required_host:
         p.error(f"{target_os} 构建需要 {required_host} 宿主（当前 {F.HOST_OS}）")
     version = args.ver if is_browser and args.ver else F.chromium_version()
@@ -257,7 +216,6 @@ def main(argv=None):
         p.error(f"--ver {args.ver} 与 src/chrome/VERSION {version} 不一致，请先 fetch 指定版本")
     if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", version):
         p.error("版本必须是 Chromium 四段版本号 X.Y.Z.W")
-    arches = MATRIX[target_os] if arch == "all" else (arch,)
     if is_browser:
         import nomad
         nomad.run(ROOT, args, project, target_os, arches, version, actions)

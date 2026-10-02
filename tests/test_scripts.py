@@ -81,6 +81,54 @@ class WorkspaceTest(unittest.TestCase):
             self.quiet(fetch.main, ['deps', 'all', 'chromium', '--ver', VERSION])
         self.assertEqual(calls, ['tools', 'src', 'deps', *fetch.PROJECTS])
 
+    def test_android_alias_selects_android_host_dependencies(self):
+        import native_tools
+        with patch.object(fetch, 'HOST_OS', 'linux'), \
+             patch.object(fetch, 'setup_depot_tools'), \
+             patch.object(fetch, 'fetch_chromium', return_value='url'), \
+             patch.object(fetch, 'write_gclient') as gclient, \
+             patch.object(fetch, 'sync_deps') as sync, \
+             patch.object(native_tools, 'setup_host') as host:
+            self.quiet(fetch.main, ['android', '--ver', VERSION, '--install-host-deps'])
+        self.assertEqual(host.call_args.args[:2], ('android', ('x64', 'arm64')))
+        gclient.assert_called_once_with('url', True, 'android')
+        self.assertTrue(sync.call_args.args[2])
+        self.assertEqual(sync.call_args.args[-1], 'android')
+
+    def test_toolchain_conflicts_fail_before_download(self):
+        for targets in (['toolchains', '--nohooks'], ['android-sdk', '--nohooks'],
+                        ['jdk', '--nohooks'], ['metal']):
+            with self.subTest(targets=targets), patch.object(fetch, 'HOST_OS', 'linux'), \
+                 patch.object(fetch, 'setup_depot_tools') as download, \
+                 patch.object(fetch, 'apply_proxy') as proxy:
+                with self.assertRaises(SystemExit):
+                    self.quiet(fetch.main, ['depot_tools', *targets, '--ver', VERSION])
+                download.assert_not_called()
+                proxy.assert_not_called()
+        with patch.object(fetch, 'sync_deps') as sync:
+            self.quiet(fetch.main, ['deps', '--nohooks', '--ver', VERSION])
+        self.assertTrue(sync.call_args.args[4])
+
+    def test_platform_aliases_are_shared_by_entrypoints(self):
+        import backup
+        for alias, canonical in (('windows', 'win'), ('macos', 'mac')):
+            for module, positional in ((fetch, ['deps']), (build, ['desktop']),
+                                       (backup, ['--ver', VERSION])):
+                with self.subTest(module=module.__name__, alias=alias):
+                    args = module.build_parser().parse_args([*positional, '--os', alias])
+                    self.assertEqual(args.os, canonical)
+
+    def test_xcode_app_path_normalized_in_dry_run_without_processes(self):
+        import apple_tools
+        import toolchains
+        with patch.object(fetch, 'DRY_RUN', True), \
+             patch('subprocess.run', side_effect=AssertionError('unexpected process')):
+            cfg = {'chromium_developer_dir': '/Applications/Custom Xcode.app'}
+            expected = Path('/Applications/Custom Xcode.app/Contents/Developer')
+            self.assertEqual(toolchains.xcode_directory(cfg), expected)
+            self.assertEqual(apple_tools.xcode_directory(cfg), expected)
+            self.quiet(build.prepare_mac_toolchain, cfg)
+
     def test_fetch_failure_does_not_sync_or_save(self):
         with patch.object(fetch, 'setup_depot_tools'), \
              patch.object(fetch, 'fetch_chromium', side_effect=RuntimeError('fetch failed')), \

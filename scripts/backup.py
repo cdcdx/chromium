@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from platforms import MATRIX, normalize_os
 
 ROOT = Path(__file__).resolve().parent.parent
 EXCLUDED = ('out', 'arupa_build', 'chrome/browser/arupa_desktop',
@@ -94,7 +95,7 @@ def collect_patch(src, base, include_untracked):
 def build_parser():
     p = argparse.ArgumentParser(description='将 src 相对指定版本的净修改备份为可恢复的二进制 Git 补丁')
     p.add_argument('--ver', '--base', required=True, dest='base', help='本地 Chromium tag / branch / commit；推荐 tag 或完整 SHA')
-    p.add_argument('--os', choices=('win', 'mac', 'linux', 'android'),
+    p.add_argument('--os', type=normalize_os, choices=tuple(MATRIX),
                    default={'Windows': 'win', 'Darwin': 'mac', 'Linux': 'linux'}.get(platform.system()),
                    help='备份标记系统，默认宿主；Android 请显式指定')
     p.add_argument('--num', type=int, help='序号，默认按系统和版本自动递增；不覆盖已有备份')

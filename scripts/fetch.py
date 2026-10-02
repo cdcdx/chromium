@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from platforms import MATRIX, normalize_os, architectures, host_for
 
 if __name__ == "__main__":
     sys.modules["fetch"] = sys.modules[__name__]
@@ -284,7 +285,7 @@ def build_parser():
         p.add_argument(f"--{option}-src", dest=prefix + "_src", default=None, help=f"{name} Git 地址")
         p.add_argument(f"--{option}-ver", dest=prefix + "_ver", default=None, help=f"{name} tag / branch / commit")
     p.add_argument("--ver", default="", help="Chromium X.Y.Z.W；默认 .env chromium_ver")
-    p.add_argument("--os", choices=("win", "mac", "linux", "android"), default=HOST_OS)
+    p.add_argument("--os", type=normalize_os, choices=tuple(MATRIX), default=HOST_OS)
     p.add_argument("--arch", choices=("x86", "x64", "arm64", "all"), default="all", help="工具链准备的目标架构，默认 all")
     p.add_argument("--install-host-deps", action="store_true", help="显式安装宿主依赖；Linux 可能需要 sudo，Windows 需官方 VS 安装器")
     p.add_argument("--vs-installer", type=Path, help="Windows 官方 Visual Studio bootstrapper 路径（用于 host-deps）")
@@ -312,6 +313,8 @@ def main(argv=None):
         import repositories
         return repositories.show(Path.cwd(), list(dict.fromkeys(requested)), args.dry_run)
     cfg = load_config()
+    if "android" in requested:
+        args.os = "android"
     import toolchains
     valid = {"all", "update", "depot_tools", "chromium", "deps", "hooks", "android", "toolchains", "host-deps", "sysroots", *toolchains.TARGETS, *PROJECTS}
     if set(requested) - valid:
@@ -335,14 +338,20 @@ def main(argv=None):
     if args.vs_installer and (args.os != "win" or "host-deps" not in targets):
         parser.error("--vs-installer 仅用于 --os win 的 host-deps / --install-host-deps")
     if targets & {"host-deps", "sysroots"} or "toolchains" in requested:
-        required_host = "linux" if args.os == "android" else args.os
+        required_host = host_for(args.os)
         if not DRY_RUN and HOST_OS != required_host:
             parser.error(f"{args.os} 工具链准备需要 {required_host} 宿主")
         if "sysroots" in targets and args.os != "linux":
             parser.error("sysroots 仅适用于 --os linux")
-        if args.os in ("mac", "android") and args.arch == "x86":
-            parser.error(f"{args.os} 不支持 x86")
-    arches = (("x64", "arm64") if args.os in ("mac", "android") else ("x86", "x64", "arm64")) if args.arch == "all" else (args.arch,)
+    try:
+        arches = architectures(args.os, args.arch)
+    except (KeyError, ValueError) as exc:
+        parser.error(str(exc))
+    if args.nohooks and ("toolchains" in requested or targets & {"android-sdk", "jdk"}):
+        parser.error("工具链准备需要 hooks；仅下载依赖请使用 fetch deps --nohooks")
+    for tool, required_host in (("metal", "mac"), ("android-sdk", "linux"), ("jdk", "linux")):
+        if tool in targets and not DRY_RUN and HOST_OS != required_host:
+            parser.error(f"{tool} 需要 {required_host} 宿主")
     version = args.ver or cget(cfg, "chromium_ver", "CHROMIUM_VERSION")
     if targets & {"chromium", "deps"} and not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", version):
         parser.error("请用 --ver 或 .env chromium_ver 指定 Chromium 四段版本号")
@@ -362,7 +371,7 @@ def main(argv=None):
             parser.error(f"{name} 需要配置 {prefix}_src 和 {prefix}_ver（.env 或命令行）")
         repositories[name] = (url, ref)
     apply_proxy(cfg, args.proxy)
-    android = args.os == "android" or "android" in requested
+    android = args.os == "android"
     if "depot_tools" in targets:
         setup_depot_tools(cfg)
     if "chromium" in targets:
@@ -383,10 +392,8 @@ def main(argv=None):
             toolchains.setup(name, cfg)
     if "sysroots" in targets or ("toolchains" in requested and args.os == "linux"):
         native_tools.setup_sysroots(arches)
-    if "toolchains" in requested and not args.nohooks:
+    if "toolchains" in requested:
         native_tools.kernel_check(args.os, arches)
-    elif "toolchains" in requested:
-        log("已跳过 hooks，未验证完整工具链；编译前请重新运行 fetch toolchains（不带 --nohooks）")
     if args.save:
         path = WORKSPACE_ROOT / ".env"
         text = path.read_text(encoding="utf-8") if path.exists() else ""

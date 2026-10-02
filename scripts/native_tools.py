@@ -10,6 +10,7 @@ import subprocess
 import sys
 
 import fetch as F
+from platforms import host_for
 
 
 def require_files(paths, hint):
@@ -89,7 +90,7 @@ def kernel_check(target_os, arches):
     if F.DRY_RUN:
         F.log(f'(dry-run) 检查 {target_os} 内核工具链、宿主依赖和目标架构: {", ".join(arches)}')
         return
-    host = 'linux' if target_os == 'android' else target_os
+    host = host_for(target_os)
     llvm = F.CHROMIUM_SRC / 'third_party/llvm-build/Release+Asserts/bin'
     paths = [llvm / ('clang-cl.exe' if host == 'win' else 'clang'),
              llvm / ('lld-link.exe' if host == 'win' else 'ld64.lld' if host == 'mac' else 'ld.lld')]
@@ -129,7 +130,7 @@ def kernel_check(target_os, arches):
 
 
 def setup_host(target_os, arches, installer=None):
-    required_host = 'linux' if target_os == 'android' else target_os
+    required_host = host_for(target_os)
     if F.DRY_RUN:
         # 预览模式不接触宿主，也不要求当前机器就是目标宿主。
         F.log(f'(dry-run) 安装 {target_os} 宿主依赖（{required_host} 宿主，架构 {", ".join(arches)}）')
