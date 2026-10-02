@@ -93,6 +93,47 @@ def resolve_depot_tools_dir(cfg):
     return path if path.is_absolute() else WORKSPACE_ROOT / path
 
 
+def sanitize_library_path():
+    """丢掉 LIBRARY_PATH 里不存在的目录。
+
+    clang 会把 LIBRARY_PATH 的每一项原样变成 -L 交给链接器，而 ld64.lld 对不存在的
+    目录报 "directory not found for option -L/usr/local/lib"；Chromium 的链接参数里有
+    -Wl,-fatal_warnings（外加 -Werror），这条警告直接变成构建失败。库搜索路径本来就由
+    GN 显式给出，这里只清理不存在的项，真实存在的目录原样保留。"""
+    value = os.environ.get("LIBRARY_PATH", "")
+    if not value:
+        return
+    items = [item for item in value.split(os.pathsep) if item]
+    kept = [item for item in items if Path(item).is_dir()]
+    if len(kept) == len(items):
+        return
+    if kept:
+        os.environ["LIBRARY_PATH"] = os.pathsep.join(kept)
+    else:
+        os.environ.pop("LIBRARY_PATH", None)
+    log(f"忽略 LIBRARY_PATH 里不存在的目录: {os.pathsep.join(i for i in items if i not in kept)}")
+
+
+def ensure_real_python3(depot):
+    """把真解释器挂到 PATH 最前面。
+
+    macOS 的 /usr/bin/python3 只是个 xcrun 桩：它按 SDKROOT 反查真解释器。Chromium 给
+    rust 构建脚本注入的 SDKROOT 指向 out/sdk/xcode_links/<sdk>（build/config/mac/mac_sdk.gni），
+    xcodebuild 不认这个路径，于是所有 #!/usr/bin/env python3 的脚本（如
+    build/toolchain/apple/linker_driver.py）都以 exit 72 起不来：
+        xcode-select: Failed to locate 'python3', requesting installation of ...
+    depot_tools 自举出的 python-bin/python3 是实打实的解释器，放在 PATH 最前面即可。"""
+    if IS_WIN:
+        return
+    current = os.environ.get("PATH", "").split(os.pathsep)
+    for directory in (depot / "python-bin", CHROMIUM_SRC / "third_party/cpython3/host/bin"):
+        if not (directory / "python3").is_file() or str(directory) in current:
+            continue
+        os.environ["PATH"] = str(directory) + os.pathsep + os.environ.get("PATH", "")
+        log(f"python3: {directory}（绕开系统 xcrun 桩）")
+        return
+
+
 def tool_environment(cfg):
     depot = resolve_depot_tools_dir(cfg)
     os.environ["PATH"] = str(depot) + os.pathsep + os.environ.get("PATH", "")
@@ -102,6 +143,8 @@ def tool_environment(cfg):
         os.environ.setdefault("DEPOT_TOOLS_WIN_TOOLCHAIN", "0")
     for key in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"):
         os.environ.pop(key, None)
+    sanitize_library_path()
+    ensure_real_python3(depot)
     return depot
 
 

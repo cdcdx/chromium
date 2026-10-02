@@ -160,7 +160,7 @@ def exclude_generated(paths):
     exclude = Path(git_path)
     if not exclude.is_absolute():
         exclude = SRC / exclude
-    text = exclude.read_text() if exclude.exists() else ""
+    text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
     for path in paths:
         line = "/" + path
         if line not in text.splitlines():
@@ -294,7 +294,10 @@ def main(argv=None):
                 F.run([gn, "gen", out, f"--root-target={root_target}", f"--root-pattern={root_target}"], SRC)
                 write_if_changed(stamp, json.dumps(identity, indent=2) + "\n")
             elif "build" in actions and not args.dry_run:
-                if not stamp.exists() or json.loads(stamp.read_text()) != identity or (out / "args.gn").read_text() != template:
+                # args.gn 由本脚本以 UTF-8 写出（含中文注释），必须显式按 UTF-8 回读：
+                # Windows 中文环境的默认编码是 GBK，回读时会直接抛 UnicodeDecodeError。
+                if not stamp.exists() or json.loads(stamp.read_text(encoding="utf-8")) != identity \
+                        or (out / "args.gn").read_text(encoding="utf-8") != template:
                     F.err(f"{out} 配置不匹配；请先执行 gen")
             if "build" in actions:
                 F.run([ninja, "-C", out, "-j", str(args.jobs), *[t.removeprefix('//') for t in build_targets(project, target_os)]], SRC)

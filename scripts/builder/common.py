@@ -151,6 +151,8 @@ def ensure_depot_tools(cfg: dict):
         os.environ.pop(k, None)
     log(f"depot_tools: {d}")
     fetch.bootstrap_depot_tools(d)   # 缺自举产物时 autoninja 会 exit 1（幂等，只下一回）
+    fetch.sanitize_library_path()    # LIBRARY_PATH 里的僵尸目录会变成 -L，链接直接失败
+    fetch.ensure_real_python3(d)     # 让 ninja 子进程的 python3 落在真解释器上
     ensure_midl_out_of_tree_patch()  # Windows + 编译目录在 src 外: midl 基线比对补丁
     return d
 
