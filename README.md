@@ -72,6 +72,33 @@ Windows 使用相同参数，例如 ` .\fetch.ps1 --ver 154.0.8037.21`。
 
 ## 编译与打包
 
+缺失工具链通过 fetch 准备，build 只检查和使用工具，不在编译途中安装：
+
+```bash
+# 已有 Chromium 源码：按当前配置版本同步 DEPS/hooks（GN、Ninja、Clang 等）。
+# macOS 同时补充当前 Xcode 的 Metal Toolchain。
+bash fetch.sh toolchains
+# 仅修复 Metal；完整 Xcode 必须已安装，可重复执行。
+bash fetch.sh metal
+# 从 Microsoft 官方安装脚本安装浏览器 .NET SDK 到 .tools/dotnet。
+bash fetch.sh dotnet
+# Linux：复用 Chromium DEPS 固定的 Android SDK/JDK，可按配置追加 SDK 包。
+bash fetch.sh android-sdk
+bash fetch.sh jdk
+```
+
+Windows 对应使用 `fetch.ps1 toolchains` / `fetch.ps1 dotnet`。
+`toolchains` 使用 `.env chromium_ver` 或显式 `--ver`，必须与当前 src 版本一致；首次准备源码请用 `fetch update`。
+Android 可用 `fetch toolchains --os android`；单独 `android-sdk` / `jdk` 在工具缺失时同步当前 src HEAD 的 DEPS 并运行 hooks。
+不配置 `android_home` / `java_home` 时，build 自动识别 `src/third_party/android_sdk/public` 和 `src/third_party/jdk/current`。
+Chromium 固定的 JDK 不保证满足浏览器 Gradle 的主版本要求；如项目要求另一版本，需配置对应完整 JDK 的 `java_home`。
+额外 SDK 包通过 `.env android_sdk_packages` 指定；sdkmanager 保留许可证交互，不自动同意许可证。
+完整 Xcode、Visual Studio/Windows SDK、Linux 系统开发依赖和 Node.js/npm 仍需在宿主安装。
+
+`.NET` 优先使用 `dotnet_version`，其次读取浏览器 `global.json`，均没有时使用 `dotnet_channel`（默认 10.0）。
+安装后 build 自动发现 `.tools/dotnet`；显式 `--dotnet` / `dotnet_path` 仍优先。
+安装器使用 [Microsoft 官方安装脚本](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-install-script)，不会修改系统 PATH。
+
 | 入口 | 项目 | 目标系统 | CPU |
 |---|---|---|---|
 | `build.ps1` | `arupa_desktop` / `nomadbrowser.pc` | win | x86 / x64 / arm64 |
@@ -84,7 +111,7 @@ Windows 使用相同参数，例如 ` .\fetch.ps1 --ver 154.0.8037.21`。
 `arupa_android` 默认 `--os android --arch all`，同时编译 x64 和 arm64；可显式 `--arch` 只编译一种。
 例如 `bash build.sh arupa_desktop build` 编译本机桌面内核，`bash build.sh arupa_android build` 编译两种 Android 内核。
 这一宿主限制与 [Chromium Android 构建说明](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/android_build_instructions.md) 一致。
-需要事先准备系统构建依赖、macOS Xcode 或 Windows Visual Studio/SDK；脚本不会自动安装系统软件。
+需要事先准备系统构建依赖、macOS Xcode 或 Windows Visual Studio/SDK；build 阶段不会自动安装系统软件。
 Windows 默认使用本机 VS 工具链（DEPOT_TOOLS_WIN_TOOLCHAIN=0）。
 
 macOS 内核构建会在写入构建文件前检查完整 Xcode 和 macOS SDK。
@@ -93,6 +120,7 @@ macOS 内核构建会在写入构建文件前检查完整 Xcode 和 macOS SDK。
 选择顺序为该配置、已有 `DEVELOPER_DIR`、系统 `xcode-select`；系统未选中完整 Xcode 时，
 尝试 `/Applications` 和 `~/Applications` 中唯一的 `Xcode*.app`，多个候选需显式配置。
 路径仅通过构建进程的 `DEVELOPER_DIR` 传递，不修改系统的 `xcode-select` 设置。
+预检查会实际执行 `metal --version`，避免只找到占位程序却没有 Metal Toolchain；缺失时先运行 `fetch metal`。
 预检查失败会保留 Xcode 返回的许可证、SDK 等错误信息；`--dry-run` 不运行这些检查。
 
 以下 GN 配置适用于 Arupa 内核；浏览器通过 SDK/AAR 使用内核，不接收 `--args`。
@@ -160,7 +188,7 @@ Linux 当前项目 GN 未定义 render 目标，交付中缺少 arupa_render 会
 ## 浏览器编译与打包
 
 先用 fetch 拉取对应浏览器源码。PC 需要项目要求的 .NET SDK、Node.js/npm，以及同系统、同架构、同 Chromium 版本的静态内核交付包。
-dotnet 选择顺序为 `--dotnet`、`dotnet_path` 配置（支持大写环境变量）、PATH。
+dotnet 选择顺序为 `--dotnet`、`dotnet_path` 配置（支持大写环境变量）、工作区 `.tools/dotnet`、PATH。
 脚本在浏览器仓库目录执行 `dotnet --version`，检查 `global.json` 所要求的 SDK 能否被选中；仅安装 Runtime 会提前报错。
 默认从工作区 `dist/` 选择最新匹配序号，或通过 `--delivery` 指定交付目录；`--dist-dir` 仅控制输出。
 `--ver` 在浏览器命令中表示消费的内核版本，可在没有 Chromium 源码时显式指定。

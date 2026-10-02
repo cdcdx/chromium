@@ -12,20 +12,24 @@ import tempfile
 import zipfile
 
 import fetch as F
+import toolchains
 
 
 def prepare_dotnet(args, repo):
-    executable = args.dotnet or F.cget(F.load_config(), 'dotnet_path', default='dotnet')
+    executable = args.dotnet or toolchains.dotnet_executable(F.load_config())
     executable = os.path.expanduser(executable)
     if not F.DRY_RUN:
         resolved = shutil.which(executable)
         if not resolved:
-            F.err('未找到 dotnet；请安装 .NET SDK，或用 --dotnet / dotnet_path 指定可执行文件')
+            F.err('未找到 dotnet；请先 fetch dotnet，或用 --dotnet / dotnet_path 指定 .NET SDK')
         # Run in the repository so global.json participates in SDK selection.
         result = subprocess.run([resolved, '--version'], cwd=repo, capture_output=True, text=True)
         if result.returncode or not result.stdout.strip():
             F.err('没有可用的项目 .NET SDK（仅安装 Runtime 不够）；请检查 global.json。\n' + result.stderr.strip())
         executable = resolved
+        sdk_root = str(Path(resolved).resolve().parent)
+        os.environ['DOTNET_ROOT'] = sdk_root
+        os.environ['PATH'] = sdk_root + os.pathsep + os.environ.get('PATH', '')
         F.log(f'.NET SDK: {result.stdout.strip()} ({executable})')
     return executable
 
@@ -39,12 +43,13 @@ def prepare_android_sdk(args, repo):
         if match:
             local_sdk = re.sub(r'\\(.)', r'\1', match[1])
     explicit = str(args.android_sdk) if args.android_sdk else F.cget(cfg, 'android_home', 'android_sdk_root')
-    selected = explicit or local_sdk
+    bundled_sdk, bundled_jdk = toolchains.android_paths(cfg)
+    selected = explicit or local_sdk or (str(bundled_sdk) if bundled_sdk.is_dir() else '')
     if F.DRY_RUN:
         F.log(f'(dry-run) 检查 Android SDK/JDK: {selected or "ANDROID_HOME 或 local.properties sdk.dir"}')
         return
     if not selected:
-        F.err('未指定 Android SDK；请设置 --android-sdk、ANDROID_HOME 或 local.properties 的 sdk.dir')
+        F.err('未指定 Android SDK；请先 fetch android-sdk，或设置 --android-sdk、ANDROID_HOME、local.properties 的 sdk.dir')
     sdk = Path(selected).expanduser().resolve()
     if local_sdk:
         local_path = Path(local_sdk).expanduser()
@@ -56,6 +61,8 @@ def prepare_android_sdk(args, repo):
     if not any((sdk / 'platforms').glob('android-*/android.jar')) or not any((sdk / 'build-tools').glob('*/aapt2')):
         F.err(f'Android SDK 不完整: {sdk}；请安装项目 compileSdk 对应的 platforms 和 build-tools')
     java_home = F.cget(cfg, 'java_home')
+    if not java_home and (bundled_jdk / 'bin/javac').is_file():
+        java_home = str(bundled_jdk)
     java = str(Path(java_home).expanduser() / 'bin/java') if java_home else 'java'
     javac = str(Path(java_home).expanduser() / 'bin/javac') if java_home else 'javac'
     if not shutil.which(java) or not shutil.which(javac):

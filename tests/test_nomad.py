@@ -122,10 +122,12 @@ class NomadTest(unittest.TestCase):
     def test_dotnet_requires_sdk_and_checks_project_global_json(self):
         self.args.dotnet = '/custom/dotnet'
         repo = self.root / 'nomadbrowser.pc'
-        with patch.object(nomad.shutil, 'which', return_value='/custom/dotnet'), patch.object(nomad.subprocess, 'run') as run:
+        with patch.dict(os.environ, os.environ.copy()), patch.object(nomad.shutil, 'which', return_value='/custom/dotnet'), patch.object(nomad.subprocess, 'run') as run:
             run.return_value = subprocess.CompletedProcess([], 0, '10.0.100\n', '')
             self.assertEqual(self.quiet(nomad.prepare_dotnet, self.args, repo), '/custom/dotnet')
             self.assertEqual(run.call_args.kwargs['cwd'], repo)
+            self.assertEqual(os.environ['DOTNET_ROOT'], '/custom')
+            self.assertTrue(os.environ['PATH'].startswith('/custom' + os.pathsep))
             run.return_value = subprocess.CompletedProcess([], 1, '', 'SDK missing')
             with self.assertRaisesRegex(RuntimeError, 'Runtime'):
                 nomad.prepare_dotnet(self.args, repo)

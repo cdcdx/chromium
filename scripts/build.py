@@ -9,6 +9,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -53,6 +54,14 @@ def prepare_mac_toolchain(cfg):
         result = subprocess.run(command, capture_output=True, text=True, env=environment)
         if result.returncode:
             F.err(f'Xcode 预检查失败: {" ".join(command)}\n{result.stderr.strip() or result.stdout.strip()}')
+    # xcrun --find can resolve a shim even when the downloadable toolchain is absent.
+    metal = subprocess.run(['/usr/bin/xcrun', '--sdk', 'macosx', 'metal', '--version'],
+                           capture_output=True, text=True, env=environment)
+    if metal.returncode:
+        install = shlex.join(['env', f'DEVELOPER_DIR={developer}', '/usr/bin/xcodebuild',
+                              '-downloadComponent', 'MetalToolchain'])
+        F.err(f'Metal 编译器不可用，请先安装当前 Xcode 的 Metal Toolchain：\n{install}\n'
+              f'{metal.stderr.strip() or metal.stdout.strip()}')
     os.environ['DEVELOPER_DIR'] = str(developer)
     F.log(f'Xcode: {developer}')
 

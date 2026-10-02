@@ -308,11 +308,16 @@ class WorkspaceTest(unittest.TestCase):
         with patch.dict(os.environ, {'DEVELOPER_DIR': str(developer)}), patch('subprocess.run') as run:
             run.return_value = subprocess.CompletedProcess([], 0, stdout='ok', stderr='')
             self.quiet(build.prepare_mac_toolchain, {})
-            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_count, 3)
             self.assertEqual(run.call_args.kwargs['env']['DEVELOPER_DIR'], str(developer))
-            self.assertEqual(run.call_args.args[0], ['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-path'])
+            self.assertEqual(run.call_args.args[0], ['/usr/bin/xcrun', '--sdk', 'macosx', 'metal', '--version'])
             run.return_value = subprocess.CompletedProcess([], 1, stdout='', stderr='SDK missing')
             with self.assertRaisesRegex(RuntimeError, 'SDK missing'):
+                build.prepare_mac_toolchain({})
+            run.side_effect = [subprocess.CompletedProcess([], 0, 'Xcode', ''),
+                               subprocess.CompletedProcess([], 0, '/SDK', ''),
+                               subprocess.CompletedProcess([], 1, '', 'missing Metal Toolchain')]
+            with self.assertRaisesRegex(RuntimeError, '-downloadComponent MetalToolchain'):
                 build.prepare_mac_toolchain({})
 
     def test_mac_toolchain_auto_selects_unique_full_xcode(self):
@@ -323,7 +328,8 @@ class WorkspaceTest(unittest.TestCase):
         with patch.object(Path, 'glob', return_value=[app]), patch('subprocess.run') as run:
             run.side_effect = [subprocess.CompletedProcess([], 0, '/Library/Developer/CommandLineTools\n', ''),
                                subprocess.CompletedProcess([], 0, 'Xcode', ''),
-                               subprocess.CompletedProcess([], 0, '/SDK', '')]
+                               subprocess.CompletedProcess([], 0, '/SDK', ''),
+                               subprocess.CompletedProcess([], 0, 'metal version', '')]
             self.quiet(build.prepare_mac_toolchain, {})
             self.assertEqual(os.environ['DEVELOPER_DIR'], str(developer))
 

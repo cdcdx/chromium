@@ -12,6 +12,9 @@ import shutil
 import subprocess
 import sys
 
+if __name__ == "__main__":
+    sys.modules["fetch"] = sys.modules[__name__]
+
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 CHROMIUM_SRC = WORKSPACE_ROOT / "src"
 HOST_OS = {"Windows": "win", "Darwin": "mac", "Linux": "linux"}.get(platform.system(), "")
@@ -232,7 +235,7 @@ def chromium_version():
 
 def build_parser():
     p = argparse.ArgumentParser(description="更新 depot_tools 及工具链；拉取指定版本 Chromium、DEPS 和四个业务仓库")
-    p.add_argument("targets", nargs="*", help="all（默认）/ depot_tools / chromium / deps / hooks / android / update / " + " / ".join(PROJECTS))
+    p.add_argument("targets", nargs="*", help="all（默认）/ depot_tools / chromium / deps / hooks / android / update / toolchains / metal / dotnet / android-sdk / jdk / " + " / ".join(PROJECTS))
     for name, (prefix, _) in PROJECTS.items():
         option = prefix.replace("_", "-")
         p.add_argument(f"--{option}-src", dest=prefix + "_src", default=None, help=f"{name} Git 地址")
@@ -258,7 +261,8 @@ def main(argv=None):
     DRY_RUN = args.dry_run
     cfg = load_config()
     requested = args.targets or ["all"]
-    valid = {"all", "update", "depot_tools", "chromium", "deps", "hooks", "android", *PROJECTS}
+    import toolchains
+    valid = {"all", "update", "depot_tools", "chromium", "deps", "hooks", "android", "toolchains", *toolchains.TARGETS, *PROJECTS}
     if set(requested) - valid:
         parser.error("未知目标: " + ", ".join(sorted(set(requested) - valid)))
     targets = set()
@@ -267,6 +271,12 @@ def main(argv=None):
             targets.update({"depot_tools", "chromium", "deps", *PROJECTS})
         elif name in ("update", "android"):
             targets.update({"depot_tools", "chromium", "deps"})
+        elif name == "toolchains":
+            targets.update({"depot_tools", "deps"})
+            if args.os == "android":
+                targets.add("android-sdk")
+            elif args.os == "mac" and HOST_OS == "mac":
+                targets.add("metal")
         else:
             targets.add(name)
     version = args.ver or cget(cfg, "chromium_ver", "CHROMIUM_VERSION")
@@ -296,11 +306,14 @@ def main(argv=None):
         write_gclient(url, android, args.os)
     if "deps" in targets:
         sync_deps(cfg, version, android, args.shallow, args.nohooks, args.jobs, args.os)
-    if "hooks" in targets:
+    if "hooks" in targets and not targets & {"android-sdk", "jdk"}:
         depot = tool_environment(cfg)
         run([depot / ("gclient.bat" if IS_WIN else "gclient"), "runhooks"], WORKSPACE_ROOT)
     for name, (url, ref) in repositories.items():
         fetch_project(name, url, ref)
+    for name in ("metal", "dotnet", "jdk", "android-sdk"):
+        if name in targets:
+            toolchains.setup(name, cfg)
     if args.save:
         path = WORKSPACE_ROOT / ".env"
         text = path.read_text(encoding="utf-8") if path.exists() else ""
