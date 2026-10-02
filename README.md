@@ -23,6 +23,22 @@
 
 ## 源码拉取
 
+查看**执行命令时当前目录的一级子目录**中的 Git 仓库，无需 `.env` 或仓库版本配置：
+
+```bash
+bash fetch.sh log          # 每个仓库最近 1 条提交：SHA、作者、日期、标题
+bash fetch.sh branch       # 仅列本地分支，含当前分支标记、提交及 upstream 信息
+bash fetch.sh log branch   # 同时查看
+```
+
+Windows 使用 `.\fetch.ps1 log` / `.\fetch.ps1 branch`。从其他目录使用脚本绝对路径执行时，
+扫描该调用目录的直接子目录，而不是脚本所在目录。不包含当前目录自身，也不递归进入 `src` 的依赖仓库。
+支持一级子目录中的普通仓库、worktree（.git 文件）和裸仓库；跳过 `.git` 及符号链接目录。
+空仓库显示“尚无提交/分支”；单个仓库出错仍继续，最后返回非零退出码。无仓库时显示数量 0。
+这两个命令不联网、不 fetch、不切换分支；`branch` 使用 `git branch -vv`，不列远端分支。
+本地分支的 upstream 信息仍会显示，处于分离 HEAD 时保留其状态提示；不能与拉取或安装动作混用。
+`--dry-run` 只列出仓库及查看计划，不执行 Git 命令。
+
 复制 `.env.example` 为 `.env`，配置四个仓库地址和版本。现有 `.env` 不会被重构脚本覆盖。
 优先级为命令行 > 环境变量（支持同名大写）> `.env` > 默认值。
 
@@ -141,6 +157,12 @@ VS/SDK 版本解析使用当前 Chromium 的 `build/vs_toolchain.py`，不在外
 桌面目标在相应系统宿主构建，同系统内可选择不同 CPU。Android 在 Linux 宿主构建。
 `arupa_desktop` 省略 `--os` / `--arch` 时默认当前系统、当前芯片；
 `arupa_android` 默认 `--os android --arch all`，同时编译 x64 和 arm64；可显式 `--arch` 只编译一种。
+内核 Ninja 的 `--jobs/-j` 默认自动计算：取 CPU 逻辑核心数与内存允许任务数中的较小值，最低为 1。
+内存按每个编译任务 2 GiB 估算，并预留至少 2 GiB 或总物理内存的 20%（取较大值）；
+例如 16 核/16 GiB 默认 6 个任务，16 核/32 GiB 默认 12 个任务。Linux 同时遵守进程 CPU affinity。
+无法获取内存时保守使用 1 个任务；可用 `--jobs 8` 手动覆盖。该估算不是硬性内存限制，
+不计其他进程当前占用或容器内存配额；内存紧张或容器内构建时请手动调低。
+任务数在启动时计算一次，日志显示计算依据；浏览器构建仍保留默认 8 个任务。
 例如 `bash build.sh arupa_desktop build` 编译本机桌面内核，`bash build.sh arupa_android build` 编译两种 Android 内核。
 这一宿主限制与 [Chromium Android 构建说明](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/android_build_instructions.md) 一致。
 需要事先准备系统构建依赖、macOS Xcode 或 Windows Visual Studio/SDK；build 阶段不会自动安装系统软件。

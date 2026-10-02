@@ -16,6 +16,7 @@ import tempfile
 
 import fetch as F
 import native_tools
+from concurrency import automatic_jobs
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
@@ -82,7 +83,7 @@ def build_parser():
     p.add_argument("--android-sdk", type=Path, help="Android 浏览器 SDK 目录；也可设置 ANDROID_HOME")
     p.add_argument("--ver", default="", help="内核版本；默认读取 src/chrome/VERSION，编译内核时必须与源码一致")
     p.add_argument("--link", "--mode", choices=("static", "dynamic"), default="static")
-    p.add_argument("--jobs", "-j", type=int, default=8)
+    p.add_argument("--jobs", "-j", type=int, default=None, help="并发任务数；Ninja 默认按 CPU/内存自动计算；显式指定可覆盖")
     p.add_argument("--plugin-runtime", type=Path, help="nomad-plugin-runtime.js 路径；默认工作区 plugin-runtime/")
     p.add_argument("--zip", action="store_true", help="打包时额外生成 zip")
     p.add_argument("--num", type=int, default=None, help="交付序号（默认自动递增）")
@@ -241,8 +242,16 @@ def main(argv=None):
         actions = {"build", "package"} if is_browser else {"gen", "build", "package"}
     if args.link == "dynamic" and (is_browser or target_os == "android" or "package" in actions):
         p.error("Android、浏览器和交付打包仅支持 static；arupa_desktop dynamic 可执行 gen/build")
-    if args.jobs < 1 or (args.num is not None and args.num < 1):
+    if (args.jobs is not None and args.jobs < 1) or (args.num is not None and args.num < 1):
         p.error("--jobs / --num 必须大于 0")
+    if args.jobs is None:
+        if "build" in actions and not is_browser:
+            args.jobs, reason = automatic_jobs()
+            F.log(f"自动并发任务数: {args.jobs}（{reason}）")
+        else:
+            args.jobs = 8 if is_browser else 1
+    elif "build" in actions:
+        F.log(f"使用指定并发任务数: {args.jobs}")
     required_host = "linux" if target_os == "android" else target_os
     if not args.dry_run and F.HOST_OS != required_host:
         p.error(f"{target_os} 构建需要 {required_host} 宿主（当前 {F.HOST_OS}）")
