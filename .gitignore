@@ -1,0 +1,34 @@
+# ide
+.codex/
+.cursor/
+.github/
+.idea/
+.trae/
+.vscode/
+.workbuddy/
+
+# mac
+.DS_Store
+
+# python/nodejs
+__pycache__
+node_modules/
+
+# google
+_bad_scm/
+.cipd/
+.fetch/
+android-sdk/
+.gc*
+
+# custom
+.build/
+backup/
+dist/
+docs/
+out/
+package/
+src/chrome/browser/arupa
+src/chrome/browser/arupa_desktop
+.env
+.env.bak.*

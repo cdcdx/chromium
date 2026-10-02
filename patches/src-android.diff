@@ -1,0 +1,2762 @@
+diff --git a/.gitignore b/.gitignore
+index 63b0d36754..2e8573a1c1 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -350,3 +350,5 @@ third_party/rust/target/
+ 
+ # Trace files created when using --trace-startup.
+ **/chrometrace.log
++
++agents/
+diff --git a/base/android/java/src/org/chromium/base/CallbackUtils.java b/base/android/java/src/org/chromium/base/CallbackUtils.java
+index 80c99c0cc9..d871797270 100644
+--- a/base/android/java/src/org/chromium/base/CallbackUtils.java
++++ b/base/android/java/src/org/chromium/base/CallbackUtils.java
+@@ -13,7 +13,7 @@ public class CallbackUtils {
+     /**
+      * @see #emptyCallback() to avoid unchecked generic checks.
+      */
+-    private static final Callback DO_NOTHING_CALLBACK = _ -> {};
++    private static final Callback DO_NOTHING_CALLBACK = unusedArg -> {};
+ 
+     /** Use for runnables where you need no action to be taken. */
+     private static final Runnable DO_NOTHING_RUNNABLE = () -> {};
+@@ -31,6 +31,6 @@ public class CallbackUtils {
+ 
+     /** Returns a Callback that calls the given Runnable. */
+     public static <T> Callback<T> fromRunnable(Runnable r) {
+-        return _ -> r.run();
++        return unusedArg -> r.run();
+     }
+ }
+diff --git a/base/android/java/src/org/chromium/base/supplier/SupplierUtils.java b/base/android/java/src/org/chromium/base/supplier/SupplierUtils.java
+index 0da8d021e5..4a52eabd50 100644
+--- a/base/android/java/src/org/chromium/base/supplier/SupplierUtils.java
++++ b/base/android/java/src/org/chromium/base/supplier/SupplierUtils.java
+@@ -42,7 +42,7 @@ public class SupplierUtils {
+             ThreadUtils.assertOnUiThread();
+             assert mCallback == null;
+             int waitingSupplierCount = 0;
+-            Callback<?> supplierCallback = _ -> onSupplierAvailable();
++            Callback<?> supplierCallback = unusedArg -> onSupplierAvailable();
+             for (Supplier<?> supplier : suppliers) {
+                 if (supplier.get() != null) {
+                     continue;
+diff --git a/build/android/gyp/compile_java.py b/build/android/gyp/compile_java.py
+index 691f2d956d..4c530d9507 100755
+--- a/build/android/gyp/compile_java.py
++++ b/build/android/gyp/compile_java.py
+@@ -708,7 +708,7 @@ def main(
+         '--release',
+         # Keep consistent with javac_cmd in //build/android/gyp/turbine.py.
+         # LINT.IfChange
+-        '25',
++        '21',
+         # LINT.ThenChange(//depot/chromium/components/cronet/gn2bp/templates/Android.extras.bp.template)
+         # Chromium only allows UTF8 source files.  Being explicit avoids
+         # javac pulling a default encoding from the user's environment.
+diff --git a/build/android/gyp/turbine.py b/build/android/gyp/turbine.py
+index e613ca33bf..0ee3ca9f6e 100755
+--- a/build/android/gyp/turbine.py
++++ b/build/android/gyp/turbine.py
+@@ -107,7 +107,7 @@ def main(argv):
+     # //build/android/gyp/compile_java.py and
+     # compileOptions in //build/android/gradle/android.jinja
+     # LINT.IfChange
+-    javac_cmd = ['--release', '25']
++    javac_cmd = ['--release', '21']
+     # LINT.ThenChange(//depot/chromium/components/cronet/gn2bp/templates/Android.extras.bp.template)
+ 
+     # Turbine reads lists from command line args by consuming args until one
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index f261c72029..7bea9fbdc2 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -2041,6 +2041,8 @@ source_set("browser") {
+     ":file_util_service",
+     ":font_pref",
+     ":icon_loader",
++    "//chrome/browser/arupa",
++    "//chrome/browser/arupa/aar:arupa_kernel_aar_native",
+     ":resources_util",
+     ":unexpire_flags",
+     "//base",
+diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
+index 3d46f9e7d3..1f6e512df2 100644
+--- a/content/browser/renderer_host/navigation_request.cc
++++ b/content/browser/renderer_host/navigation_request.cc
+@@ -4678,9 +4678,16 @@ UrlInfo NavigationRequest::GetUrlInfo() {
+   // <webview> tags) should always stay in the current StoragePartition.
+   SiteInstanceImpl* current_instance =
+       frame_tree_node_->current_frame_host()->GetSiteInstance();
+-  if (current_instance->IsFixedStoragePartition()) {
++  if (current_instance->IsFixedStoragePartition() &&
++      current_instance->HasSite()) {
+     url_info_init.WithStoragePartitionConfig(
+         current_instance->GetSecurityPrincipal().GetStoragePartitionConfig());
++  } else if (current_instance->IsFixedStoragePartition()) {
++    std::optional<StoragePartitionConfig> bi_config =
++        current_instance->GetBrowsingInstanceStoragePartitionConfig();
++    if (bi_config.has_value()) {
++      url_info_init.WithStoragePartitionConfig(*bi_config);
++    }
+   }
+ 
+   // Child frames (including fenced frames) should always use the
+diff --git a/content/browser/renderer_host/render_frame_host_manager.cc b/content/browser/renderer_host/render_frame_host_manager.cc
+index f840f244a6..7b4dc60dfd 100644
+--- a/content/browser/renderer_host/render_frame_host_manager.cc
++++ b/content/browser/renderer_host/render_frame_host_manager.cc
+@@ -4069,9 +4069,13 @@ scoped_refptr<SiteInstanceImpl> RenderFrameHostManager::ConvertToSiteInstance(
+   // tags), the new unrelated SiteInstance must also stay in the same
+   // StoragePartition.
+   UrlInfo dest_url_info = descriptor.dest_url_info;
+-  if (current_instance->IsFixedStoragePartition()) {
++  if (current_instance->IsFixedStoragePartition() &&
++      current_instance->HasSite()) {
+     dest_url_info.storage_partition_config =
+         current_instance->GetSecurityPrincipal().GetStoragePartitionConfig();
++  } else if (current_instance->IsFixedStoragePartition()) {
++    dest_url_info.storage_partition_config =
++        current_instance->GetBrowsingInstanceStoragePartitionConfig();
+   }
+ 
+   // First check if the candidate SiteInstance matches.  For example, we get
+diff --git a/content/browser/service_worker/service_worker_new_script_fetcher.cc b/content/browser/service_worker/service_worker_new_script_fetcher.cc
+index 81112801ec..56a6d97172 100644
+--- a/content/browser/service_worker/service_worker_new_script_fetcher.cc
++++ b/content/browser/service_worker/service_worker_new_script_fetcher.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "content/browser/service_worker/service_worker_new_script_fetcher.h"
++#include "base/logging.h"
+ 
+ #include "content/browser/connection_allowlist_utils.h"
+ #include "content/browser/devtools/devtools_instrumentation.h"
+@@ -169,6 +170,13 @@ void ServiceWorkerNewScriptFetcher::OnReceiveResponse(
+   PolicyContainerPolicies policies;
+   policies.is_web_secure_context =
+       network::IsUrlPotentiallyTrustworthy(final_response_url);
++  if (!policies.is_web_secure_context &&
++      network::IsUrlPotentiallyTrustworthy(version_->script_url())) {
++    LOG(INFO) << "[arupa][sw] 新脚本策略容器: final_response_url=" << final_response_url
++              << " 算出不可信, 按脚本 URL " << version_->script_url()
++              << " 改判 is_web_secure_context=true";
++    policies.is_web_secure_context = true;
++  }
+   policies.ip_address_space = network::CalculateResourceAddressSpace(
+       final_response_url,
+       main_script_load_params->response_head->remote_endpoint);
+diff --git a/content/browser/service_worker/service_worker_version.cc b/content/browser/service_worker/service_worker_version.cc
+index ef0bdca126..2e7f21f753 100644
+--- a/content/browser/service_worker/service_worker_version.cc
++++ b/content/browser/service_worker/service_worker_version.cc
+@@ -3,6 +3,9 @@
+ // found in the LICENSE file.
+ 
+ #include "content/browser/service_worker/service_worker_version.h"
++#include "net/base/ip_endpoint.h"
++#include "services/network/public/cpp/ip_address_space_util.h"
++#include "services/network/public/cpp/is_potentially_trustworthy.h"
+ 
+ #include <stddef.h>
+ 
+@@ -2856,6 +2859,31 @@ void ServiceWorkerVersion::StartWorkerInternal() {
+         DeriveLocalNetworkAccessRequestPolicy(
+             policy_container_host_->policies(),
+             LocalNetworkAccessRequestContext::kWorker);
++  } else if (network::IsUrlPotentiallyTrustworthy(script_url())) {
++    if (!client_security_state_) {
++      client_security_state_ = network::mojom::ClientSecurityState::New();
++    }
++    PolicyContainerPolicies provisional;
++    provisional.is_web_secure_context = true;
++    provisional.ip_address_space =
++        network::CalculateResourceAddressSpace(script_url(), net::IPEndPoint());
++    client_security_state_->ip_address_space = provisional.ip_address_space;
++    client_security_state_->is_web_secure_context = true;
++    client_security_state_->local_network_access_request_policy =
++        DeriveLocalNetworkAccessRequestPolicy(
++            provisional, LocalNetworkAccessRequestContext::kWorker);
++  }
++  if (client_security_state_ && !client_security_state_->is_web_secure_context &&
++      network::IsUrlPotentiallyTrustworthy(script_url())) {
++    PolicyContainerPolicies fixed;
++    fixed.is_web_secure_context = true;
++    fixed.ip_address_space = client_security_state_->ip_address_space;
++    client_security_state_->is_web_secure_context = true;
++    client_security_state_->local_network_access_request_policy =
++        DeriveLocalNetworkAccessRequestPolicy(
++            fixed, LocalNetworkAccessRequestContext::kWorker);
++    LOG(INFO) << "[arupa][sw] 首启安全档兜底: script=" << script_url()
++              << " 原档 is_web_secure_context=false ⇒ 按可信 scheme 改成 true";
+   }
+ 
+   embedded_worker_->Start(std::move(params),
+diff --git a/content/browser/site_instance_impl.cc b/content/browser/site_instance_impl.cc
+index 014ad1e920..f3c1cde84e 100644
+--- a/content/browser/site_instance_impl.cc
++++ b/content/browser/site_instance_impl.cc
+@@ -168,8 +168,13 @@ scoped_refptr<SiteInstanceImpl> SiteInstanceImpl::CreateForUrlInfo(
+ 
+   // Note: The |allow_default_instance| value used here MUST match the value
+   // used in DoesSiteForURLMatch().
+-  return instance->GetSiteInstanceForURL(
++  scoped_refptr<SiteInstanceImpl> site_instance = instance->GetSiteInstanceForURL(
+       url_info, kCreateForURLAllowsDefaultSiteInstance);
++  if (is_fixed_storage_partition && url_info.storage_partition_config.has_value() &&
++      !site_instance->HasSite() && !instance->storage_partition_config_.has_value()) {
++    instance->storage_partition_config_ = url_info.storage_partition_config;
++  }
++  return site_instance;
+ }
+ 
+ // static
+@@ -252,11 +257,12 @@ SiteInstanceImpl::CreateForFixedStoragePartition(
+   CHECK(browser_context);
+   CHECK(!partition_config.is_default());
+ 
+-  return SiteInstanceImpl::CreateForUrlInfo(
++  scoped_refptr<SiteInstanceImpl> instance = SiteInstanceImpl::CreateForUrlInfo(
+       browser_context,
+       UrlInfo(UrlInfoInit(url).WithStoragePartitionConfig(partition_config)),
+       /*is_guest=*/false,
+       /*is_fenced=*/false, /*is_fixed_storage_partition=*/true);
++  return instance;
+ }
+ 
+ // static
+@@ -841,9 +847,12 @@ SiteInfo SiteInstanceImpl::DeriveSiteInfo(
+ 
+   // Keep the same StoragePartition when the storage partition is fixed (e.g.
+   // for <webview>).
+-  if (IsFixedStoragePartition()) {
++  if (IsFixedStoragePartition() && HasSite()) {
+     overridden_url_info.storage_partition_config =
+         GetSiteInfo().GetStoragePartitionConfig();
++  } else if (IsFixedStoragePartition()) {
++    overridden_url_info.storage_partition_config =
++        GetBrowsingInstanceStoragePartitionConfig();
+   }
+ 
+   return SiteInfo::Create(GetIsolationContext(), overridden_url_info);
+@@ -853,6 +862,10 @@ bool SiteInstanceImpl::HasSite() const {
+   return has_site_;
+ }
+ 
++std::optional<StoragePartitionConfig>
++SiteInstanceImpl::GetBrowsingInstanceStoragePartitionConfig() const {
++  return browsing_instance_->storage_partition_config_;
++}
+ bool SiteInstanceImpl::HasRelatedSiteInstance(const SiteInfo& site_info) {
+   return browsing_instance_->HasSiteInstance(site_info);
+ }
+diff --git a/content/browser/site_instance_impl.h b/content/browser/site_instance_impl.h
+index 4a3a2353f6..8c0b8893e7 100644
+--- a/content/browser/site_instance_impl.h
++++ b/content/browser/site_instance_impl.h
+@@ -203,6 +203,8 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance {
+   // tags, this always returns true.
+   bool IsFixedStoragePartition();
+ 
++  std::optional<StoragePartitionConfig> GetBrowsingInstanceStoragePartitionConfig()
++      const;
+   // This is called every time a renderer process is assigned to a SiteInstance
+   // and is used by the content embedder for collecting metrics.
+   void set_process_assignment(SiteInstanceProcessAssignment assignment) {
+diff --git a/content/public/android/java/src/org/chromium/content/browser/sms/SmsVerificationReceiver.java b/content/public/android/java/src/org/chromium/content/browser/sms/SmsVerificationReceiver.java
+index a2a14342a2..d48b7dbe5f 100644
+--- a/content/public/android/java/src/org/chromium/content/browser/sms/SmsVerificationReceiver.java
++++ b/content/public/android/java/src/org/chromium/content/browser/sms/SmsVerificationReceiver.java
+@@ -208,7 +208,7 @@ public class SmsVerificationReceiver extends BroadcastReceiver {
+         Task<Void> task = client.startSmsCodeBrowserRetriever();
+ 
+         task.addOnSuccessListener(
+-                _ -> {
++                unusedArg -> {
+                     this.reportBackendAvailability(BackendAvailability.AVAILABLE);
+                     mProvider.verificationReceiverSucceeded(isLocalRequest);
+                 });
+diff --git a/extensions/BUILD.gn b/extensions/BUILD.gn
+index 2800d35982..0864af900f 100644
+--- a/extensions/BUILD.gn
++++ b/extensions/BUILD.gn
+@@ -8,7 +8,6 @@ import("//tools/grit/grit_rule.gni")
+ import("//tools/grit/repack.gni")
+ import("//ui/base/ui_features.gni")
+ 
+-assert(enable_extensions_core)
+ assert(!is_fuchsia)
+ 
+ # If enable_extensions is true then enable_guest_view must also be true.
+@@ -164,11 +163,6 @@ static_library("test_support") {
+     "//content/public/common",
+     "//content/test:test_support",
+     "//crypto:test_support",
+-    "//extensions/browser",
+-    "//extensions/browser:test_support",
+-    "//extensions/browser/api",
+-    "//extensions/browser/api/storage:settings_namespace",
+-    "//extensions/browser/updater",
+     "//extensions/common",
+     "//extensions/common:core_api_provider",
+     "//extensions/common/api",
+@@ -289,8 +283,6 @@ test("extensions_unittests") {
+     "//build:android_buildflags",
+     "//content/public/common",
+     "//content/test:test_support",
+-    "//extensions/browser:unit_tests",
+-    "//extensions/browser/api/test",
+     "//extensions/common",
+     "//extensions/common:unit_tests",
+     "//extensions/renderer:unit_tests",
+diff --git a/extensions/common/BUILD.gn b/extensions/common/BUILD.gn
+index 8b9e0d6bd7..8dea2ff582 100644
+--- a/extensions/common/BUILD.gn
++++ b/extensions/common/BUILD.gn
+@@ -11,7 +11,6 @@ if (is_android) {
+   import("//build/config/android/rules.gni")
+ }
+ 
+-assert(enable_extensions_core)
+ 
+ # If enable_extensions is true then enable_guest_view must also be true.
+ assert(!enable_extensions || enable_guest_view)
+@@ -310,13 +309,6 @@ static_library("common") {
+     "api/sockets/sockets_manifest_permission.h",
+     "api/speech/tts_engine_manifest_handler.cc",
+     "api/speech/tts_engine_manifest_handler.h",
+-    "api/web_request/web_request_activity_log_constants.cc",
+-    "api/web_request/web_request_activity_log_constants.h",
+-    "api/web_request/web_request_constants.h",
+-    "api/web_request/web_request_filter.cc",
+-    "api/web_request/web_request_filter.h",
+-    "api/web_request/web_request_resource_type.cc",
+-    "api/web_request/web_request_resource_type.h",
+     "command.cc",
+     "command.h",
+     "common_manifest_handlers.cc",
+@@ -585,7 +577,6 @@ static_library("common") {
+     "//build:chromeos_buildflags",
+     "//components/crash/core/common",
+     "//components/crx_file",
+-    "//components/custom_handlers",
+     "//components/pdf/common:util",
+     "//components/safe_browsing/core/common",
+     "//components/safe_browsing/core/common/hashprefix_realtime:hash_realtime_utils",
+@@ -615,6 +606,15 @@ static_library("common") {
+     "//url",
+   ]
+ 
++  sources += [
++    "api/web_request/web_request_activity_log_constants.cc",
++    "api/web_request/web_request_activity_log_constants.h",
++    "api/web_request/web_request_constants.h",
++    "api/web_request/web_request_filter.cc",
++    "api/web_request/web_request_filter.h",
++    "api/web_request/web_request_resource_type.cc",
++    "api/web_request/web_request_resource_type.h",
++  ]
+   if (is_chromeos) {
+     sources += [
+       "manifest_handlers/input_components_handler.cc",
+@@ -776,8 +776,6 @@ source_set("unit_tests") {
+     "//tools/json_schema_compiler:generated_api_util",
+ 
+     # TODO(brettw) these tests should not be including headers from browser.
+-    "//extensions:test_support",
+-    "//extensions/browser",
+     "//extensions/strings",
+     "//ipc",
+     "//services/device/public/cpp:test_support",
+diff --git a/extensions/common/api/BUILD.gn b/extensions/common/api/BUILD.gn
+index 4ff342c46d..d2df30ba35 100644
+--- a/extensions/common/api/BUILD.gn
++++ b/extensions/common/api/BUILD.gn
+@@ -8,7 +8,6 @@ import("//mojo/public/tools/bindings/mojom.gni")
+ import("//tools/json_schema_compiler/json_features.gni")
+ import("//tools/json_schema_compiler/json_schema_api.gni")
+ 
+-assert(enable_extensions_core)
+ 
+ ################################################################################
+ # Public Targets
+diff --git a/extensions/common/api/_api_features.json b/extensions/common/api/_api_features.json
+index fa5b150c53..8df1f3e24b 100644
+--- a/extensions/common/api/_api_features.json
++++ b/extensions/common/api/_api_features.json
+@@ -140,16 +140,6 @@
+     "dependencies": ["permission:cecPrivate"],
+     "contexts": ["privileged_extension"]
+   },
+-  "clipboard": {
+-    "dependencies": ["permission:clipboard"],
+-    "contexts": ["privileged_extension"]
+-  },
+-  "clipboard.onClipboardDataChanged": {
+-    "dependencies": ["permission:clipboardRead"]
+-  },
+-  "clipboard.setImageData": {
+-    "dependencies": ["permission:clipboardWrite"]
+-  },
+   "declarativeNetRequest": [{
+     "dependencies": ["permission:declarativeNetRequest"],
+     "contexts": ["privileged_extension"],
+@@ -361,6 +351,59 @@
+     "channel": "stable",
+     "extension_types": ["extension", "legacy_packaged_app", "platform_app"]
+   },
++  "extension": {
++    "dependencies": [],
++    "channel": "stable",
++    "extension_types": ["extension", "legacy_packaged_app", "platform_app"],
++    "contexts": ["privileged_extension"]
++  },
++  "extension.isAllowedIncognitoAccess": {
++    "dependencies": [],
++    "channel": "stable",
++    "contexts": ["privileged_extension"]
++  },
++  "extension.isAllowedFileSchemeAccess": {
++    "dependencies": [],
++    "channel": "stable",
++    "contexts": ["privileged_extension"]
++  },
++  "extension.getViews": {
++    "dependencies": [],
++    "channel": "stable",
++    "contexts": ["privileged_extension"],
++    "disallow_for_service_workers": true
++  },
++  "extension.inIncognitoContext": {
++    "dependencies": [],
++    "channel": "stable",
++    "contexts": ["privileged_extension", "unprivileged_extension",
++                 "content_script"]
++  },
++  "management.getAll": {
++    "dependencies": [],
++    "channel": "stable",
++    "extension_types": ["extension", "legacy_packaged_app", "platform_app"]
++  },
++  "management.onEnabled": {
++    "dependencies": [],
++    "channel": "stable",
++    "extension_types": ["extension", "legacy_packaged_app", "platform_app"]
++  },
++  "management.onDisabled": {
++    "dependencies": [],
++    "channel": "stable",
++    "extension_types": ["extension", "legacy_packaged_app", "platform_app"]
++  },
++  "management.onInstalled": {
++    "dependencies": [],
++    "channel": "stable",
++    "extension_types": ["extension", "legacy_packaged_app", "platform_app"]
++  },
++  "management.onUninstalled": {
++    "dependencies": [],
++    "channel": "stable",
++    "extension_types": ["extension", "legacy_packaged_app", "platform_app"]
++  },
+   "management.installReplacementWebApp": {
+     "dependencies": ["manifest:replacement_web_app"],
+     "extension_types": ["extension", "platform_app"],
+diff --git a/extensions/common/api/extension_action/action_info.cc b/extensions/common/api/extension_action/action_info.cc
+index a13f5a9021..dd3fdb0a17 100644
+--- a/extensions/common/api/extension_action/action_info.cc
++++ b/extensions/common/api/extension_action/action_info.cc
+@@ -19,7 +19,6 @@
+ #include "extensions/common/manifest_handler_helpers.h"
+ #include "extensions/common/manifest_handlers/icon_variants_handler.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ 
+diff --git a/extensions/common/api/extension_action/action_info.h b/extensions/common/api/extension_action/action_info.h
+index 63e5beec75..1b29973db6 100644
+--- a/extensions/common/api/extension_action/action_info.h
++++ b/extensions/common/api/extension_action/action_info.h
+@@ -14,7 +14,6 @@
+ #include "extensions/common/icons/extension_icon_variants.h"
+ #include "url/gurl.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ 
+diff --git a/extensions/common/api/schema.gni b/extensions/common/api/schema.gni
+index 5fb6138fb2..b761284d94 100644
+--- a/extensions/common/api/schema.gni
++++ b/extensions/common/api/schema.gni
+@@ -135,6 +135,9 @@ if (enable_desktop_android_extensions) {
+   ]
+ }
+ 
++if (!enable_extensions && !enable_desktop_android_extensions) {
++  extensions_types_only_schema_files_ += [ "scripts_internal.webidl" ]
++}
+ extensions_api_schema_files =
+     get_path_info(extensions_api_schema_files_, "abspath")
+ 
+diff --git a/extensions/common/api/speech/tts_engine_manifest_handler.h b/extensions/common/api/speech/tts_engine_manifest_handler.h
+index 716bc98134..ec53e3f2a8 100644
+--- a/extensions/common/api/speech/tts_engine_manifest_handler.h
++++ b/extensions/common/api/speech/tts_engine_manifest_handler.h
+@@ -15,7 +15,6 @@
+ #include "extensions/common/extension.h"
+ #include "extensions/common/manifest_handler.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ 
+diff --git a/extensions/common/api/web_request/web_request_filter.h b/extensions/common/api/web_request/web_request_filter.h
+index 46ba17e5a3..78d764fb32 100644
+--- a/extensions/common/api/web_request/web_request_filter.h
++++ b/extensions/common/api/web_request/web_request_filter.h
+@@ -13,7 +13,6 @@
+ #include "extensions/common/url_pattern.h"
+ #include "extensions/common/url_pattern_set.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace base {
+ class DictValue;
+diff --git a/extensions/common/api/web_request/web_request_resource_type.cc b/extensions/common/api/web_request/web_request_resource_type.cc
+index 8197e3be52..717d5b2e92 100644
+--- a/extensions/common/api/web_request/web_request_resource_type.cc
++++ b/extensions/common/api/web_request/web_request_resource_type.cc
+@@ -11,7 +11,6 @@
+ #include "base/numerics/safe_conversions.h"
+ #include "extensions/buildflags/buildflags.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ 
+diff --git a/extensions/common/api/web_request/web_request_resource_type.h b/extensions/common/api/web_request/web_request_resource_type.h
+index 33358210e5..6655474970 100644
+--- a/extensions/common/api/web_request/web_request_resource_type.h
++++ b/extensions/common/api/web_request/web_request_resource_type.h
+@@ -11,7 +11,6 @@
+ 
+ #include "extensions/buildflags/buildflags.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ 
+diff --git a/extensions/common/command.cc b/extensions/common/command.cc
+index 80bfe1714f..1c141cf5d8 100644
+--- a/extensions/common/command.cc
++++ b/extensions/common/command.cc
+@@ -122,6 +122,8 @@ std::string Command::CommandPlatform() {
+ #elif BUILDFLAG(IS_DESKTOP_ANDROID)
+   // For now, we use linux keybindings on desktop android.
+   return ui::kKeybindingPlatformLinux;
++#elif BUILDFLAG(IS_ANDROID)
++  return ui::kKeybindingPlatformLinux;
+ #else
+ #error Unsupported platform
+ #endif
+diff --git a/extensions/common/extension.h b/extensions/common/extension.h
+index bbbd9bbcc2..66501c8272 100644
+--- a/extensions/common/extension.h
++++ b/extensions/common/extension.h
+@@ -29,7 +29,6 @@
+ #include "url/gurl.h"
+ #include "url/origin.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ class HashedExtensionId;
+diff --git a/extensions/common/icons/extension_icon_variant.cc b/extensions/common/icons/extension_icon_variant.cc
+index b56506736f..a8f20640dc 100644
+--- a/extensions/common/icons/extension_icon_variant.cc
++++ b/extensions/common/icons/extension_icon_variant.cc
+@@ -13,7 +13,6 @@
+ #include "extensions/common/extension_resource.h"
+ #include "extensions/common/manifest_handler_helpers.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ 
+diff --git a/extensions/common/icons/extension_icon_variant.h b/extensions/common/icons/extension_icon_variant.h
+index f348f0bafd..a910f81df3 100644
+--- a/extensions/common/icons/extension_icon_variant.h
++++ b/extensions/common/icons/extension_icon_variant.h
+@@ -16,7 +16,6 @@
+ #include "extensions/common/extension_resource.h"
+ #include "extensions/common/icons/extension_icon_variants_diagnostics.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ 
+diff --git a/extensions/common/icons/extension_icon_variants.cc b/extensions/common/icons/extension_icon_variants.cc
+index c90740f37e..c6a70ea5c6 100644
+--- a/extensions/common/icons/extension_icon_variants.cc
++++ b/extensions/common/icons/extension_icon_variants.cc
+@@ -8,7 +8,6 @@
+ #include "extensions/buildflags/buildflags.h"
+ #include "extensions/common/icons/extension_icon_variants_diagnostics.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ 
+diff --git a/extensions/common/icons/extension_icon_variants.h b/extensions/common/icons/extension_icon_variants.h
+index 43c5b1be01..510788e3c0 100644
+--- a/extensions/common/icons/extension_icon_variants.h
++++ b/extensions/common/icons/extension_icon_variants.h
+@@ -14,7 +14,6 @@
+ #include "extensions/common/icons/extension_icon_variant.h"
+ #include "extensions/common/icons/extension_icon_variants_diagnostics.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ 
+diff --git a/extensions/common/icons/extension_icon_variants_diagnostics.cc b/extensions/common/icons/extension_icon_variants_diagnostics.cc
+index 4b150bfc24..fcbab12278 100644
+--- a/extensions/common/icons/extension_icon_variants_diagnostics.cc
++++ b/extensions/common/icons/extension_icon_variants_diagnostics.cc
+@@ -8,7 +8,6 @@
+ 
+ #include "extensions/buildflags/buildflags.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions::diagnostics::icon_variants {
+ 
+diff --git a/extensions/common/icons/extension_icon_variants_diagnostics.h b/extensions/common/icons/extension_icon_variants_diagnostics.h
+index 0a8e377c16..5c6871d0b8 100644
+--- a/extensions/common/icons/extension_icon_variants_diagnostics.h
++++ b/extensions/common/icons/extension_icon_variants_diagnostics.h
+@@ -7,7 +7,6 @@
+ 
+ #include "extensions/buildflags/buildflags.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions::diagnostics::icon_variants {
+ 
+diff --git a/extensions/common/manifest_handlers/icon_variants_handler.cc b/extensions/common/manifest_handlers/icon_variants_handler.cc
+index ac729225a8..d5e97333f2 100644
+--- a/extensions/common/manifest_handlers/icon_variants_handler.cc
++++ b/extensions/common/manifest_handlers/icon_variants_handler.cc
+@@ -19,7 +19,6 @@
+ #include "extensions/common/manifest_constants.h"
+ #include "ui/gfx/color_utils.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ 
+diff --git a/extensions/common/manifest_handlers/icon_variants_handler.h b/extensions/common/manifest_handlers/icon_variants_handler.h
+index fc98ec58eb..0fb273ddd1 100644
+--- a/extensions/common/manifest_handlers/icon_variants_handler.h
++++ b/extensions/common/manifest_handlers/icon_variants_handler.h
+@@ -14,7 +14,6 @@
+ #include "extensions/common/icons/extension_icon_variants.h"
+ #include "extensions/common/manifest_handler.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ 
+diff --git a/extensions/common/manifest_handlers/icons_handler.cc b/extensions/common/manifest_handlers/icons_handler.cc
+index 8b94f93f4d..dc78a9f653 100644
+--- a/extensions/common/manifest_handlers/icons_handler.cc
++++ b/extensions/common/manifest_handlers/icons_handler.cc
+@@ -23,7 +23,6 @@
+ #include "extensions/strings/grit/extensions_strings.h"
+ #include "ui/gfx/geometry/size.h"
+ 
+-static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+ 
+diff --git a/extensions/common/mojom/api_permission_id.mojom b/extensions/common/mojom/api_permission_id.mojom
+index 262221ecd8..444e9df49a 100644
+--- a/extensions/common/mojom/api_permission_id.mojom
++++ b/extensions/common/mojom/api_permission_id.mojom
+@@ -299,6 +299,7 @@ enum APIPermissionID {
+   kBluetoothPeripheral = 272,
+   kPublicSuffix = 273,
+ 
++  kNomad = 900,
+   // Add new entries at the end of the enum and be sure to update the
+   // "ExtensionPermission3" enum in
+   // tools/metrics/histograms/metadata/extensions/enums.xml (by running
+diff --git a/extensions/renderer/BUILD.gn b/extensions/renderer/BUILD.gn
+index 254e3a7e7b..6e8f0771de 100644
+--- a/extensions/renderer/BUILD.gn
++++ b/extensions/renderer/BUILD.gn
+@@ -6,7 +6,6 @@ import("//components/guest_view/buildflags/buildflags.gni")
+ import("//extensions/buildflags/buildflags.gni")
+ import("//pdf/features.gni")
+ 
+-assert(enable_extensions_core)
+ 
+ # If enable_extensions is true then enable_guest_view must also be true.
+ assert(!enable_extensions || enable_guest_view)
+@@ -51,8 +50,6 @@ source_set("renderer") {
+     "api/web_request_event_handling_tracker.h",
+     "api/web_request_hooks.cc",
+     "api/web_request_hooks.h",
+-    "api/web_request_natives.cc",
+-    "api/web_request_natives.h",
+     "api_activity_logger.cc",
+     "api_activity_logger.h",
+     "api_definitions_natives.cc",
+@@ -285,6 +282,10 @@ source_set("renderer") {
+   # cleanly with the experimental desktop-android build. Either make them
+   # compile, or determine they should not be included and place them under a
+   # more appropriate if-block.
++  sources += [
++    "api/web_request_natives.cc",
++    "api/web_request_natives.h",
++  ]
+   if (enable_extensions) {
+     sources += [
+       "api/automation/automation_api_converters.cc",
+diff --git a/extensions/renderer/ipc_message_sender.cc b/extensions/renderer/ipc_message_sender.cc
+index 76846f429e..444fd75fd0 100644
+--- a/extensions/renderer/ipc_message_sender.cc
++++ b/extensions/renderer/ipc_message_sender.cc
+@@ -11,6 +11,7 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/no_destructor.h"
+ #include "content/public/renderer/render_frame.h"
+ #include "content/public/renderer/render_thread.h"
+ #include "content/public/renderer/worker_thread.h"
+@@ -630,18 +631,42 @@ IPCMessageSender::IPCMessageSender() = default;
+ 
+ IPCMessageSender::~IPCMessageSender() = default;
+ 
++namespace {
++IPCMessageSender::MainThreadSenderFactory& GetArupaEmbedderFactory() {
++  static base::NoDestructor<IPCMessageSender::MainThreadSenderFactory> factory;
++  return *factory;
++}
++IPCMessageSender::WorkerThreadSenderFactory& GetArupaWorkerEmbedderFactory() {
++  static base::NoDestructor<IPCMessageSender::WorkerThreadSenderFactory> factory;
++  return *factory;
++}
++}
+ // static
+ std::unique_ptr<IPCMessageSender>
+ IPCMessageSender::CreateMainThreadIPCMessageSender() {
++  if (GetArupaEmbedderFactory()) {
++    return GetArupaEmbedderFactory().Run();
++  }
+   return std::make_unique<MainThreadIPCMessageSender>();
+ }
+ 
++void IPCMessageSender::SetMainThreadSenderFactoryForEmbedder(
++    MainThreadSenderFactory factory) {
++  GetArupaEmbedderFactory() = std::move(factory);
++}
++void IPCMessageSender::SetWorkerThreadSenderFactoryForEmbedder(
++    WorkerThreadSenderFactory factory) {
++  GetArupaWorkerEmbedderFactory() = std::move(factory);
++}
+ // static
+ std::unique_ptr<IPCMessageSender>
+ IPCMessageSender::CreateWorkerThreadIPCMessageSender(
+     WorkerThreadDispatcher* dispatcher,
+     blink::WebServiceWorkerContextProxy* context_proxy,
+     int64_t service_worker_version_id) {
++  if (GetArupaWorkerEmbedderFactory()) {
++    return GetArupaWorkerEmbedderFactory().Run();
++  }
+   return std::make_unique<WorkerThreadIPCMessageSender>(
+       dispatcher, context_proxy, service_worker_version_id);
+ }
+diff --git a/extensions/renderer/ipc_message_sender.h b/extensions/renderer/ipc_message_sender.h
+index b38c247bf2..7ebf734317 100644
+--- a/extensions/renderer/ipc_message_sender.h
++++ b/extensions/renderer/ipc_message_sender.h
+@@ -118,6 +118,14 @@ class IPCMessageSender {
+                                   base::ListValue args,
+                                   const std::string& extra) = 0;
+ 
++  using MainThreadSenderFactory =
++      base::RepeatingCallback<std::unique_ptr<IPCMessageSender>()>;
++  static void SetMainThreadSenderFactoryForEmbedder(
++      MainThreadSenderFactory factory);
++  using WorkerThreadSenderFactory =
++      base::RepeatingCallback<std::unique_ptr<IPCMessageSender>()>;
++  static void SetWorkerThreadSenderFactoryForEmbedder(
++      WorkerThreadSenderFactory factory);
+   // Creates an IPCMessageSender for use on the main thread.
+   static std::unique_ptr<IPCMessageSender> CreateMainThreadIPCMessageSender();
+ 
+diff --git a/extensions/renderer/resources/BUILD.gn b/extensions/renderer/resources/BUILD.gn
+index 9a1ad82ba2..1198b87c65 100644
+--- a/extensions/renderer/resources/BUILD.gn
++++ b/extensions/renderer/resources/BUILD.gn
+@@ -6,7 +6,6 @@ import("//extensions/buildflags/buildflags.gni")
+ import("//tools/grit/grit_rule.gni")
+ import("//ui/webui/resources/tools/generate_grd.gni")
+ 
+-assert(enable_extensions_core)
+ 
+ grit("extensions_renderer_resources") {
+   source = "extensions_renderer_resources.grd"
+diff --git a/extensions/strings/BUILD.gn b/extensions/strings/BUILD.gn
+index 9fb23a9622..b12ac6f06e 100644
+--- a/extensions/strings/BUILD.gn
++++ b/extensions/strings/BUILD.gn
+@@ -6,7 +6,6 @@ import("//build/config/locales.gni")
+ import("//extensions/buildflags/buildflags.gni")
+ import("//tools/grit/grit_rule.gni")
+ 
+-assert(enable_extensions_core)
+ 
+ grit_strings("strings") {
+   source = "extensions_strings.grd"
+diff --git a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
+index 1401e99cb9..cac3ce238b 100644
+--- a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
++++ b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
+@@ -138,6 +138,57 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
+   out->is_global_privacy_control_setting_enabled =
+       data.is_global_privacy_control_setting_enabled();
+ 
++  out->arupa_canvas_seed = data.arupa_canvas_seed();
++  if (!data.ReadArupaTimezone(&out->arupa_timezone))
++    return false;
++  if (!data.ReadArupaLocale(&out->arupa_locale))
++    return false;
++  out->arupa_device_ids_seed = data.arupa_device_ids_seed();
++  if (!data.ReadArupaWebglVendor(&out->arupa_webgl_vendor))
++    return false;
++  if (!data.ReadArupaWebglRenderer(&out->arupa_webgl_renderer))
++    return false;
++  out->arupa_audio_seed = data.arupa_audio_seed();
++  out->arupa_hw_concurrency = data.arupa_hw_concurrency();
++  out->arupa_device_memory_gb = data.arupa_device_memory_gb();
++  out->arupa_screen_width = data.arupa_screen_width();
++  out->arupa_screen_height = data.arupa_screen_height();
++  out->arupa_screen_color_depth = data.arupa_screen_color_depth();
++  out->arupa_device_pixel_ratio = data.arupa_device_pixel_ratio();
++  out->arupa_webdriver_hidden = data.arupa_webdriver_hidden();
++  out->arupa_battery_mock = data.arupa_battery_mock();
++  out->arupa_net_info_spoof = data.arupa_net_info_spoof();
++  if (!data.ReadArupaFontsWhitelist(&out->arupa_fonts_whitelist))
++    return false;
++  out->arupa_geo_override = data.arupa_geo_override();
++  out->arupa_geo_lat = data.arupa_geo_lat();
++  out->arupa_geo_lon = data.arupa_geo_lon();
++  out->arupa_geo_accuracy = data.arupa_geo_accuracy();
++  if (!data.ReadArupaWebgpuVendor(&out->arupa_webgpu_vendor))
++    return false;
++  if (!data.ReadArupaWebgpuArchitecture(&out->arupa_webgpu_architecture))
++    return false;
++  if (!data.ReadArupaUachPlatform(&out->arupa_uach_platform))
++    return false;
++  if (!data.ReadArupaUachPlatformVersion(&out->arupa_uach_platform_version))
++    return false;
++  if (!data.ReadArupaUachArch(&out->arupa_uach_arch))
++    return false;
++  if (!data.ReadArupaUachModel(&out->arupa_uach_model))
++    return false;
++  if (!data.ReadArupaUachBitness(&out->arupa_uach_bitness))
++    return false;
++  out->arupa_canvas_noise_enabled = data.arupa_canvas_noise_enabled();
++  out->arupa_canvas_noise_seed = data.arupa_canvas_noise_seed();
++  if (!data.ReadArupaCodecProfile(&out->arupa_codec_profile))
++    return false;
++  if (!data.ReadArupaWebcodecsWhitelist(&out->arupa_webcodecs_whitelist))
++    return false;
++  if (!data.ReadArupaDnsMode(&out->arupa_dns_mode))
++    return false;
++  if (!data.ReadArupaDnsDohEndpoint(&out->arupa_dns_doh_endpoint))
++    return false;
++
+   return true;
+ }
+ 
+diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
+index 336c8061e4..d713a504e8 100644
+--- a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
++++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
+@@ -103,6 +103,41 @@ struct BLINK_COMMON_EXPORT RendererPreferences {
+   int autofill_shortcut_modifiers = 0;
+   std::u16string autofill_trigger_string;
+ 
++  uint64_t arupa_canvas_seed{0};
++  std::string arupa_timezone;
++  std::string arupa_locale;
++  uint64_t arupa_device_ids_seed{0};
++  std::string arupa_webgl_vendor;
++  std::string arupa_webgl_renderer;
++  uint64_t arupa_audio_seed{0};
++  uint32_t arupa_hw_concurrency{0};
++  double arupa_device_memory_gb{0};
++  uint32_t arupa_screen_width{0};
++  uint32_t arupa_screen_height{0};
++  uint32_t arupa_screen_color_depth{0};
++  double arupa_device_pixel_ratio{0};
++  bool arupa_webdriver_hidden{false};
++  bool arupa_battery_mock{false};
++  bool arupa_net_info_spoof{false};
++  std::string arupa_fonts_whitelist;
++  bool arupa_geo_override{false};
++  double arupa_geo_lat{0};
++  double arupa_geo_lon{0};
++  double arupa_geo_accuracy{0};
++  std::string arupa_webgpu_vendor;
++  std::string arupa_webgpu_architecture;
++  std::string arupa_uach_platform;
++  std::string arupa_uach_platform_version;
++  std::string arupa_uach_arch;
++  std::string arupa_uach_model;
++  std::string arupa_uach_bitness;
++  bool arupa_canvas_noise_enabled{false};
++  uint64_t arupa_canvas_noise_seed{0};
++  std::string arupa_codec_profile;
++  std::string arupa_webcodecs_whitelist;
++  std::string arupa_dns_mode;
++  std::string arupa_dns_doh_endpoint;
++
+   RendererPreferences();
+   RendererPreferences(const RendererPreferences& other);
+   RendererPreferences(RendererPreferences&& other);
+diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
+index d0279aa1ca..ca73a02de3 100644
+--- a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
++++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
+@@ -299,6 +299,137 @@ struct BLINK_COMMON_EXPORT
+     return data.is_global_privacy_control_setting_enabled;
+   }
+ 
++  static const uint64_t& arupa_canvas_seed(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_canvas_seed;
++  }
++  static const std::string& arupa_timezone(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_timezone;
++  }
++  static const std::string& arupa_locale(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_locale;
++  }
++  static const uint64_t& arupa_device_ids_seed(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_device_ids_seed;
++  }
++  static const std::string& arupa_webgl_vendor(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_webgl_vendor;
++  }
++  static const std::string& arupa_webgl_renderer(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_webgl_renderer;
++  }
++  static const uint64_t& arupa_audio_seed(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_audio_seed;
++  }
++  static uint32_t arupa_hw_concurrency(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_hw_concurrency;
++  }
++  static double arupa_device_memory_gb(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_device_memory_gb;
++  }
++  static uint32_t arupa_screen_width(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_screen_width;
++  }
++  static uint32_t arupa_screen_height(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_screen_height;
++  }
++  static uint32_t arupa_screen_color_depth(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_screen_color_depth;
++  }
++  static double arupa_device_pixel_ratio(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_device_pixel_ratio;
++  }
++  static bool arupa_webdriver_hidden(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_webdriver_hidden;
++  }
++  static bool arupa_battery_mock(const ::blink::RendererPreferences& data) {
++    return data.arupa_battery_mock;
++  }
++  static bool arupa_net_info_spoof(const ::blink::RendererPreferences& data) {
++    return data.arupa_net_info_spoof;
++  }
++  static const std::string& arupa_fonts_whitelist(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_fonts_whitelist;
++  }
++  static bool arupa_geo_override(const ::blink::RendererPreferences& data) {
++    return data.arupa_geo_override;
++  }
++  static double arupa_geo_lat(const ::blink::RendererPreferences& data) {
++    return data.arupa_geo_lat;
++  }
++  static double arupa_geo_lon(const ::blink::RendererPreferences& data) {
++    return data.arupa_geo_lon;
++  }
++  static double arupa_geo_accuracy(const ::blink::RendererPreferences& data) {
++    return data.arupa_geo_accuracy;
++  }
++  static const std::string& arupa_webgpu_vendor(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_webgpu_vendor;
++  }
++  static const std::string& arupa_webgpu_architecture(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_webgpu_architecture;
++  }
++  static const std::string& arupa_uach_platform(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_uach_platform;
++  }
++  static const std::string& arupa_uach_platform_version(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_uach_platform_version;
++  }
++  static const std::string& arupa_uach_arch(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_uach_arch;
++  }
++  static const std::string& arupa_uach_model(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_uach_model;
++  }
++  static const std::string& arupa_uach_bitness(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_uach_bitness;
++  }
++  static bool arupa_canvas_noise_enabled(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_canvas_noise_enabled;
++  }
++  static uint64_t arupa_canvas_noise_seed(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_canvas_noise_seed;
++  }
++  static const std::string& arupa_codec_profile(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_codec_profile;
++  }
++  static const std::string& arupa_webcodecs_whitelist(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_webcodecs_whitelist;
++  }
++  static const std::string& arupa_dns_mode(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_dns_mode;
++  }
++  static const std::string& arupa_dns_doh_endpoint(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_dns_doh_endpoint;
++  }
++
+   static bool Read(blink::mojom::RendererPreferencesDataView,
+                    ::blink::RendererPreferences* out);
+ };
+diff --git a/third_party/blink/public/mojom/renderer_preferences.mojom b/third_party/blink/public/mojom/renderer_preferences.mojom
+index 026d009b9d..b508188c8e 100644
+--- a/third_party/blink/public/mojom/renderer_preferences.mojom
++++ b/third_party/blink/public/mojom/renderer_preferences.mojom
+@@ -217,4 +217,38 @@ struct RendererPreferences {
+   // DevTools override). Do not check this directly, instead use
+   // `IsGlobalPrivacyControlFeature(AndSetting)Enabled` to gate features/headers.
+   bool is_global_privacy_control_setting_enabled = false;
++  uint64 arupa_canvas_seed = 0;
++  string arupa_timezone;
++  string arupa_locale;
++  uint64 arupa_device_ids_seed = 0;
++  string arupa_webgl_vendor;
++  string arupa_webgl_renderer;
++  uint64 arupa_audio_seed = 0;
++  uint32 arupa_hw_concurrency = 0;
++  double arupa_device_memory_gb = 0;
++  uint32 arupa_screen_width = 0;
++  uint32 arupa_screen_height = 0;
++  uint32 arupa_screen_color_depth = 0;
++  double arupa_device_pixel_ratio = 0;
++  bool arupa_webdriver_hidden = false;
++  bool arupa_battery_mock = false;
++  bool arupa_net_info_spoof = false;
++  string arupa_fonts_whitelist;
++  bool arupa_geo_override = false;
++  double arupa_geo_lat = 0;
++  double arupa_geo_lon = 0;
++  double arupa_geo_accuracy = 0;
++  string arupa_webgpu_vendor;
++  string arupa_webgpu_architecture;
++  string arupa_uach_platform;
++  string arupa_uach_platform_version;
++  string arupa_uach_arch;
++  string arupa_uach_model;
++  string arupa_uach_bitness;
++  bool   arupa_canvas_noise_enabled = false;
++  uint64 arupa_canvas_noise_seed = 0;
++  string arupa_codec_profile;
++  string arupa_webcodecs_whitelist;
++  string arupa_dns_mode;
++  string arupa_dns_doh_endpoint;
+ };
+diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_party/blink/renderer/core/exported/web_view_impl.cc
+index 66e05f0dd9..5d1d08fa4c 100644
+--- a/third_party/blink/renderer/core/exported/web_view_impl.cc
++++ b/third_party/blink/renderer/core/exported/web_view_impl.cc
+@@ -141,6 +141,7 @@
+ #include "third_party/blink/renderer/core/input/event_handler.h"
+ #include "third_party/blink/renderer/core/input/touch_action_util.h"
+ #include "third_party/blink/renderer/core/inspector/dev_tools_emulator.h"
++#include "third_party/blink/renderer/core/inspector/locale_controller.h"
+ #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
+ #include "third_party/blink/renderer/core/layout/layout_view.h"
+ #include "third_party/blink/renderer/core/loader/document_loader.h"
+@@ -172,6 +173,9 @@
+ #include "third_party/blink/renderer/core/timing/performance.h"
+ #include "third_party/blink/renderer/core/timing/window_performance.h"
+ #include "third_party/blink/renderer/core/view_transition/view_transition_supplement.h"
++#include "third_party/blink/public/common/device_memory/approximated_device_memory.h"
++#include "third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h"
++#include "third_party/blink/renderer/core/timezone/timezone_controller.h"
+ #include "third_party/blink/renderer/platform/fonts/font_cache.h"
+ #include "third_party/blink/renderer/platform/fonts/generic_font_family_settings.h"
+ #include "third_party/blink/renderer/platform/graphics/image.h"
+@@ -3832,6 +3836,113 @@ void WebViewImpl::UpdateRendererPreferences(
+     }
+   }
+ 
++  if (GetPage()) {
++    blink::Settings& arupa_settings = GetPage()->GetSettings();
++    arupa_settings.SetArupaCanvasSeed(
++        String::Number(renderer_preferences_.arupa_canvas_seed));
++    arupa_settings.SetArupaTimezone(
++        String::FromUtf8(renderer_preferences_.arupa_timezone));
++    arupa_settings.SetArupaDeviceIdsSeed(
++        String::Number(renderer_preferences_.arupa_device_ids_seed));
++    arupa_settings.SetArupaWebglVendor(
++        String::FromUtf8(renderer_preferences_.arupa_webgl_vendor));
++    arupa_settings.SetArupaWebglRenderer(
++        String::FromUtf8(renderer_preferences_.arupa_webgl_renderer));
++    arupa_settings.SetArupaAudioSeed(
++        String::Number(renderer_preferences_.arupa_audio_seed));
++    arupa_settings.SetArupaHwConcurrency(
++        String::Number(renderer_preferences_.arupa_hw_concurrency));
++    arupa_settings.SetArupaDeviceMemoryGb(
++        String::Number(renderer_preferences_.arupa_device_memory_gb));
++    arupa_settings.SetArupaScreenWidth(
++        String::Number(renderer_preferences_.arupa_screen_width));
++    arupa_settings.SetArupaScreenHeight(
++        String::Number(renderer_preferences_.arupa_screen_height));
++    arupa_settings.SetArupaScreenColorDepth(
++        String::Number(renderer_preferences_.arupa_screen_color_depth));
++    arupa_settings.SetArupaDevicePixelRatio(
++        String::Number(renderer_preferences_.arupa_device_pixel_ratio));
++    arupa_settings.SetArupaWebdriverHidden(
++        renderer_preferences_.arupa_webdriver_hidden);
++    arupa_settings.SetArupaBatteryMock(
++        renderer_preferences_.arupa_battery_mock);
++    arupa_settings.SetArupaNetInfoSpoof(
++        renderer_preferences_.arupa_net_info_spoof);
++    arupa_settings.SetArupaFontsWhitelist(
++        String::FromUtf8(renderer_preferences_.arupa_fonts_whitelist));
++    arupa_settings.SetArupaGeoOverride(
++        renderer_preferences_.arupa_geo_override);
++    arupa_settings.SetArupaGeoLat(
++        String::Number(renderer_preferences_.arupa_geo_lat));
++    arupa_settings.SetArupaGeoLon(
++        String::Number(renderer_preferences_.arupa_geo_lon));
++    arupa_settings.SetArupaGeoAccuracy(
++        String::Number(renderer_preferences_.arupa_geo_accuracy));
++    arupa_settings.SetArupaWebgpuVendor(
++        String::FromUtf8(renderer_preferences_.arupa_webgpu_vendor));
++    arupa_settings.SetArupaWebgpuArchitecture(
++        String::FromUtf8(renderer_preferences_.arupa_webgpu_architecture));
++    arupa_settings.SetArupaUachPlatform(
++        String::FromUtf8(renderer_preferences_.arupa_uach_platform));
++    arupa_settings.SetArupaUachPlatformVersion(
++        String::FromUtf8(renderer_preferences_.arupa_uach_platform_version));
++    arupa_settings.SetArupaUachArch(
++        String::FromUtf8(renderer_preferences_.arupa_uach_arch));
++    arupa_settings.SetArupaUachModel(
++        String::FromUtf8(renderer_preferences_.arupa_uach_model));
++    arupa_settings.SetArupaUachBitness(
++        String::FromUtf8(renderer_preferences_.arupa_uach_bitness));
++    arupa_settings.SetArupaCanvasNoiseEnabled(
++        renderer_preferences_.arupa_canvas_noise_enabled);
++    arupa_settings.SetArupaCanvasNoiseSeed(
++        String::Number(renderer_preferences_.arupa_canvas_noise_seed));
++    arupa_settings.SetArupaCodecProfile(
++        String::FromUtf8(renderer_preferences_.arupa_codec_profile));
++    arupa_settings.SetArupaWebcodecsWhitelist(
++        String::FromUtf8(renderer_preferences_.arupa_webcodecs_whitelist));
++    arupa_settings.SetArupaDnsMode(
++        String::FromUtf8(renderer_preferences_.arupa_dns_mode));
++    arupa_settings.SetArupaDnsDohEndpoint(
++        String::FromUtf8(renderer_preferences_.arupa_dns_doh_endpoint));
++  }
++  if (renderer_preferences_.arupa_hw_concurrency > 0) {
++    SetArupaHardwareConcurrencyOverride(
++        renderer_preferences_.arupa_hw_concurrency);
++  }
++  if (renderer_preferences_.arupa_device_memory_gb > 0) {
++    ApproximatedDeviceMemory::SetPhysicalMemoryMBForTesting(static_cast<int64_t>(
++        renderer_preferences_.arupa_device_memory_gb * 1024));
++  }
++  SetArupaWebgpuOverride(
++      String::FromUtf8(renderer_preferences_.arupa_webgpu_vendor),
++      String::FromUtf8(renderer_preferences_.arupa_webgpu_architecture));
++  SetArupaAudioSeed(renderer_preferences_.arupa_audio_seed);
++  FontCache::SetArupaFontsAllowlist(
++      String::FromUtf8(renderer_preferences_.arupa_fonts_whitelist));
++  if (!renderer_preferences_.arupa_timezone.empty()) {
++    const String arupa_tz =
++        String::FromUtf8(renderer_preferences_.arupa_timezone);
++    DEFINE_STATIC_LOCAL(std::unique_ptr<TimeZoneController::TimeZoneOverride>,
++                        arupa_tz_handle, ());
++    DEFINE_STATIC_LOCAL(String, arupa_tz_current, ());
++    if (!arupa_tz_handle) {
++      TimeZoneController::TimeZoneOverrideResult result =
++          TimeZoneController::SetTimeZoneOverride(arupa_tz);
++      if (result.status ==
++          TimeZoneController::TimeZoneOverrideStatus::kSuccess) {
++        arupa_tz_handle = std::move(result.handle);
++        arupa_tz_current = arupa_tz;
++      }
++    } else if (arupa_tz != arupa_tz_current) {
++      arupa_tz_handle->change(arupa_tz);
++      arupa_tz_current = arupa_tz;
++    }
++  }
++  if (!renderer_preferences_.arupa_locale.empty()) {
++    LocaleController::instance().SetLocaleOverride(
++        String::FromUtf8(renderer_preferences_.arupa_locale),
++         false);
++  }
+   GetSettings()->SetCaretBrowsingEnabled(
+       renderer_preferences_.caret_browsing_enabled);
+ 
+diff --git a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
+index f5c0db2d1b..388a747b69 100644
+--- a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
++++ b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
+@@ -5,10 +5,44 @@
+ #include "third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h"
+ 
+ #include "base/system/sys_info.h"
++#include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+ 
+ namespace blink {
+ 
++namespace {
++unsigned g_arupa_hw_concurrency_override = 0;
++uint64_t g_arupa_audio_seed = 0;
++String& ArupaWebgpuVendorStorage() {
++  DEFINE_STATIC_LOCAL(String, v, ());
++  return v;
++}
++String& ArupaWebgpuArchitectureStorage() {
++  DEFINE_STATIC_LOCAL(String, v, ());
++  return v;
++}
++}
++void SetArupaHardwareConcurrencyOverride(unsigned value) {
++  g_arupa_hw_concurrency_override = value;
++}
++void SetArupaWebgpuOverride(const String& vendor, const String& architecture) {
++  ArupaWebgpuVendorStorage() = vendor;
++  ArupaWebgpuArchitectureStorage() = architecture;
++}
++const String& GetArupaWebgpuVendor() {
++  return ArupaWebgpuVendorStorage();
++}
++const String& GetArupaWebgpuArchitecture() {
++  return ArupaWebgpuArchitectureStorage();
++}
++void SetArupaAudioSeed(uint64_t seed) {
++  g_arupa_audio_seed = seed;
++}
++uint64_t GetArupaAudioSeed() {
++  return g_arupa_audio_seed;
++}
+ unsigned NavigatorConcurrentHardware::hardwareConcurrency() const {
++  if (g_arupa_hw_concurrency_override)
++    return g_arupa_hw_concurrency_override;
+   return static_cast<unsigned>(base::SysInfo::NumberOfProcessors());
+ }
+ 
+diff --git a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h
+index 305eea53fc..7288405be7 100644
+--- a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h
++++ b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h
+@@ -5,7 +5,9 @@
+ #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_NAVIGATOR_CONCURRENT_HARDWARE_H_
+ #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_NAVIGATOR_CONCURRENT_HARDWARE_H_
+ 
++#include <cstdint>
+ #include "third_party/blink/renderer/core/core_export.h"
++#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+ 
+ namespace blink {
+ 
+@@ -14,6 +16,13 @@ class CORE_EXPORT NavigatorConcurrentHardware {
+   virtual unsigned hardwareConcurrency() const;
+ };
+ 
++CORE_EXPORT void SetArupaHardwareConcurrencyOverride(unsigned value);
++CORE_EXPORT void SetArupaWebgpuOverride(const String& vendor,
++                                        const String& architecture);
++CORE_EXPORT const String& GetArupaWebgpuVendor();
++CORE_EXPORT const String& GetArupaWebgpuArchitecture();
++CORE_EXPORT void SetArupaAudioSeed(uint64_t seed);
++CORE_EXPORT uint64_t GetArupaAudioSeed();
+ }  // namespace blink
+ 
+ #endif  // THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_NAVIGATOR_CONCURRENT_HARDWARE_H_
+diff --git a/third_party/blink/renderer/core/frame/navigator_ua_data.cc b/third_party/blink/renderer/core/frame/navigator_ua_data.cc
+index 73ad371b32..da65ff1480 100644
+--- a/third_party/blink/renderer/core/frame/navigator_ua_data.cc
++++ b/third_party/blink/renderer/core/frame/navigator_ua_data.cc
+@@ -11,8 +11,12 @@
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+ #include "third_party/blink/renderer/bindings/core/v8/v8_ua_data_values.h"
+ #include "third_party/blink/renderer/core/execution_context/execution_context.h"
++#include "third_party/blink/renderer/core/frame/local_dom_window.h"
++#include "third_party/blink/renderer/core/frame/local_frame.h"
++#include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/core/frame/web_feature_forward.h"
+ #include "third_party/blink/renderer/core/page/page.h"
++#include "third_party/blink/renderer/platform/wtf/casting.h"
+ 
+ namespace blink {
+ 
+@@ -143,24 +147,44 @@ ScriptPromise<UADataValues> NavigatorUAData::getHighEntropyValues(
+   // low-entropy brands, mobile and platform hints should always be included for
+   // convenience.
+ 
++  String a_platform = platform_;
++  String a_platform_version = platform_version_;
++  String a_architecture = architecture_;
++  String a_model = model_;
++  String a_bitness = bitness_;
++  if (auto* arupa_window = DynamicTo<LocalDOMWindow>(execution_context)) {
++    if (arupa_window->GetFrame() && arupa_window->GetFrame()->GetSettings()) {
++      Settings* s = arupa_window->GetFrame()->GetSettings();
++      if (!s->GetArupaUachPlatform().empty())
++        a_platform = s->GetArupaUachPlatform();
++      if (!s->GetArupaUachPlatformVersion().empty())
++        a_platform_version = s->GetArupaUachPlatformVersion();
++      if (!s->GetArupaUachArch().empty())
++        a_architecture = s->GetArupaUachArch();
++      if (!s->GetArupaUachModel().empty())
++        a_model = s->GetArupaUachModel();
++      if (!s->GetArupaUachBitness().empty())
++        a_bitness = s->GetArupaUachBitness();
++    }
++  }
+   values->setBrands(brand_set_);
+   values->setMobile(is_mobile_);
+-  values->setPlatform(platform_);
++  values->setPlatform(a_platform);
+ 
+   // If the "ch-ua-high-entropy-values" permission policy is enabled for a
+   // document, add high-entropy client hints to values (if requested)
+   if (AllowedToCollectHighEntropyValues(execution_context)) {
+     for (const String& hint : hints) {
+       if (hint == "platformVersion") {
+-        values->setPlatformVersion(platform_version_);
++        values->setPlatformVersion(a_platform_version);
+       } else if (hint == "architecture") {
+-        values->setArchitecture(architecture_);
++        values->setArchitecture(a_architecture);
+       } else if (hint == "model") {
+-        values->setModel(model_);
++        values->setModel(a_model);
+       } else if (hint == "uaFullVersion") {
+         values->setUaFullVersion(ua_full_version_);
+       } else if (hint == "bitness") {
+-        values->setBitness(bitness_);
++        values->setBitness(a_bitness);
+       } else if (hint == "fullVersionList") {
+         values->setFullVersionList(full_version_list_);
+       } else if (hint == "wow64") {
+diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
+index ed5028943e..1bc3c1695d 100644
+--- a/third_party/blink/renderer/core/frame/screen.cc
++++ b/third_party/blink/renderer/core/frame/screen.cc
+@@ -29,6 +29,7 @@
+ #include "third_party/blink/renderer/core/frame/screen.h"
+ 
+ #include "base/numerics/safe_conversions.h"
++#include "base/strings/string_number_conversions.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+ #include "third_party/blink/renderer/core/event_target_names.h"
+@@ -41,6 +42,14 @@
+ 
+ namespace blink {
+ 
++namespace {
++int ArupaPositiveOverride(const String& s) {
++  int v = 0;
++  if (!s.empty() && base::StringToInt(s.Utf8(), &v) && v > 0)
++    return v;
++  return 0;
++}
++}
+ Screen::Screen(LocalDOMWindow* window, int64_t display_id)
+     : ExecutionContextClient(window), display_id_(display_id) {}
+ 
+@@ -90,12 +99,20 @@ bool Screen::AreWebExposedScreenPropertiesEqual(
+ int Screen::height() const {
+   if (!DomWindow())
+     return 0;
++  if (Settings* s = DomWindow()->GetFrame()->GetSettings()) {
++    if (int v = ArupaPositiveOverride(s->GetArupaScreenHeight()))
++      return v;
++  }
+   return GetRect(/*available=*/false).height();
+ }
+ 
+ int Screen::width() const {
+   if (!DomWindow())
+     return 0;
++  if (Settings* s = DomWindow()->GetFrame()->GetSettings()) {
++    if (int v = ArupaPositiveOverride(s->GetArupaScreenWidth()))
++      return v;
++  }
+   return GetRect(/*available=*/false).width();
+ }
+ 
+@@ -109,6 +126,10 @@ unsigned Screen::colorDepth() const {
+   if (!DomWindow()) {
+     return unknown_color_depth;
+   }
++  if (Settings* s = DomWindow()->GetFrame()->GetSettings()) {
++    if (int v = ArupaPositiveOverride(s->GetArupaScreenColorDepth()))
++      return static_cast<unsigned>(v);
++  }
+   return GetScreenInfo().depth == 0
+              ? unknown_color_depth
+              : base::saturated_cast<unsigned>(GetScreenInfo().depth);
+diff --git a/third_party/blink/renderer/core/frame/settings.json5 b/third_party/blink/renderer/core/frame/settings.json5
+index 302de65601..8caef1d715 100644
+--- a/third_party/blink/renderer/core/frame/settings.json5
++++ b/third_party/blink/renderer/core/frame/settings.json5
+@@ -74,6 +74,143 @@
+       type: "String",
+     },
+ 
++    {
++      name: "arupaCanvasSeed",
++      type: "String",
++    },
++    {
++      name: "arupaTimezone",
++      type: "String",
++    },
++    {
++      name: "arupaDeviceIdsSeed",
++      type: "String",
++    },
++    {
++      name: "arupaWebglVendor",
++      type: "String",
++    },
++    {
++      name: "arupaWebglRenderer",
++      type: "String",
++    },
++    {
++      name: "arupaAudioSeed",
++      type: "String",
++    },
++    {
++      name: "arupaHwConcurrency",
++      type: "String",
++    },
++    {
++      name: "arupaDeviceMemoryGb",
++      type: "String",
++    },
++    {
++      name: "arupaScreenWidth",
++      type: "String",
++    },
++    {
++      name: "arupaScreenHeight",
++      type: "String",
++    },
++    {
++      name: "arupaScreenColorDepth",
++      type: "String",
++    },
++    {
++      name: "arupaDevicePixelRatio",
++      type: "String",
++    },
++    {
++      name: "arupaWebdriverHidden",
++      type: "bool",
++      initial: false,
++    },
++    {
++      name: "arupaBatteryMock",
++      type: "bool",
++      initial: false,
++    },
++    {
++      name: "arupaNetInfoSpoof",
++      type: "bool",
++      initial: false,
++    },
++    {
++      name: "arupaFontsWhitelist",
++      type: "String",
++    },
++    {
++      name: "arupaGeoOverride",
++      type: "bool",
++      initial: false,
++    },
++    {
++      name: "arupaGeoLat",
++      type: "String",
++    },
++    {
++      name: "arupaGeoLon",
++      type: "String",
++    },
++    {
++      name: "arupaGeoAccuracy",
++      type: "String",
++    },
++    {
++      name: "arupaWebgpuVendor",
++      type: "String",
++    },
++    {
++      name: "arupaWebgpuArchitecture",
++      type: "String",
++    },
++    {
++      name: "arupaUachPlatform",
++      type: "String",
++    },
++    {
++      name: "arupaUachPlatformVersion",
++      type: "String",
++    },
++    {
++      name: "arupaUachArch",
++      type: "String",
++    },
++    {
++      name: "arupaUachModel",
++      type: "String",
++    },
++    {
++      name: "arupaUachBitness",
++      type: "String",
++    },
++    {
++      name: "arupaCanvasNoiseEnabled",
++      type: "bool",
++      initial: false,
++    },
++    {
++      name: "arupaCanvasNoiseSeed",
++      type: "String",
++    },
++    {
++      name: "arupaCodecProfile",
++      type: "String",
++    },
++    {
++      name: "arupaWebcodecsWhitelist",
++      type: "String",
++    },
++    {
++      name: "arupaDnsMode",
++      type: "String",
++    },
++    {
++      name: "arupaDnsDohEndpoint",
++      type: "String",
++    },
+     // Do not hide chars typed in password fields immediately, but let the last char stay
+     // visible for N seconds, configured by the passwordEchoDurationInSeconds setting.
+ 
+diff --git a/third_party/blink/renderer/core/geolocation/geolocation.cc b/third_party/blink/renderer/core/geolocation/geolocation.cc
+index 73e27320ca..1c01b5b3ac 100644
+--- a/third_party/blink/renderer/core/geolocation/geolocation.cc
++++ b/third_party/blink/renderer/core/geolocation/geolocation.cc
+@@ -30,6 +30,7 @@
+ #include <algorithm>
+ #include <optional>
+ 
++#include "base/strings/string_number_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "build/build_config.h"
+ #include "services/device/public/mojom/geoposition.mojom-blink.h"
+@@ -726,6 +727,37 @@ void Geolocation::ResetGeolocationConnection() {
+ }
+ 
+ void Geolocation::QueryNextPosition() {
++  Settings* arupa_settings =
++      (DomWindow() && DomWindow()->GetFrame())
++          ? DomWindow()->GetFrame()->GetSettings()
++          : nullptr;
++  if (arupa_settings && arupa_settings->GetArupaGeoOverride()) {
++    double lat = 0, lon = 0, acc = 0;
++    base::StringToDouble(arupa_settings->GetArupaGeoLat().Utf8(), &lat);
++    base::StringToDouble(arupa_settings->GetArupaGeoLon().Utf8(), &lon);
++    if (!base::StringToDouble(arupa_settings->GetArupaGeoAccuracy().Utf8(),
++                              &acc) ||
++        acc <= 0) {
++      acc = 100.0;
++    }
++    auto pos = device::mojom::blink::Geoposition::New();
++    pos->latitude = lat;
++    pos->longitude = lon;
++    pos->accuracy = acc;
++    pos->altitude = -10000.0;
++    pos->altitude_accuracy = -1.0;
++    pos->heading = -1.0;
++    pos->speed = -1.0;
++    pos->timestamp = base::Time::Now();
++    auto result =
++        device::mojom::blink::GeopositionResult::NewPosition(std::move(pos));
++    GetExecutionContext()
++        ->GetTaskRunner(TaskType::kMiscPlatformAPI)
++        ->PostTask(FROM_HERE,
++                   blink::BindOnce(&Geolocation::OnPositionUpdated,
++                                   WrapPersistent(this), std::move(result)));
++    return;
++  }
+   geolocation_->QueryNextPosition(
+       blink::BindOnce(&Geolocation::OnPositionUpdated, WrapPersistent(this)));
+ }
+@@ -752,7 +784,26 @@ void Geolocation::OnPositionUpdated(
+       return;
+     }
+     last_position_is_precise_ = result->get_position()->is_precise;
+-    last_position_ = CreateGeoposition(*result->get_position());
++    Settings* arupa_settings =
++        DomWindow() && DomWindow()->GetFrame()
++            ? DomWindow()->GetFrame()->GetSettings()
++            : nullptr;
++    if (arupa_settings && arupa_settings->GetArupaGeoOverride()) {
++      device::mojom::blink::GeopositionPtr pos =
++          result->get_position()->Clone();
++      double v = 0;
++      if (base::StringToDouble(arupa_settings->GetArupaGeoLat().Utf8(), &v))
++        pos->latitude = v;
++      if (base::StringToDouble(arupa_settings->GetArupaGeoLon().Utf8(), &v))
++        pos->longitude = v;
++      if (base::StringToDouble(arupa_settings->GetArupaGeoAccuracy().Utf8(),
++                               &v) &&
++          v > 0)
++        pos->accuracy = v;
++      last_position_ = CreateGeoposition(*pos);
++    } else {
++      last_position_ = CreateGeoposition(*result->get_position());
++    }
+     PositionChanged();
+   } else {
+     DCHECK(result->is_error());
+diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
+index 3f4754bec0..08a4882a48 100644
+--- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
++++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
+@@ -36,6 +36,7 @@
+ #include "base/feature_list.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/location.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/notimplemented.h"
+ #include "base/numerics/checked_math.h"
+@@ -1419,8 +1420,17 @@ String HTMLCanvasElement::ToDataURLInternal(
+ 
+   scoped_refptr<StaticBitmapImage> image_bitmap = Snapshot(source_buffer);
+   if (image_bitmap) {
++    uint64_t arupa_canvas_seed = 0;
++    if (Settings* arupa_settings = GetSettings()) {
++      const String seed_str = arupa_settings->GetArupaCanvasSeed();
++      if (!seed_str.empty())
++        base::StringToUint64(seed_str.Utf8(), &arupa_canvas_seed);
++    }
+     std::unique_ptr<ImageDataBuffer> data_buffer =
+-        ImageDataBuffer::Create(image_bitmap);
++        arupa_canvas_seed
++            ? ImageDataBuffer::CreateWithArupaCanvasNoise(image_bitmap,
++                                                          arupa_canvas_seed)
++            : ImageDataBuffer::Create(image_bitmap);
+     if (!data_buffer)
+       return String("data:,");
+ 
+diff --git a/third_party/blink/renderer/core/html/media/html_media_element.cc b/third_party/blink/renderer/core/html/media/html_media_element.cc
+index 6b76280e65..801038d5d4 100644
+--- a/third_party/blink/renderer/core/html/media/html_media_element.cc
++++ b/third_party/blink/renderer/core/html/media/html_media_element.cc
+@@ -35,7 +35,10 @@
+ #include "base/check_is_test.h"
+ #include "base/containers/span.h"
+ #include "base/feature_list.h"
++#include "base/json/json_reader.h"
+ #include "base/memory/ptr_util.h"
++#include "base/strings/string_util.h"
++#include "base/values.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/strings/to_string.h"
+@@ -1059,6 +1062,34 @@ HTMLMediaElement::NetworkState HTMLMediaElement::getNetworkState() const {
+ 
+ V8CanPlayTypeResult HTMLMediaElement::canPlayType(
+     const String& mime_type) const {
++  if (Settings* settings = GetDocument().GetSettings()) {
++    const String profile_json = settings->GetArupaCodecProfile();
++    if (!profile_json.empty()) {
++      std::optional<base::ListValue> root = base::JSONReader::ReadList(
++          profile_json.Utf8(), base::JSON_PARSE_RFC);
++      if (root) {
++        const std::string mime_lower = base::ToLowerASCII(mime_type.Utf8());
++        for (const base::Value& entry : *root) {
++          const base::DictValue* dict = entry.GetIfDict();
++          if (!dict) continue;
++          const std::string* entry_ct = dict->FindString("contentType");
++          if (!entry_ct) continue;
++          const std::string entry_lower = base::ToLowerASCII(*entry_ct);
++          if (mime_lower.find(entry_lower) == std::string::npos &&
++              entry_lower.find(mime_lower) == std::string::npos) {
++            continue;
++          }
++          if (!dict->FindBool("supported").value_or(false)) {
++            return V8CanPlayTypeResult(V8CanPlayTypeResult::Enum::k);
++          }
++          const bool smooth = dict->FindBool("smooth").value_or(false);
++          return V8CanPlayTypeResult(
++              smooth ? V8CanPlayTypeResult::Enum::kProbably
++                     : V8CanPlayTypeResult::Enum::kMaybe);
++        }
++      }
++    }
++  }
+   MIMETypeRegistry::SupportsType support =
+       GetSupportsType(ContentType(mime_type));
+ 
+diff --git a/third_party/blink/renderer/modules/battery/battery_manager.cc b/third_party/blink/renderer/modules/battery/battery_manager.cc
+index 51cdc75cee..956da99959 100644
+--- a/third_party/blink/renderer/modules/battery/battery_manager.cc
++++ b/third_party/blink/renderer/modules/battery/battery_manager.cc
+@@ -11,10 +11,20 @@
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/core/frame/navigator.h"
++#include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/core/frame/web_feature.h"
+ #include "third_party/blink/renderer/modules/battery/battery_dispatcher.h"
+ 
++#include <limits>
+ namespace blink {
++namespace {
++bool ArupaBatteryMock(ExecutionContext* ec) {
++  auto* window = DynamicTo<LocalDOMWindow>(ec);
++  if (!window || !window->GetFrame() || !window->GetFrame()->GetSettings())
++    return false;
++  return window->GetFrame()->GetSettings()->GetArupaBatteryMock();
++}
++}
+ 
+ const char BatteryManager::kSupplementName[] = "BatteryManager";
+ 
+@@ -80,18 +90,26 @@ ScriptPromise<BatteryManager> BatteryManager::StartRequest(
+ }
+ 
+ bool BatteryManager::charging() {
++  if (ArupaBatteryMock(GetExecutionContext()))
++    return true;
+   return battery_status_.Charging();
+ }
+ 
+ double BatteryManager::chargingTime() {
++  if (ArupaBatteryMock(GetExecutionContext()))
++    return 0.0;
+   return battery_status_.charging_time().InSecondsF();
+ }
+ 
+ double BatteryManager::dischargingTime() {
++  if (ArupaBatteryMock(GetExecutionContext()))
++    return std::numeric_limits<double>::infinity();
+   return battery_status_.discharging_time().InSecondsF();
+ }
+ 
+ double BatteryManager::level() {
++  if (ArupaBatteryMock(GetExecutionContext()))
++    return 1.0;
+   return battery_status_.Level();
+ }
+ 
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
+index 3d7a843995..6b0fa37372 100644
+--- a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
+@@ -1,6 +1,9 @@
+ // Copyright 2016 The Chromium Authors
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
++#ifdef UNSAFE_BUFFERS_BUILD
++#pragma allow_unsafe_buffers
++#endif
+ 
+ #include "third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.h"
+ 
+@@ -46,6 +49,9 @@
+ #include "third_party/blink/renderer/core/dom/element.h"
+ #include "third_party/blink/renderer/core/dom/events/event.h"
+ #include "third_party/blink/renderer/core/dom/node.h"
++#include "base/strings/string_number_conversions.h"
++#include "third_party/blink/renderer/core/event_type_names.h"
++#include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/core/frame/web_feature.h"
+ #include "third_party/blink/renderer/core/geometry/dom_matrix.h"
+ #include "third_party/blink/renderer/core/html/canvas/canvas_font_cache.h"
+@@ -118,6 +124,17 @@ class MemoryManagedPaintCanvas;
+ 
+ namespace {
+ 
++int ArupaGetImageDataNoise(uint64_t seed, int x, int y) {
++  uint64_t h = seed;
++  h ^= static_cast<uint64_t>(static_cast<uint32_t>(x)) * 0x9E3779B97F4A7C15ull;
++  h ^= static_cast<uint64_t>(static_cast<uint32_t>(y)) * 0xC2B2AE3D27D4EB4Full;
++  h = (h ^ (h >> 29)) * 0xBF58476D1CE4E5B9ull;
++  h = h ^ (h >> 32);
++  return static_cast<int>(h % 3u) - 1;
++}
++inline uint8_t ArupaGetImageDataClampByte(int v) {
++  return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
++}
+ 
+ bool IsContextProviderValid() {
+   base::WeakPtr<WebGraphicsContext3DProviderWrapper> context_provider_wrapper =
+@@ -516,6 +533,41 @@ ImageData* BaseRenderingContext2D::getImageDataInternal(
+           snapshot->PaintImageForCurrentFrame().GetSkImageInfo().bounds();
+       DCHECK(!bounds.intersect(SkIRect::MakeXYWH(sx, sy, sw, sh)));
+     }
++    if (read_pixels_successful) {
++      uint64_t arupa_canvas_seed = 0;
++      if (HTMLCanvasElement* arupa_canvas = HostAsHTMLCanvasElement()) {
++        if (Settings* arupa_settings = arupa_canvas->GetSettings()) {
++          const String seed_str = arupa_settings->GetArupaCanvasSeed();
++          if (!seed_str.empty())
++            base::StringToUint64(seed_str.Utf8(), &arupa_canvas_seed);
++        }
++      }
++      if (arupa_canvas_seed) {
++        const SkColorType ct = image_data_pixmap.colorType();
++        if (ct == kRGBA_8888_SkColorType || ct == kBGRA_8888_SkColorType) {
++          const int iw = image_data_pixmap.width();
++          const int ih = image_data_pixmap.height();
++          const size_t rb = image_data_pixmap.rowBytes();
++          uint8_t* base_addr =
++              static_cast<uint8_t*>(image_data_pixmap.writable_addr());
++          if (base_addr) {
++            for (int row = 0; row < ih; ++row) {
++              uint8_t* prow = base_addr + static_cast<size_t>(row) * rb;
++              for (int col = 0; col < iw; ++col) {
++                const int n =
++                    ArupaGetImageDataNoise(arupa_canvas_seed, sx + col, sy + row);
++                if (n == 0)
++                  continue;
++                uint8_t* px = prow + static_cast<size_t>(col) * 4u;
++                px[0] = ArupaGetImageDataClampByte(px[0] + n);
++                px[1] = ArupaGetImageDataClampByte(px[1] + n);
++                px[2] = ArupaGetImageDataClampByte(px[2] + n);
++              }
++            }
++          }
++        }
++      }
++    }
+   }
+ 
+   return image_data;
+diff --git a/third_party/blink/renderer/modules/media_capabilities/BUILD.gn b/third_party/blink/renderer/modules/media_capabilities/BUILD.gn
+index 830b332f18..8944c2806d 100644
+--- a/third_party/blink/renderer/modules/media_capabilities/BUILD.gn
++++ b/third_party/blink/renderer/modules/media_capabilities/BUILD.gn
+@@ -8,10 +8,13 @@ import("//third_party/protobuf/proto_library.gni")
+ 
+ blink_modules_sources("media_capabilities") {
+   sources = [
++    "arupa_codec_profile.cc",
++    "arupa_codec_profile.h",
+     "media_capabilities.cc",
+     "media_capabilities.h",
+   ]
+   deps = [
++    "//base",
+     "//media",
+     "//third_party/blink/renderer/modules/encryptedmedia",
+     "//third_party/blink/renderer/modules/mediarecorder",
+diff --git a/third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.cc b/third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.cc
+new file mode 100644
+index 0000000000..4f1d3fe392
+--- /dev/null
++++ b/third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.cc
+@@ -0,0 +1,53 @@
++#include "third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.h"
++#include <algorithm>
++#include <optional>
++#include <string>
++#include "base/json/json_reader.h"
++#include "base/values.h"
++#include "third_party/blink/renderer/bindings/modules/v8/v8_media_capabilities_decoding_info.h"
++#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
++namespace blink {
++namespace {
++std::string LowerAscii(const std::string& s) {
++  std::string r = s;
++  std::transform(r.begin(), r.end(), r.begin(), [](unsigned char c) {
++    return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;
++  });
++  return r;
++}
++}
++MediaCapabilitiesDecodingInfo* ArupaLookupCodecProfile(
++    const String& profile_json,
++    const String& content_type) {
++  if (profile_json.empty() || content_type.empty()) {
++    return nullptr;
++  }
++  std::optional<base::ListValue> root =
++      base::JSONReader::ReadList(profile_json.Utf8(), base::JSON_PARSE_RFC);
++  if (!root) {
++    return nullptr;
++  }
++  const std::string ct_lower = LowerAscii(content_type.Utf8());
++  for (const base::Value& entry : *root) {
++    const base::DictValue* dict = entry.GetIfDict();
++    if (!dict) {
++      continue;
++    }
++    const std::string* entry_ct = dict->FindString("contentType");
++    if (!entry_ct) {
++      continue;
++    }
++    const std::string entry_ct_lower = LowerAscii(*entry_ct);
++    if (ct_lower.find(entry_ct_lower) == std::string::npos &&
++        entry_ct_lower.find(ct_lower) == std::string::npos) {
++      continue;
++    }
++    auto* info = MakeGarbageCollected<MediaCapabilitiesDecodingInfo>();
++    info->setSupported(dict->FindBool("supported").value_or(false));
++    info->setSmooth(dict->FindBool("smooth").value_or(false));
++    info->setPowerEfficient(dict->FindBool("powerEfficient").value_or(false));
++    return info;
++  }
++  return nullptr;
++}
++}
+diff --git a/third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.h b/third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.h
+new file mode 100644
+index 0000000000..7ae34dc821
+--- /dev/null
++++ b/third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.h
+@@ -0,0 +1,11 @@
++#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_MEDIA_CAPABILITIES_ARUPA_CODEC_PROFILE_H_
++#define THIRD_PARTY_BLINK_RENDERER_MODULES_MEDIA_CAPABILITIES_ARUPA_CODEC_PROFILE_H_
++#include "third_party/blink/renderer/modules/modules_export.h"
++#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
++namespace blink {
++class MediaCapabilitiesDecodingInfo;
++MODULES_EXPORT MediaCapabilitiesDecodingInfo* ArupaLookupCodecProfile(
++    const String& profile_json,
++    const String& content_type);
++}
++#endif
+diff --git a/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc b/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc
+index 1dea63eee6..20cb2185e6 100644
+--- a/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc
++++ b/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc
+@@ -50,7 +50,9 @@
+ #include "third_party/blink/renderer/core/execution_context/navigator_base.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
++#include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
++#include "third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.h"
+ #include "third_party/blink/renderer/core/inspector/console_message.h"
+ #include "third_party/blink/renderer/modules/encryptedmedia/encrypted_media_utils.h"
+ #include "third_party/blink/renderer/modules/encryptedmedia/media_key_system_access.h"
+@@ -812,6 +814,25 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::decodingInfo(
+     ScriptState* script_state,
+     const MediaDecodingConfiguration* config,
+     ExceptionState& exception_state) {
++  if (auto* window = LocalDOMWindow::From(script_state)) {
++    if (auto* frame = window->GetFrame()) {
++      if (Settings* settings = frame->GetSettings()) {
++        const String profile = settings->GetArupaCodecProfile();
++        if (!profile.empty()) {
++          String content_type;
++          if (config->hasVideo()) {
++            content_type = config->video()->contentType();
++          } else if (config->hasAudio()) {
++            content_type = config->audio()->contentType();
++          }
++          if (auto* info = ArupaLookupCodecProfile(profile, content_type)) {
++            return ToResolvedPromise<MediaCapabilitiesDecodingInfo>(
++                script_state, info);
++          }
++        }
++      }
++    }
++  }
+   const base::TimeTicks request_time = base::TimeTicks::Now();
+ 
+   if (config->hasKeySystemConfiguration()) {
+diff --git a/third_party/blink/renderer/modules/mediastream/media_devices.cc b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+index f0e1886c47..b6e3c84a2b 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_devices.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+@@ -1,6 +1,9 @@
+ // Copyright 2015 The Chromium Authors
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
++#ifdef UNSAFE_BUFFERS_BUILD
++#pragma allow_unsafe_buffers
++#endif
+ 
+ #include "third_party/blink/renderer/modules/mediastream/media_devices.h"
+ 
+@@ -1407,6 +1410,33 @@ void MediaDevices::StopObserving() {
+   receiver_.reset();
+ }
+ 
++namespace {
++String ArupaRemapDeviceId(const String& seed, const String& id) {
++  if (seed.empty() || id.empty())
++    return id;
++  static const uint64_t kBasis[4] = {
++      0xcbf29ce484222325ULL, 0x100000001b3ULL,
++      0x9e3779b97f4a7c15ULL, 0x2545f4914f6cdd1dULL};
++  static const char kHex[] = "0123456789abcdef";
++  char out[64];
++  for (int b = 0; b < 4; ++b) {
++    uint64_t h = kBasis[b];
++    for (unsigned i = 0; i < seed.length(); ++i) {
++      h ^= static_cast<uint8_t>(seed[i] & 0xFF);
++      h *= 1099511628211ULL;
++    }
++    h ^= 0x3a;
++    h *= 1099511628211ULL;
++    for (unsigned i = 0; i < id.length(); ++i) {
++      h ^= static_cast<uint8_t>(id[i] & 0xFF);
++      h *= 1099511628211ULL;
++    }
++    for (int n = 0; n < 16; ++n)
++      out[b * 16 + n] = kHex[(h >> ((15 - n) * 4)) & 0xF];
++  }
++  return String(base::span<const char>(out));
++}
++}
+ void MediaDevices::DevicesEnumerated(
+     ScriptPromiseResolverWithTracker<EnumerateDevicesResult,
+                                      IDLSequence<MediaDeviceInfo>>*
+@@ -1455,6 +1485,13 @@ void MediaDevices::DevicesEnumerated(
+   }
+ 
+   MediaDeviceInfoVector media_devices;
++  String arupa_dev_ids_seed;
++  if (LocalDOMWindow* arupa_w = LocalDOMWindow::From(script_state)) {
++    if (LocalFrame* arupa_f = arupa_w->GetFrame()) {
++      if (Settings* arupa_s = arupa_f->GetSettings())
++        arupa_dev_ids_seed = arupa_s->GetArupaDeviceIdsSeed();
++    }
++  }
+   bool result_contains_nonempty_input_device_ids = false;
+   for (wtf_size_t i = 0;
+        i < static_cast<wtf_size_t>(
+@@ -1465,6 +1502,12 @@ void MediaDevices::DevicesEnumerated(
+           static_cast<mojom::blink::MediaDeviceType>(i);
+       WebMediaDeviceInfo device_info = enumeration[i][j];
+       String device_label = String::FromUtf8(device_info.label);
++      String arupa_dev_id = String::FromUtf8(device_info.device_id);
++      String arupa_grp_id = String::FromUtf8(device_info.group_id);
++      if (!arupa_dev_ids_seed.empty()) {
++        arupa_dev_id = ArupaRemapDeviceId(arupa_dev_ids_seed, arupa_dev_id);
++        arupa_grp_id = ArupaRemapDeviceId(arupa_dev_ids_seed, arupa_grp_id);
++      }
+       if (device_type == mojom::blink::MediaDeviceType::kMediaAudioInput ||
+           device_type == mojom::blink::MediaDeviceType::kMediaVideoInput) {
+         if (!device_info.device_id.empty()) {
+@@ -1472,8 +1515,7 @@ void MediaDevices::DevicesEnumerated(
+         }
+         InputDeviceInfo* input_device_info =
+             MakeGarbageCollected<InputDeviceInfo>(
+-                String::FromUtf8(device_info.device_id), device_label,
+-                String::FromUtf8(device_info.group_id), device_type);
++                arupa_dev_id, device_label, arupa_grp_id, device_type);
+         if (device_type == mojom::blink::MediaDeviceType::kMediaVideoInput &&
+             !video_input_capabilities.empty()) {
+           input_device_info->SetVideoInputCapabilities(
+@@ -1487,8 +1529,7 @@ void MediaDevices::DevicesEnumerated(
+         media_devices.push_back(input_device_info);
+       } else {
+         media_devices.push_back(MakeGarbageCollected<MediaDeviceInfo>(
+-            String::FromUtf8(device_info.device_id), device_label,
+-            String::FromUtf8(device_info.group_id), device_type));
++            arupa_dev_id, device_label, arupa_grp_id, device_type));
+       }
+     }
+   }
+diff --git a/third_party/blink/renderer/modules/netinfo/network_information.cc b/third_party/blink/renderer/modules/netinfo/network_information.cc
+index 976a3c8c36..5078a77f12 100644
+--- a/third_party/blink/renderer/modules/netinfo/network_information.cc
++++ b/third_party/blink/renderer/modules/netinfo/network_information.cc
+@@ -14,6 +14,9 @@
+ #include "third_party/blink/renderer/core/dom/events/event.h"
+ #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+ #include "third_party/blink/renderer/core/execution_context/navigator_base.h"
++#include "third_party/blink/renderer/core/frame/local_dom_window.h"
++#include "third_party/blink/renderer/core/frame/local_frame.h"
++#include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/core/inspector/console_message.h"
+ #include "third_party/blink/renderer/core/probe/core_probes.h"
+ #include "third_party/blink/renderer/modules/event_target_modules.h"
+@@ -73,6 +76,12 @@ String GetConsoleLogStringForWebHoldback() {
+          "and so may be inaccurate";
+ }
+ 
++bool ArupaNetInfoSpoof(ExecutionContext* ec) {
++  auto* window = DynamicTo<LocalDOMWindow>(ec);
++  if (!window || !window->GetFrame() || !window->GetFrame()->GetSettings())
++    return false;
++  return window->GetFrame()->GetSettings()->GetArupaNetInfoSpoof();
++}
+ }  // namespace
+ 
+ NetworkInformation::~NetworkInformation() {
+@@ -111,6 +120,8 @@ double NetworkInformation::downlinkMax() const {
+ }
+ 
+ V8EffectiveConnectionType NetworkInformation::effectiveType() {
++  if (ArupaNetInfoSpoof(GetExecutionContext()))
++    return V8EffectiveConnectionType(V8EffectiveConnectionType::Enum::k4G);
+   MaybeShowWebHoldbackConsoleMsg();
+   std::optional<WebEffectiveConnectionType> override_ect =
+       GetNetworkStateNotifier().GetWebHoldbackEffectiveType();
+@@ -132,6 +143,8 @@ V8EffectiveConnectionType NetworkInformation::effectiveType() {
+ }
+ 
+ uint32_t NetworkInformation::rtt() {
++  if (ArupaNetInfoSpoof(GetExecutionContext()))
++    return 50;
+   MaybeShowWebHoldbackConsoleMsg();
+   std::optional<base::TimeDelta> override_rtt =
+       GetNetworkStateNotifier().GetWebHoldbackHttpRtt();
+@@ -148,6 +161,8 @@ uint32_t NetworkInformation::rtt() {
+ }
+ 
+ double NetworkInformation::downlink() {
++  if (ArupaNetInfoSpoof(GetExecutionContext()))
++    return 10.0;
+   MaybeShowWebHoldbackConsoleMsg();
+   std::optional<double> override_downlink_mbps =
+       GetNetworkStateNotifier().GetWebHoldbackDownlinkThroughputMbps();
+@@ -165,6 +180,8 @@ double NetworkInformation::downlink() {
+ }
+ 
+ bool NetworkInformation::saveData() const {
++  if (ArupaNetInfoSpoof(GetExecutionContext()))
++    return false;
+   bool save_data =
+       IsObserving() ? save_data_ : GetNetworkStateNotifier().SaveDataEnabled();
+ 
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
+index bc4c0c6ca0..1902fc4304 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
++++ b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
+@@ -33,6 +33,7 @@
+ #include "base/compiler_specific.h"
+ #include "base/containers/span.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_buffer_options.h"
++#include "third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h"
+ #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
+ #include "third_party/blink/renderer/platform/audio/audio_bus.h"
+ #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
+@@ -221,6 +222,26 @@ NotShared<DOMFloat32Array> AudioBuffer::getChannelData(unsigned channel_index) {
+     return NotShared<DOMFloat32Array>(nullptr);
+   }
+ 
++  const uint64_t arupa_seed = GetArupaAudioSeed();
++  if (arupa_seed != 0) {
++    base::span<const float> in = channels_[channel_index]->AsSpan();
++    DOMFloat32Array* noised =
++        DOMFloat32Array::CreateOrNull(static_cast<unsigned>(in.size()));
++    if (noised) {
++      base::span<float> out = noised->AsSpan();
++      for (size_t k = 0; k < in.size(); ++k) {
++        uint64_t h = arupa_seed;
++        h ^= (static_cast<uint64_t>(channel_index) + 1) * 0x9E3779B97F4A7C15ull;
++        h ^= (static_cast<uint64_t>(k) + 1) * 0xC2B2AE3D27D4EB4Full;
++        h = (h ^ (h >> 29)) * 0xBF58476D1CE4E5B9ull;
++        h ^= (h >> 32);
++        const float eps =
++            (static_cast<float>(h & 0xFFFF) / 65535.0f - 0.5f) * 2e-4f;
++        out[k] = in[k] + eps;
++      }
++      return NotShared<DOMFloat32Array>(noised);
++    }
++  }
+   return NotShared<DOMFloat32Array>(channels_[channel_index].Get());
+ }
+ 
+diff --git a/third_party/blink/renderer/modules/webcodecs/BUILD.gn b/third_party/blink/renderer/modules/webcodecs/BUILD.gn
+index 39e3a34712..2b6ae48c86 100644
+--- a/third_party/blink/renderer/modules/webcodecs/BUILD.gn
++++ b/third_party/blink/renderer/modules/webcodecs/BUILD.gn
+@@ -11,6 +11,8 @@ import("//third_party/protobuf/proto_library.gni")
+ 
+ blink_modules_sources("webcodecs") {
+   sources = [
++    "arupa_codec_whitelist.cc",
++    "arupa_codec_whitelist.h",
+     "array_buffer_util.cc",
+     "array_buffer_util.h",
+     "audio_data.cc",
+diff --git a/third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.cc b/third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.cc
+new file mode 100644
+index 0000000000..b6e5f29ecf
+--- /dev/null
++++ b/third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.cc
+@@ -0,0 +1,25 @@
++#include "third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.h"
++#include <string>
++#include <vector>
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
++namespace blink {
++bool ArupaIsCodecInWhitelist(const String& whitelist, const String& codec) {
++  if (whitelist.empty() || codec.empty()) {
++    return false;
++  }
++  const std::string ct = base::ToLowerASCII(codec.Utf8());
++  const std::vector<std::string> parts = base::SplitString(
++      base::ToLowerASCII(whitelist.Utf8()), ",", base::TRIM_WHITESPACE,
++      base::SPLIT_WANT_NONEMPTY);
++  for (const std::string& p : parts) {
++    if (p.empty()) {
++      continue;
++    }
++    if (ct.find(p) != std::string::npos || p.find(ct) != std::string::npos) {
++      return true;
++    }
++  }
++  return false;
++}
++}
+diff --git a/third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.h b/third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.h
+new file mode 100644
+index 0000000000..915a54185a
+--- /dev/null
++++ b/third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.h
+@@ -0,0 +1,9 @@
++#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBCODECS_ARUPA_CODEC_WHITELIST_H_
++#define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBCODECS_ARUPA_CODEC_WHITELIST_H_
++#include "third_party/blink/renderer/modules/modules_export.h"
++#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
++namespace blink {
++MODULES_EXPORT bool ArupaIsCodecInWhitelist(const String& whitelist,
++                                            const String& codec);
++}
++#endif
+diff --git a/third_party/blink/renderer/modules/webcodecs/audio_decoder.cc b/third_party/blink/renderer/modules/webcodecs/audio_decoder.cc
+index 588eaf21d9..59c01e654b 100644
+--- a/third_party/blink/renderer/modules/webcodecs/audio_decoder.cc
++++ b/third_party/blink/renderer/modules/webcodecs/audio_decoder.cc
+@@ -25,7 +25,11 @@
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_decoder_init.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_decoder_support.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_encoded_audio_chunk.h"
++#include "third_party/blink/renderer/core/frame/local_dom_window.h"
++#include "third_party/blink/renderer/core/frame/local_frame.h"
++#include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
++#include "third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.h"
+ #include "third_party/blink/renderer/modules/webcodecs/array_buffer_util.h"
+ #include "third_party/blink/renderer/modules/webcodecs/audio_data.h"
+ #include "third_party/blink/renderer/modules/webcodecs/audio_decoder_broker.h"
+@@ -194,6 +198,20 @@ ScriptPromise<AudioDecoderSupport> AudioDecoder::isConfigSupported(
+     ScriptState* script_state,
+     const AudioDecoderConfig* config,
+     ExceptionState& exception_state) {
++  if (auto* window = LocalDOMWindow::From(script_state)) {
++    if (auto* frame = window->GetFrame()) {
++      if (Settings* settings = frame->GetSettings()) {
++        const String whitelist = settings->GetArupaWebcodecsWhitelist();
++        if (!whitelist.empty()) {
++          auto* support = AudioDecoderSupport::Create();
++          support->setConfig(const_cast<AudioDecoderConfig*>(config));
++          support->setSupported(
++              ArupaIsCodecInWhitelist(whitelist, config->codec()));
++          return ToResolvedPromise<AudioDecoderSupport>(script_state, support);
++        }
++      }
++    }
++  }
+   String js_error_message;
+   std::optional<media::AudioType> audio_type =
+       IsValidAudioDecoderConfig(*config, &js_error_message);
+diff --git a/third_party/blink/renderer/modules/webcodecs/audio_encoder.cc b/third_party/blink/renderer/modules/webcodecs/audio_encoder.cc
+index 93468e644c..15df52b1c4 100644
+--- a/third_party/blink/renderer/modules/webcodecs/audio_encoder.cc
++++ b/third_party/blink/renderer/modules/webcodecs/audio_encoder.cc
+@@ -33,7 +33,11 @@
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_opus_application.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_opus_encoder_config.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_opus_signal.h"
++#include "third_party/blink/renderer/core/frame/local_dom_window.h"
++#include "third_party/blink/renderer/core/frame/local_frame.h"
++#include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/modules/webcodecs/array_buffer_util.h"
++#include "third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.h"
+ #include "third_party/blink/renderer/modules/webcodecs/encoded_audio_chunk.h"
+ #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+ #include "third_party/blink/renderer/platform/heap/cross_thread_handle.h"
+@@ -684,6 +688,20 @@ ScriptPromise<AudioEncoderSupport> AudioEncoder::isConfigSupported(
+     ScriptState* script_state,
+     const AudioEncoderConfig* config,
+     ExceptionState& exception_state) {
++  if (auto* window = LocalDOMWindow::From(script_state)) {
++    if (auto* frame = window->GetFrame()) {
++      if (Settings* settings = frame->GetSettings()) {
++        const String whitelist = settings->GetArupaWebcodecsWhitelist();
++        if (!whitelist.empty()) {
++          auto* support = AudioEncoderSupport::Create();
++          support->setConfig(const_cast<AudioEncoderConfig*>(config));
++          support->setSupported(
++              ArupaIsCodecInWhitelist(whitelist, config->codec()));
++          return ToResolvedPromise<AudioEncoderSupport>(script_state, support);
++        }
++      }
++    }
++  }
+   auto* parsed_config = ParseConfigStatic(config, exception_state);
+   if (!parsed_config) {
+     DCHECK(exception_state.HadException());
+diff --git a/third_party/blink/renderer/modules/webcodecs/video_decoder.cc b/third_party/blink/renderer/modules/webcodecs/video_decoder.cc
+index b5e7219165..bece471883 100644
+--- a/third_party/blink/renderer/modules/webcodecs/video_decoder.cc
++++ b/third_party/blink/renderer/modules/webcodecs/video_decoder.cc
+@@ -31,8 +31,12 @@
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_video_decoder_config.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_video_decoder_support.h"
+ #include "third_party/blink/renderer/core/dom/dom_exception.h"
++#include "third_party/blink/renderer/core/frame/local_dom_window.h"
++#include "third_party/blink/renderer/core/frame/local_frame.h"
++#include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
+ #include "third_party/blink/renderer/modules/webcodecs/array_buffer_util.h"
++#include "third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.h"
+ #include "third_party/blink/renderer/modules/webcodecs/decrypt_config_util.h"
+ #include "third_party/blink/renderer/modules/webcodecs/encoded_video_chunk.h"
+ #include "third_party/blink/renderer/modules/webcodecs/gpu_factories_retriever.h"
+@@ -285,6 +289,20 @@ ScriptPromise<VideoDecoderSupport> VideoDecoder::isConfigSupported(
+     ScriptState* script_state,
+     const VideoDecoderConfig* config,
+     ExceptionState& exception_state) {
++  if (auto* window = LocalDOMWindow::From(script_state)) {
++    if (auto* frame = window->GetFrame()) {
++      if (Settings* settings = frame->GetSettings()) {
++        const String whitelist = settings->GetArupaWebcodecsWhitelist();
++        if (!whitelist.empty()) {
++          auto* support = VideoDecoderSupport::Create();
++          support->setConfig(const_cast<VideoDecoderConfig*>(config));
++          support->setSupported(
++              ArupaIsCodecInWhitelist(whitelist, config->codec()));
++          return ToResolvedPromise<VideoDecoderSupport>(script_state, support);
++        }
++      }
++    }
++  }
+   // Run the "check if a config is a valid VideoDecoderConfig" algorithm.
+   String js_error_message;
+   std::optional<media::VideoType> video_type =
+diff --git a/third_party/blink/renderer/modules/webcodecs/video_encoder.cc b/third_party/blink/renderer/modules/webcodecs/video_encoder.cc
+index b0580eb9b9..13b029e68e 100644
+--- a/third_party/blink/renderer/modules/webcodecs/video_encoder.cc
++++ b/third_party/blink/renderer/modules/webcodecs/video_encoder.cc
+@@ -69,10 +69,12 @@
+ #include "third_party/blink/renderer/core/dom/dom_exception.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
++#include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/core/keywords.h"
+ #include "third_party/blink/renderer/core/streams/readable_stream.h"
+ #include "third_party/blink/renderer/core/streams/writable_stream.h"
+ #include "third_party/blink/renderer/modules/event_modules.h"
++#include "third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.h"
+ #include "third_party/blink/renderer/modules/webcodecs/array_buffer_util.h"
+ #include "third_party/blink/renderer/modules/webcodecs/background_readback.h"
+ #include "third_party/blink/renderer/modules/webcodecs/codec_state_helper.h"
+@@ -1806,6 +1808,20 @@ ScriptPromise<VideoEncoderSupport> VideoEncoder::isConfigSupported(
+     ScriptState* script_state,
+     const VideoEncoderConfig* config,
+     ExceptionState& exception_state) {
++  if (auto* window = LocalDOMWindow::From(script_state)) {
++    if (auto* frame = window->GetFrame()) {
++      if (Settings* settings = frame->GetSettings()) {
++        const String whitelist = settings->GetArupaWebcodecsWhitelist();
++        if (!whitelist.empty()) {
++          auto* support = VideoEncoderSupport::Create();
++          support->setConfig(const_cast<VideoEncoderConfig*>(config));
++          support->setSupported(
++              ArupaIsCodecInWhitelist(whitelist, config->codec()));
++          return ToResolvedPromise<VideoEncoderSupport>(script_state, support);
++        }
++      }
++    }
++  }
+   auto* parsed_config = ParseConfigStatic(config, exception_state);
+   if (!parsed_config) {
+     DCHECK(exception_state.HadException());
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+index 26c0a088cc..b007ab73d1 100644
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+@@ -4200,6 +4200,13 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case WebGLDebugRendererInfo::kUnmaskedRendererWebgl:
+       if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
++        if (Host() && !Host()->IsOffscreenCanvas() && canvas() &&
++            canvas()->GetSettings()) {
++          const String arupa_renderer =
++              canvas()->GetSettings()->GetArupaWebglRenderer();
++          if (!arupa_renderer.empty())
++            return WebGLAny(script_state, arupa_renderer);
++        }
+         return WebGLAny(script_state,
+                         String(ContextGL()->GetString(GL_RENDERER)));
+       }
+@@ -4209,6 +4216,13 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case WebGLDebugRendererInfo::kUnmaskedVendorWebgl:
+       if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
++        if (Host() && !Host()->IsOffscreenCanvas() && canvas() &&
++            canvas()->GetSettings()) {
++          const String arupa_vendor =
++              canvas()->GetSettings()->GetArupaWebglVendor();
++          if (!arupa_vendor.empty())
++            return WebGLAny(script_state, arupa_vendor);
++        }
+         return WebGLAny(script_state,
+                         String(ContextGL()->GetString(GL_VENDOR)));
+       }
+diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
+index 5d35a355c7..8c2e3d0ff3 100644
+--- a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
++++ b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
+@@ -11,6 +11,7 @@
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_queue_descriptor.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_request_adapter_options.h"
+ #include "third_party/blink/renderer/core/dom/dom_exception.h"
++#include "third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h"
+ #include "third_party/blink/renderer/core/inspector/console_message.h"
+ #include "third_party/blink/renderer/modules/webgpu/dawn_enum_conversions.h"
+ #include "third_party/blink/renderer/modules/webgpu/gpu.h"
+@@ -126,12 +127,18 @@ GPUAdapter::GPUAdapter(
+ GPUAdapterInfo* GPUAdapter::CreateAdapterInfoForAdapter() {
+   bool is_fallback_adapter = adapter_type_ == wgpu::AdapterType::CPU;
+ 
++  String eff_vendor = vendor_;
++  String eff_architecture = architecture_;
++  if (!GetArupaWebgpuVendor().empty())
++    eff_vendor = GetArupaWebgpuVendor();
++  if (!GetArupaWebgpuArchitecture().empty())
++    eff_architecture = GetArupaWebgpuArchitecture();
+   GPUAdapterInfo* info;
+   if (RuntimeEnabledFeatures::WebGPUDeveloperFeaturesEnabled()) {
+     // If WebGPU developer features have been enabled then provide all available
+     // adapter info values.
+     info = MakeGarbageCollected<GPUAdapterInfo>(
+-        vendor_, architecture_, subgroup_min_size_, subgroup_max_size_,
++        eff_vendor, eff_architecture, subgroup_min_size_, subgroup_max_size_,
+         is_fallback_adapter, device_, description_, driver_,
+         FromDawnEnum(backend_type_), FromDawnEnum(adapter_type_),
+         d3d_shader_model_, vk_driver_version_, FromDawnEnum(power_preference_));
+@@ -145,7 +152,7 @@ GPUAdapterInfo* GPUAdapter::CreateAdapterInfoForAdapter() {
+     }
+   } else {
+     info = MakeGarbageCollected<GPUAdapterInfo>(
+-        vendor_, architecture_, subgroup_min_size_, subgroup_max_size_,
++        eff_vendor, eff_architecture, subgroup_min_size_, subgroup_max_size_,
+         is_fallback_adapter);
+   }
+ 
+diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
+index 372b10936b..204877ff7f 100644
+--- a/third_party/blink/renderer/platform/fonts/font_cache.cc
++++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
+@@ -77,7 +77,42 @@
+ #include "third_party/skia/include/ports/SkTypeface_win.h"
+ #endif
+ 
++#include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
++#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+ namespace blink {
++namespace {
++Vector<String>& ArupaFontsAllowlistStorage() {
++  DEFINE_THREAD_SAFE_STATIC_LOCAL(Vector<String>, storage, ());
++  return storage;
++}
++}
++void FontCache::SetArupaFontsAllowlist(const String& csv) {
++  Vector<String>& list = ArupaFontsAllowlistStorage();
++  list.clear();
++  if (csv.empty()) {
++    return;
++  }
++  Vector<String> parts = csv.Split(static_cast<UChar>(','));
++  for (const String& p : parts) {
++    String f = p.StripWhiteSpace().ToAsciiLower();
++    if (!f.empty()) {
++      list.push_back(f);
++    }
++  }
++}
++bool FontCache::ArupaFontAllowed(const AtomicString& family) {
++  const Vector<String>& list = ArupaFontsAllowlistStorage();
++  if (list.empty() || family.empty()) {
++    return true;
++  }
++  const String family_lower = family.GetString().ToAsciiLower();
++  for (const String& f : list) {
++    if (f == family_lower) {
++      return true;
++    }
++  }
++  return false;
++}
+ 
+ const char kColorEmojiLocale[] = "und-Zsye";
+ const char kMonoEmojiLocale[] = "und-Zsym";
+@@ -177,6 +212,9 @@ const SimpleFontData* FontCache::GetFontData(
+     const FontDescription& font_description,
+     const AtomicString& family,
+     AlternateFontName altername_font_name) {
++  if (!ArupaFontAllowed(family)) {
++    return nullptr;
++  }
+   if (const FontPlatformData* platform_data = GetFontPlatformData(
+           font_description,
+           FontFaceCreationParams(
+@@ -198,6 +236,9 @@ const SimpleFontData* FontCache::FontDataFromFontPlatformData(
+ bool FontCache::IsPlatformFamilyMatchAvailable(
+     const FontDescription& font_description,
+     const AtomicString& family) {
++  if (!ArupaFontAllowed(family)) {
++    return false;
++  }
+   return GetFontPlatformData(
+       font_description,
+       FontFaceCreationParams(AdjustFamilyNameToAvoidUnsupportedFonts(family)),
+diff --git a/third_party/blink/renderer/platform/fonts/font_cache.h b/third_party/blink/renderer/platform/fonts/font_cache.h
+index cdeca583f0..75d094fbfb 100644
+--- a/third_party/blink/renderer/platform/fonts/font_cache.h
++++ b/third_party/blink/renderer/platform/fonts/font_cache.h
+@@ -132,6 +132,8 @@ class PLATFORM_EXPORT FontCache final {
+ 
+   static String FirstAvailableOrFirst(const String&);
+ 
++  static void SetArupaFontsAllowlist(const String& csv);
++  static bool ArupaFontAllowed(const AtomicString& family);
+   void AddClient(FontCacheClient*);
+ 
+   void Invalidate();
+diff --git a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
+index c76f6553e1..7b86f924bf 100644
+--- a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
++++ b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
+@@ -30,6 +30,9 @@
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++#ifdef UNSAFE_BUFFERS_BUILD
++#pragma allow_unsafe_buffers
++#endif
+ #include "third_party/blink/renderer/platform/graphics/image_data_buffer.h"
+ 
+ #include "base/compiler_specific.h"
+@@ -42,6 +45,19 @@
+ #include "ui/gfx/skia_span_util.h"
+ 
+ namespace blink {
++namespace {
++int ArupaFastNoise(uint64_t seed, int x, int y) {
++  uint64_t h = seed;
++  h ^= static_cast<uint64_t>(static_cast<uint32_t>(x)) * 0x9E3779B97F4A7C15ull;
++  h ^= static_cast<uint64_t>(static_cast<uint32_t>(y)) * 0xC2B2AE3D27D4EB4Full;
++  h = (h ^ (h >> 29)) * 0xBF58476D1CE4E5B9ull;
++  h = h ^ (h >> 32);
++  return static_cast<int>(h % 3u) - 1;
++}
++inline uint8_t ArupaClampByte(int v) {
++  return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
++}
++}
+ 
+ ImageDataBuffer::ImageDataBuffer(scoped_refptr<StaticBitmapImage> image) {
+   if (!image)
+@@ -122,6 +138,64 @@ std::unique_ptr<ImageDataBuffer> ImageDataBuffer::Create(
+   return buffer;
+ }
+ 
++std::unique_ptr<ImageDataBuffer> ImageDataBuffer::CreateWithArupaCanvasNoise(
++    scoped_refptr<StaticBitmapImage> image,
++    uint64_t arupa_canvas_seed) {
++  if (arupa_canvas_seed == 0) {
++    return Create(std::move(image));
++  }
++  if (!image)
++    return nullptr;
++  PaintImage paint_image = image->PaintImageForCurrentFrame();
++  if (!paint_image || paint_image.IsPaintWorklet())
++    return nullptr;
++  SkImageInfo paint_image_info = paint_image.GetSkImageInfo();
++  if (paint_image_info.isEmpty())
++    return nullptr;
++  const SkImageInfo info =
++      SkImageInfo::Make(paint_image_info.width(), paint_image_info.height(),
++                        paint_image_info.colorType(), kUnpremul_SkAlphaType,
++                        paint_image_info.refColorSpace());
++  const size_t row_bytes = info.minRowBytes();
++  size_t size = info.computeByteSize(row_bytes);
++  if (SkImageInfo::ByteSizeOverflowed(size))
++    return nullptr;
++  sk_sp<SkData> data = SkData::MakeUninitialized(size);
++  SkPixmap pixmap = {info, data->writable_data(), row_bytes};
++  if (!paint_image.readPixels(info, pixmap.writable_addr(), row_bytes, 0, 0))
++    return nullptr;
++  const SkColorType ct = info.colorType();
++  if (ct == kRGBA_8888_SkColorType || ct == kBGRA_8888_SkColorType) {
++    const int width = info.width();
++    const int height = info.height();
++    uint8_t* base_addr = static_cast<uint8_t*>(pixmap.writable_addr());
++    for (int y = 0; y < height; ++y) {
++      uint8_t* row = base_addr + static_cast<size_t>(y) * row_bytes;
++      for (int x = 0; x < width; ++x) {
++        const int n = ArupaFastNoise(arupa_canvas_seed, x, y);
++        if (n == 0)
++          continue;
++        uint8_t* px = row + static_cast<size_t>(x) * 4u;
++        px[0] = ArupaClampByte(px[0] + n);
++        px[1] = ArupaClampByte(px[1] + n);
++        px[2] = ArupaClampByte(px[2] + n);
++      }
++    }
++  }
++  sk_sp<SkImage> retained =
++      SkImages::RasterFromData(info, std::move(data), row_bytes);
++  if (!retained)
++    return nullptr;
++  SkPixmap retained_pixmap;
++  if (!retained->peekPixels(&retained_pixmap))
++    return nullptr;
++  std::unique_ptr<ImageDataBuffer> buffer =
++      base::WrapUnique(new ImageDataBuffer(retained_pixmap));
++  buffer->retained_image_ = std::move(retained);
++  if (!buffer->IsValid())
++    return nullptr;
++  return buffer;
++}
+ base::span<const uint8_t> ImageDataBuffer::PixelData() const {
+   DCHECK(is_valid_);
+   return gfx::SkPixmapToSpan(pixmap_);
+diff --git a/third_party/blink/renderer/platform/graphics/image_data_buffer.h b/third_party/blink/renderer/platform/graphics/image_data_buffer.h
+index 7788473df7..fc12b0e694 100644
+--- a/third_party/blink/renderer/platform/graphics/image_data_buffer.h
++++ b/third_party/blink/renderer/platform/graphics/image_data_buffer.h
+@@ -51,6 +51,9 @@ class PLATFORM_EXPORT ImageDataBuffer {
+       scoped_refptr<StaticBitmapImage>);
+   static std::unique_ptr<ImageDataBuffer> Create(const SkPixmap&);
+ 
++  static std::unique_ptr<ImageDataBuffer> CreateWithArupaCanvasNoise(
++      scoped_refptr<StaticBitmapImage>,
++      uint64_t arupa_canvas_seed);
+   String ToDataURL(const ImageEncodingMimeType mime_type,
+                    const double& quality) const;
+   bool EncodeImage(const ImageEncodingMimeType mime_type,
+diff --git a/ui/android/java/src/org/chromium/ui/base/ApplicationViewportInsetTracker.java b/ui/android/java/src/org/chromium/ui/base/ApplicationViewportInsetTracker.java
+index 1630febc74..fafc3cc630 100644
+--- a/ui/android/java/src/org/chromium/ui/base/ApplicationViewportInsetTracker.java
++++ b/ui/android/java/src/org/chromium/ui/base/ApplicationViewportInsetTracker.java
+@@ -58,7 +58,7 @@ public class ApplicationViewportInsetTracker implements Destroyable {
+     private @Nullable InsetObserver mInsetObserver;
+ 
+     /** The observer that gets attached to all inset suppliers. */
+-    private final Callback<Integer> mInsetSupplierObserver = _ -> computeInsets();
++    private final Callback<Integer> mInsetSupplierObserver = unusedArg -> computeInsets();
+ 
+     private final SettableNonNullObservableSupplier<ViewportInsets> mInsetSupplier =
+             ObservableSuppliers.createNonNull(new ViewportInsets());
+diff --git a/ui/android/java/src/org/chromium/ui/base/ViewUtils.java b/ui/android/java/src/org/chromium/ui/base/ViewUtils.java
+index eb77751358..dcd752e5de 100644
+--- a/ui/android/java/src/org/chromium/ui/base/ViewUtils.java
++++ b/ui/android/java/src/org/chromium/ui/base/ViewUtils.java
+@@ -34,8 +34,10 @@ import java.util.Set;
+ @NullMarked
+ public final class ViewUtils {
+     private static final int[] sLocationTmp = new int[2];
+-    private static final View.OnClickListener DO_NOTHING_CLICK_LISTENER = _ -> {};
+-    private static final View.OnLongClickListener DO_NOTHING_LONG_CLICK_LISTENER = _ -> false;
++    private static final View.OnClickListener DO_NOTHING_CLICK_LISTENER =
++            unusedView -> {};
++    private static final View.OnLongClickListener DO_NOTHING_LONG_CLICK_LISTENER =
++            unusedView -> false;
+ 
+     // Prevent instantiation.
+     private ViewUtils() {}
+diff --git a/ui/android/java/src/org/chromium/ui/gfx/ViewConfigurationHelper.java b/ui/android/java/src/org/chromium/ui/gfx/ViewConfigurationHelper.java
+index 1a2b8e1210..d77e09c952 100644
+--- a/ui/android/java/src/org/chromium/ui/gfx/ViewConfigurationHelper.java
++++ b/ui/android/java/src/org/chromium/ui/gfx/ViewConfigurationHelper.java
+@@ -144,7 +144,6 @@ public class ViewConfigurationHelper {
+         try {
+             return res.getDimensionPixelSize(id);
+         } catch (Resources.NotFoundException e) {
+-            assert false : "MinScalingSpan resource lookup failed.";
+             return (int)
+                     TypedValue.applyDimension(
+                             TypedValue.COMPLEX_UNIT_MM,
+diff --git a/ui/android/java/src/org/chromium/ui/hierarchicalmenu/HierarchicalMenuController.java b/ui/android/java/src/org/chromium/ui/hierarchicalmenu/HierarchicalMenuController.java
+index 9087b25f24..21b6afd4ee 100644
+--- a/ui/android/java/src/org/chromium/ui/hierarchicalmenu/HierarchicalMenuController.java
++++ b/ui/android/java/src/org/chromium/ui/hierarchicalmenu/HierarchicalMenuController.java
+@@ -801,7 +801,7 @@ public class HierarchicalMenuController<T> {
+             Runnable backRunnable) {
+         builder.with(keyProvider.getTitleKey(), title)
+                 .with(keyProvider.getEnabledKey(), true)
+-                .with(keyProvider.getClickListenerKey(), _ -> backRunnable.run())
++                .with(keyProvider.getClickListenerKey(), unusedArg -> backRunnable.run())
+                 .with(
+                         keyProvider.getKeyListenerKey(),
+                         (view, keyCode, keyEvent) -> {

@@ -1,0 +1,533 @@
+diff --git a/.gitignore b/.gitignore
+index 63b0d3675470..72c975d453c1 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -350,3 +350,6 @@ third_party/rust/target/
+ 
+ # Trace files created when using --trace-startup.
+ **/chrometrace.log
++
++node_modules/
++agents/
+diff --git a/BUILD.gn b/BUILD.gn
+index d55402aaad0d..d97171358acc 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -96,6 +96,7 @@ group("gn_all") {
+     }
+   } else {
+     deps = [
++      "//chrome/browser/arupa_desktop:arupa_kernel",
+       "//base:base_perftests",
+       "//base:base_unittests",
+       "//build/modules",
+diff --git a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+index b0ede6d70860..8fdaa8ae58d6 100644
+--- a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
++++ b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+@@ -12,6 +12,7 @@
+ #include <optional>
+ 
+ #include "base/base64.h"
++#include "base/logging.h"
+ #include "base/mac/mac_util.h"
+ #include "base/strings/sys_string_conversions.h"
+ 
+@@ -156,6 +157,12 @@ static const char kMenuWasRunCallbackKey = 0;
+     return;
+   }
+ 
++  // AppKit creates an NSPopupMenuWindow while tracking the select menu.
++  if (![NSThread isMainThread]) {
++    LOG(ERROR) << "[arupa-mac][select-anchor] menu requested off main thread";
++    return;
++  }
++
+   // Using NSPopUpButtonCell in this way is not SPI, but there is new(er) API to
+   // show a pop-up menu in a way that avoids the hassle of instantiating a cell
+   // just to use its innards.
+@@ -216,14 +223,55 @@ static const char kMenuWasRunCallbackKey = 0;
+   // Therefore, set up a fake "control" view corresponding to the visual bounds
+   // of the HTML element, so that if the menu needs to be repositioned, it is
+   // repositioned relative to that.
+-  NSView* fakeControlView = [[NSView alloc] initWithFrame:bounds];
+-  [view addSubview:fakeControlView];
++  NSWindow* anchorWindow = nil;
++  NSView* controlParent = view;
++  NSRect controlBounds = bounds;
++  if (!view.window) {
++    // Offscreen WebContents have no NSWindow. AppKit cannot position a native
++    // select menu from a detached NSView, even when its root frame contains
++    // the correct screen origin. Give the cell a temporary window at the
++    // element's screen rect without moving the captured Chromium view.
++    NSView* rootView = view;
++    while (rootView.superview) {
++      rootView = rootView.superview;
++    }
++    NSRect boundsInRoot = [view convertRect:bounds toView:rootView];
++    NSRect screenBounds = NSOffsetRect(boundsInRoot, NSMinX(rootView.frame),
++                                       NSMinY(rootView.frame));
++    if (!NSIsEmptyRect(screenBounds)) {
++      anchorWindow = [[NSWindow alloc]
++          initWithContentRect:screenBounds
++                    styleMask:NSWindowStyleMaskBorderless
++                      backing:NSBackingStoreBuffered
++                        defer:NO];
++      anchorWindow.opaque = NO;
++      anchorWindow.backgroundColor = NSColor.clearColor;
++      anchorWindow.hasShadow = NO;
++      anchorWindow.ignoresMouseEvents = YES;
++      anchorWindow.releasedWhenClosed = NO;
++      anchorWindow.collectionBehavior =
++          NSWindowCollectionBehaviorFullScreenAuxiliary;
++      [anchorWindow orderFront:nil];
++      controlParent = anchorWindow.contentView;
++      controlBounds = controlParent.bounds;
++      LOG(INFO) << "[arupa-mac][select-anchor] screen=("
++                << NSMinX(screenBounds) << "," << NSMinY(screenBounds) << ","
++                << NSWidth(screenBounds) << "," << NSHeight(screenBounds)
++                << ") root=(" << NSMinX(rootView.frame) << ","
++                << NSMinY(rootView.frame) << ")";
++    }
++  }
++
++  NSView* fakeControlView = [[NSView alloc] initWithFrame:controlBounds];
++  [controlParent addSubview:fakeControlView];
+ 
+   // Display the menu.
+   [cell attachPopUpWithFrame:fakeControlView.bounds inView:fakeControlView];
+   [cell performClickWithFrame:fakeControlView.bounds inView:fakeControlView];
+ 
+   [fakeControlView removeFromSuperview];
++  [anchorWindow orderOut:nil];
++  [anchorWindow close];
+ }
+ 
+ - (void)cancelSynchronously {
+diff --git a/extensions/common/mojom/api_permission_id.mojom b/extensions/common/mojom/api_permission_id.mojom
+index 262221ecd852..1719580d7953 100644
+--- a/extensions/common/mojom/api_permission_id.mojom
++++ b/extensions/common/mojom/api_permission_id.mojom
+@@ -298,6 +298,8 @@ enum APIPermissionID {
+   kBluetoothLowEnergy = 271,
+   kBluetoothPeripheral = 272,
+   kPublicSuffix = 273,
++  kNomadTransfer = 274,
++  kNomad = 275,
+ 
+   // Add new entries at the end of the enum and be sure to update the
+   // "ExtensionPermission3" enum in
+diff --git a/extensions/renderer/ipc_message_sender.cc b/extensions/renderer/ipc_message_sender.cc
+index 76846f429e30..888184553f24 100644
+--- a/extensions/renderer/ipc_message_sender.cc
++++ b/extensions/renderer/ipc_message_sender.cc
+@@ -10,6 +10,7 @@
+ #include "base/functional/callback_helpers.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "content/public/renderer/render_frame.h"
+ #include "content/public/renderer/render_thread.h"
+@@ -626,13 +627,42 @@ class WorkerThreadIPCMessageSender : public IPCMessageSender {
+ 
+ }  // namespace
+ 
++namespace {
++
++IPCMessageSender::MainThreadSenderFactory& GetMainThreadSenderFactory() {
++  static base::NoDestructor<IPCMessageSender::MainThreadSenderFactory> factory;
++  return *factory;
++}
++
++IPCMessageSender::WorkerThreadSenderFactory& GetWorkerThreadSenderFactory() {
++  static base::NoDestructor<IPCMessageSender::WorkerThreadSenderFactory> factory;
++  return *factory;
++}
++
++}  // namespace
++
+ IPCMessageSender::IPCMessageSender() = default;
+ 
+ IPCMessageSender::~IPCMessageSender() = default;
+ 
++// static
++void IPCMessageSender::SetMainThreadSenderFactoryForEmbedder(
++    MainThreadSenderFactory factory) {
++  GetMainThreadSenderFactory() = std::move(factory);
++}
++
++// static
++void IPCMessageSender::SetWorkerThreadSenderFactoryForEmbedder(
++    WorkerThreadSenderFactory factory) {
++  GetWorkerThreadSenderFactory() = std::move(factory);
++}
++
+ // static
+ std::unique_ptr<IPCMessageSender>
+ IPCMessageSender::CreateMainThreadIPCMessageSender() {
++  if (GetMainThreadSenderFactory()) {
++    return GetMainThreadSenderFactory().Run();
++  }
+   return std::make_unique<MainThreadIPCMessageSender>();
+ }
+ 
+@@ -642,6 +672,10 @@ IPCMessageSender::CreateWorkerThreadIPCMessageSender(
+     WorkerThreadDispatcher* dispatcher,
+     blink::WebServiceWorkerContextProxy* context_proxy,
+     int64_t service_worker_version_id) {
++  if (GetWorkerThreadSenderFactory()) {
++    return GetWorkerThreadSenderFactory().Run(dispatcher, context_proxy,
++                                              service_worker_version_id);
++  }
+   return std::make_unique<WorkerThreadIPCMessageSender>(
+       dispatcher, context_proxy, service_worker_version_id);
+ }
+diff --git a/extensions/renderer/ipc_message_sender.h b/extensions/renderer/ipc_message_sender.h
+index b38c247bf2c6..7b24ffc01b5e 100644
+--- a/extensions/renderer/ipc_message_sender.h
++++ b/extensions/renderer/ipc_message_sender.h
+@@ -9,6 +9,7 @@
+ #include <optional>
+ #include <string>
+ 
++#include "base/functional/callback.h"
+ #include "base/values.h"
+ #include "extensions/common/extension_id.h"
+ #include "extensions/common/mojom/frame.mojom-forward.h"
+@@ -127,6 +128,22 @@ class IPCMessageSender {
+       blink::WebServiceWorkerContextProxy* context_proxy,
+       int64_t service_worker_version_id);
+ 
++  // Embedder hooks to substitute the default IPCMessageSender
++  // implementations. When a factory is set, Create*IPCMessageSender() routes
++  // through it; otherwise the built-in implementations are used. Intended to
++  // be set once during embedder renderer initialization.
++  using MainThreadSenderFactory =
++      base::RepeatingCallback<std::unique_ptr<IPCMessageSender>()>;
++  using WorkerThreadSenderFactory =
++      base::RepeatingCallback<std::unique_ptr<IPCMessageSender>(
++          WorkerThreadDispatcher*,
++          blink::WebServiceWorkerContextProxy*,
++          int64_t)>;
++  static void SetMainThreadSenderFactoryForEmbedder(
++      MainThreadSenderFactory factory);
++  static void SetWorkerThreadSenderFactoryForEmbedder(
++      WorkerThreadSenderFactory factory);
++
+  protected:
+   IPCMessageSender();
+ };
+diff --git a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
+index 1401e99cb9e6..83cb32235f48 100644
+--- a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
++++ b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
+@@ -138,6 +138,49 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
+   out->is_global_privacy_control_setting_enabled =
+       data.is_global_privacy_control_setting_enabled();
+ 
++  if (!data.ReadArupaTimezone(&out->arupa_timezone))
++    return false;
++  if (!data.ReadArupaLocale(&out->arupa_locale))
++    return false;
++  if (!data.ReadArupaWebglVendor(&out->arupa_webgl_vendor))
++    return false;
++  if (!data.ReadArupaWebglRenderer(&out->arupa_webgl_renderer))
++    return false;
++  out->arupa_audio_seed = data.arupa_audio_seed();
++  out->arupa_hw_concurrency = data.arupa_hw_concurrency();
++  out->arupa_device_memory_gb = data.arupa_device_memory_gb();
++  out->arupa_geo_override = data.arupa_geo_override();
++  out->arupa_geo_lat = data.arupa_geo_lat();
++  out->arupa_geo_lon = data.arupa_geo_lon();
++  out->arupa_geo_accuracy = data.arupa_geo_accuracy();
++  if (!data.ReadArupaWebgpuVendor(&out->arupa_webgpu_vendor))
++    return false;
++  if (!data.ReadArupaWebgpuArchitecture(&out->arupa_webgpu_architecture))
++    return false;
++  out->arupa_device_ids_seed = data.arupa_device_ids_seed();
++  if (!data.ReadArupaFontsWhitelist(&out->arupa_fonts_whitelist))
++    return false;
++  out->arupa_battery_mock = data.arupa_battery_mock();
++  out->arupa_net_info_spoof = data.arupa_net_info_spoof();
++  out->arupa_screen_width = data.arupa_screen_width();
++  out->arupa_screen_height = data.arupa_screen_height();
++  out->arupa_screen_color_depth = data.arupa_screen_color_depth();
++  if (!data.ReadArupaUachPlatform(&out->arupa_uach_platform))
++    return false;
++  if (!data.ReadArupaUachPlatformVersion(&out->arupa_uach_platform_version))
++    return false;
++  if (!data.ReadArupaUachArch(&out->arupa_uach_arch))
++    return false;
++  if (!data.ReadArupaUachModel(&out->arupa_uach_model))
++    return false;
++  if (!data.ReadArupaUachBitness(&out->arupa_uach_bitness))
++    return false;
++  if (!data.ReadArupaWebcodecsWhitelist(&out->arupa_webcodecs_whitelist))
++    return false;
++  if (!data.ReadArupaCodecProfile(&out->arupa_codec_profile))
++    return false;
++  out->arupa_canvas_seed = data.arupa_canvas_seed();
++
+   return true;
+ }
+ 
+diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
+index 336c8061e425..71f89bb1d891 100644
+--- a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
++++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
+@@ -103,6 +103,37 @@ struct BLINK_COMMON_EXPORT RendererPreferences {
+   int autofill_shortcut_modifiers = 0;
+   std::u16string autofill_trigger_string;
+ 
++  // Arupa kernel: fingerprint spoofing preferences (set by the embedder,
++  // consumed by the Arupa renderer fork).
++  std::string arupa_timezone;
++  std::string arupa_locale;
++  std::string arupa_webgl_vendor;
++  std::string arupa_webgl_renderer;
++  uint64_t arupa_audio_seed{0};
++  uint32_t arupa_hw_concurrency{0};
++  double arupa_device_memory_gb{0};
++  bool arupa_geo_override{false};
++  double arupa_geo_lat{0};
++  double arupa_geo_lon{0};
++  double arupa_geo_accuracy{0};
++  std::string arupa_webgpu_vendor;
++  std::string arupa_webgpu_architecture;
++  uint64_t arupa_device_ids_seed{0};
++  std::string arupa_fonts_whitelist;
++  bool arupa_battery_mock{false};
++  bool arupa_net_info_spoof{false};
++  uint32_t arupa_screen_width{0};
++  uint32_t arupa_screen_height{0};
++  uint32_t arupa_screen_color_depth{0};
++  std::string arupa_uach_platform;
++  std::string arupa_uach_platform_version;
++  std::string arupa_uach_arch;
++  std::string arupa_uach_model;
++  std::string arupa_uach_bitness;
++  std::string arupa_webcodecs_whitelist;
++  std::string arupa_codec_profile;
++  uint64_t arupa_canvas_seed{0};
++
+   RendererPreferences();
+   RendererPreferences(const RendererPreferences& other);
+   RendererPreferences(RendererPreferences&& other);
+diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
+index d0279aa1ca30..43bfbf06445c 100644
+--- a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
++++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
+@@ -299,6 +299,146 @@ struct BLINK_COMMON_EXPORT
+     return data.is_global_privacy_control_setting_enabled;
+   }
+ 
++  static const std::string& arupa_timezone(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_timezone;
++  }
++
++  static const std::string& arupa_locale(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_locale;
++  }
++
++  static const std::string& arupa_webgl_vendor(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_webgl_vendor;
++  }
++
++  static const std::string& arupa_webgl_renderer(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_webgl_renderer;
++  }
++
++  static const uint64_t& arupa_audio_seed(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_audio_seed;
++  }
++
++  static const uint32_t& arupa_hw_concurrency(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_hw_concurrency;
++  }
++
++  static const double& arupa_device_memory_gb(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_device_memory_gb;
++  }
++
++  static const bool& arupa_geo_override(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_geo_override;
++  }
++
++  static const double& arupa_geo_lat(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_geo_lat;
++  }
++
++  static const double& arupa_geo_lon(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_geo_lon;
++  }
++
++  static const double& arupa_geo_accuracy(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_geo_accuracy;
++  }
++
++  static const std::string& arupa_webgpu_vendor(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_webgpu_vendor;
++  }
++
++  static const std::string& arupa_webgpu_architecture(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_webgpu_architecture;
++  }
++
++  static const uint64_t& arupa_device_ids_seed(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_device_ids_seed;
++  }
++
++  static const std::string& arupa_fonts_whitelist(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_fonts_whitelist;
++  }
++
++  static const bool& arupa_battery_mock(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_battery_mock;
++  }
++
++  static const bool& arupa_net_info_spoof(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_net_info_spoof;
++  }
++
++  static const uint32_t& arupa_screen_width(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_screen_width;
++  }
++
++  static const uint32_t& arupa_screen_height(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_screen_height;
++  }
++
++  static const uint32_t& arupa_screen_color_depth(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_screen_color_depth;
++  }
++
++  static const std::string& arupa_uach_platform(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_uach_platform;
++  }
++
++  static const std::string& arupa_uach_platform_version(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_uach_platform_version;
++  }
++
++  static const std::string& arupa_uach_arch(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_uach_arch;
++  }
++
++  static const std::string& arupa_uach_model(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_uach_model;
++  }
++
++  static const std::string& arupa_uach_bitness(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_uach_bitness;
++  }
++
++  static const std::string& arupa_webcodecs_whitelist(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_webcodecs_whitelist;
++  }
++
++  static const std::string& arupa_codec_profile(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_codec_profile;
++  }
++
++  static const uint64_t& arupa_canvas_seed(
++      const ::blink::RendererPreferences& data) {
++    return data.arupa_canvas_seed;
++  }
++
+   static bool Read(blink::mojom::RendererPreferencesDataView,
+                    ::blink::RendererPreferences* out);
+ };
+diff --git a/third_party/blink/public/mojom/renderer_preferences.mojom b/third_party/blink/public/mojom/renderer_preferences.mojom
+index 026d009b9d72..51d7fc215599 100644
+--- a/third_party/blink/public/mojom/renderer_preferences.mojom
++++ b/third_party/blink/public/mojom/renderer_preferences.mojom
+@@ -217,4 +217,35 @@ struct RendererPreferences {
+   // DevTools override). Do not check this directly, instead use
+   // `IsGlobalPrivacyControlFeature(AndSetting)Enabled` to gate features/headers.
+   bool is_global_privacy_control_setting_enabled = false;
++
++  // Arupa kernel: fingerprint spoofing preferences (set by the embedder,
++  // consumed by the Arupa renderer fork).
++  string arupa_timezone;
++  string arupa_locale;
++  string arupa_webgl_vendor;
++  string arupa_webgl_renderer;
++  uint64 arupa_audio_seed = 0;
++  uint32 arupa_hw_concurrency = 0;
++  double arupa_device_memory_gb = 0.0;
++  bool arupa_geo_override = false;
++  double arupa_geo_lat = 0.0;
++  double arupa_geo_lon = 0.0;
++  double arupa_geo_accuracy = 0.0;
++  string arupa_webgpu_vendor;
++  string arupa_webgpu_architecture;
++  uint64 arupa_device_ids_seed = 0;
++  string arupa_fonts_whitelist;
++  bool arupa_battery_mock = false;
++  bool arupa_net_info_spoof = false;
++  uint32 arupa_screen_width = 0;
++  uint32 arupa_screen_height = 0;
++  uint32 arupa_screen_color_depth = 0;
++  string arupa_uach_platform;
++  string arupa_uach_platform_version;
++  string arupa_uach_arch;
++  string arupa_uach_model;
++  string arupa_uach_bitness;
++  string arupa_webcodecs_whitelist;
++  string arupa_codec_profile;
++  uint64 arupa_canvas_seed = 0;
+ };
+diff --git a/third_party/blink/renderer/build/scripts/json5_generator.py b/third_party/blink/renderer/build/scripts/json5_generator.py
+index fa11cd094122..191bf1fed602 100644
+--- a/third_party/blink/renderer/build/scripts/json5_generator.py
++++ b/third_party/blink/renderer/build/scripts/json5_generator.py
+@@ -311,7 +311,7 @@ class Writer(object):
+ 
+         # Only write the file if the contents have changed. This allows ninja to
+         # skip rebuilding targets which depend on the output.
+-        with open(path, "a+", newline='') as output_file:
++        with open(path, "a+", newline='', encoding='utf-8') as output_file:
+             output_file.seek(0)
+             if output_file.read() != contents:
+                 output_file.truncate(0)
+diff --git a/ui/display/mac/screen_mac_headless.h b/ui/display/mac/screen_mac_headless.h
+index 651c4a000228..01031917e247 100644
+--- a/ui/display/mac/screen_mac_headless.h
++++ b/ui/display/mac/screen_mac_headless.h
+@@ -13,7 +13,7 @@
+ 
+ namespace display {
+ 
+-class ScreenMacHeadless : public ScreenBase,
++class DISPLAY_EXPORT ScreenMacHeadless : public ScreenBase,
+                           public HeadlessScreenManager::Delegate {
+  public:
+   ScreenMacHeadless();

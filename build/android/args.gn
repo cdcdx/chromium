@@ -1,0 +1,56 @@
+# 系统公共配置；target_cpu 和 is_component_build 由构建入口按参数替换。
+target_os = "android"
+target_cpu = "arm64"
+# android只有静态构建
+is_component_build = false
+
+is_debug = false
+symbol_level = 0
+blink_symbol_level = 0
+
+ffmpeg_branding = "Chrome"
+proprietary_codecs = true
+media_use_ffmpeg = true
+
+enable_platform_hevc = true
+enable_hevc_parser_and_hw_decoder = true
+platform_has_optional_hevc_decode_support = true
+rtc_use_h264 = true
+rtc_use_h265 = true
+media_use_openh264 = true
+enable_mse_mpeg2ts_stream_parser = true
+enable_widevine = true
+
+# android专有
+enable_platform_dolby_vision = true
+enable_platform_ac3_eac3_audio = true
+enable_platform_dts_audio = true
+# android专有
+android_static_analysis = "off"
+is_official_build = true
+is_chrome_branded = false
+treat_warnings_as_errors = false
+enable_arupa_patches = true
+enable_extensions = false
+enable_rlz = false
+enable_hangout_services_extension = false
+enable_reporting = false
+enable_service_discovery = false
+safe_browsing_mode = 2
+build_with_internal_optimization_guide = false
+enable_cast_receiver = false
+chrome_pgo_phase = 0
+v8_enable_builtins_optimization = false
+clang_use_default_sample_profile = false
+use_clang_modules = false
+enable_remoting = false
+enable_background_mode = false
+use_kerberos = false
+optimize_webui = true
+disable_fieldtrial_testing_config = true
+clang_use_chrome_plugins = false
+chrome_public_manifest_package = "co.arupa.browser"
+arupa_enable_extensions = true
+
+# 由构建入口按架构替换：arm64=true，x64=false；仅支持静态构建。
+include_both_v8_snapshots = true

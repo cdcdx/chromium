@@ -1,0 +1,195 @@
+"""Browser adapter tests with local project/SDK fixtures; no external builds."""
+import contextlib
+import io
+import json
+import os
+from pathlib import Path
+import sys
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import patch
+import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+import build
+import fetch
+import nomad
+
+VERSION = '1.2.3.4'
+
+
+class NomadTest(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix='nomad test ')
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        for module, name, value in ((build, 'ROOT', self.root), (fetch, 'DRY_RUN', False),
+                                    (fetch, 'WORKSPACE_ROOT', self.root)):
+            setting = patch.object(module, name, value)
+            setting.start()
+            self.addCleanup(setting.stop)
+        self.args = build.build_parser().parse_args(['nomadbrowser.pc', '--ver', VERSION, '--no-web'])
+        self.args.dist_dir = self.root / 'dist'
+
+    def quiet(self, fn, *args):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return fn(*args)
+
+    def pc_fixture(self, target_os):
+        folder = {'win': 'NomadBrowser.Avalonia', 'linux': 'NomadBrowser.Avalonia.Linux', 'mac': 'NomadBrowser.Avalonia.Mac'}[target_os]
+        repo = self.root / 'nomadbrowser.pc'
+        for name in (folder, 'NomadBrowser.Updater', 'NomadBrowser.Windows.Updater'):
+            project = repo / name / (name + '.csproj')
+            project.parent.mkdir(parents=True, exist_ok=True)
+            project.touch()
+        delivery = self.root / 'kernel-delivery'
+        (delivery / 'kernel').mkdir(exist_ok=True, parents=True)
+        library = {'win': 'arupa_kernel.dll', 'mac': 'libarupa_kernel.dylib', 'linux': 'libarupa_kernel.so'}[target_os]
+        (delivery / 'kernel' / library).touch()
+        (delivery / 'kernel/.arupa-version').write_text(VERSION)
+        self.args.delivery = delivery
+
+    def android_fixture(self):
+        repo = self.root / 'nomadbrowser.android'
+        repo.mkdir()
+        (repo / 'gradlew').touch()
+        for arch, abi in (('arm64', 'arm64-v8a'), ('x64', 'x86_64')):
+            aar = repo / f'app/libs/kernel/{arch}/arupa-kernel.aar'
+            aar.parent.mkdir(parents=True)
+            with zipfile.ZipFile(aar, 'w') as archive:
+                archive.writestr(f'jni/{abi}/libarupakernel.so', b'fixture')
+        return repo
+
+    def test_cli_routes_browser_matrix_without_gn(self):
+        for target_os, arches in build.MATRIX.items():
+            project = 'nomadbrowser.android' if target_os == 'android' else 'nomadbrowser.pc'
+            with patch.object(nomad, 'run') as run:
+                self.quiet(build.main, [project, '--os', target_os, '--arch', 'all', '--ver', VERSION, '--dry-run'])
+                self.assertEqual(run.call_args.args[4], arches)
+                self.assertEqual(run.call_args.args[6], {'build', 'package'})
+        with patch.object(nomad, 'run') as run:
+            self.quiet(build.main, ['nomadbrowser.pc', '--os', 'macos', '--ver', VERSION, '--arch', 'x64', '--dry-run'])
+            self.assertEqual(run.call_args.args[3], 'mac')
+
+    def test_pc_publish_uses_requested_rid_and_platform(self):
+        fetch.DRY_RUN = True
+        for target_os in ('win', 'mac', 'linux'):
+            self.pc_fixture(target_os)
+            for arch in build.MATRIX[target_os]:
+                with patch.object(fetch, 'run') as run:
+                    self.quiet(nomad.pc_build, self.root, self.args, target_os, arch, VERSION, self.root / 'out/result')
+                commands = [list(map(str, call.args[0])) for call in run.call_args_list]
+                main = next(cmd for cmd in commands if 'publish' in cmd)
+                self.assertIn(f'{"osx" if target_os == "mac" else target_os}-{arch}', main)
+                self.assertIn(f'-p:Platform={arch}', main)
+
+    def test_android_both_abis_build_and_package_separately(self):
+        repo = self.android_fixture()
+        def fake_gradle(command, cwd):
+            arch = next(value.split('=')[1] for value in command if str(value).startswith('-PkernelAbi='))
+            abi = {'arm64': 'arm64-v8a', 'x64': 'x86_64'}[arch]
+            apk = repo / 'app/build/outputs/apk/release/app.apk'
+            apk.parent.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(apk, 'w') as archive:
+                archive.writestr(f'lib/{abi}/libarupakernel.so', b'fixture')
+        with patch.object(fetch, 'run', side_effect=fake_gradle), patch.object(nomad, 'prepare_android_sdk'):
+            self.quiet(nomad.run, self.root, self.args, 'nomadbrowser.android', 'android',
+                       ('arm64', 'x64'), VERSION, {'build', 'package'})
+        deliveries = sorted(self.args.dist_dir.iterdir())
+        self.assertEqual(len(deliveries), 2)
+        for path in deliveries:
+            manifest = json.loads((path / 'build-manifest.json').read_text())
+            nomad.validate_apk(path / 'app.apk', manifest['identity']['arch'])
+            self.assertTrue((path / 'SHA256SUMS.txt').is_file())
+
+    def test_wrong_apk_and_changed_output_cannot_be_packaged(self):
+        apk = self.root / 'bad.apk'
+        with zipfile.ZipFile(apk, 'w') as archive:
+            archive.writestr('lib/x86_64/native.so', b'fixture')
+        with self.assertRaises(RuntimeError):
+            nomad.validate_apk(apk, 'arm64')
+        identity = {'project': 'test'}
+        output = self.root / 'output'
+        output.mkdir()
+        (output / 'file').write_text('original')
+        nomad.seal(output, identity)
+        (output / 'file').write_text('modified')
+        with self.assertRaises(RuntimeError):
+            nomad.package(self.args, output, identity)
+        self.assertFalse(self.args.dist_dir.exists())
+
+    def test_dotnet_requires_sdk_and_checks_project_global_json(self):
+        self.args.dotnet = '/custom/dotnet'
+        repo = self.root / 'nomadbrowser.pc'
+        with patch.object(nomad.shutil, 'which', return_value='/custom/dotnet'), patch.object(nomad.subprocess, 'run') as run:
+            run.return_value = subprocess.CompletedProcess([], 0, '10.0.100\n', '')
+            self.assertEqual(self.quiet(nomad.prepare_dotnet, self.args, repo), '/custom/dotnet')
+            self.assertEqual(run.call_args.kwargs['cwd'], repo)
+            run.return_value = subprocess.CompletedProcess([], 1, '', 'SDK missing')
+            with self.assertRaisesRegex(RuntimeError, 'Runtime'):
+                nomad.prepare_dotnet(self.args, repo)
+
+    def test_android_sdk_validation_environment_and_conflicts(self):
+        repo = self.root / 'android'
+        repo.mkdir()
+        sdk = self.root / 'Android SDK'
+        self.args.android_sdk = sdk
+        with patch.dict(os.environ, {}, clear=True), patch.object(fetch, 'load_config', return_value={}):
+            with self.assertRaisesRegex(RuntimeError, 'SDK 不完整'):
+                nomad.prepare_android_sdk(self.args, repo)
+            for name in ('platforms/android-36/android.jar', 'build-tools/36.0.0/aapt2'):
+                path = sdk / name
+                path.parent.mkdir(parents=True)
+                path.touch()
+            with patch.object(nomad.shutil, 'which', return_value=None):
+                with self.assertRaisesRegex(RuntimeError, 'JDK'):
+                    nomad.prepare_android_sdk(self.args, repo)
+            with patch.object(nomad.shutil, 'which', return_value='/java'), patch.object(nomad.subprocess, 'run') as run:
+                run.return_value = subprocess.CompletedProcess([], 0, '', 'java version')
+                self.quiet(nomad.prepare_android_sdk, self.args, repo)
+                self.assertEqual(os.environ['ANDROID_HOME'], str(sdk.resolve()))
+                self.assertEqual(os.environ['ANDROID_SDK_ROOT'], str(sdk.resolve()))
+            local = repo / 'local.properties'
+            local.write_text('sdk.dir=/another/sdk\n')
+            with self.assertRaisesRegex(RuntimeError, '不一致'):
+                nomad.prepare_android_sdk(self.args, repo)
+            self.assertEqual(local.read_text(), 'sdk.dir=/another/sdk\n')
+
+    def test_toolchain_dry_run_never_executes(self):
+        fetch.DRY_RUN = True
+        with patch.object(nomad.subprocess, 'run', side_effect=AssertionError('executed')):
+            self.quiet(nomad.prepare_dotnet, self.args, self.root)
+            self.quiet(nomad.prepare_android_sdk, self.args, self.root)
+
+    def test_failed_rebuild_invalidates_old_manifest(self):
+        output = self.root / f'out/nomadbrowser.android-android-arm64-{VERSION}-release'
+        output.mkdir(parents=True)
+        (output / 'build-manifest.json').write_text('{}')
+        with patch.object(nomad, 'android_build', side_effect=RuntimeError('build failed')):
+            with self.assertRaises(RuntimeError):
+                nomad.run(self.root, self.args, 'nomadbrowser.android', 'android', ('arm64',), VERSION, {'build', 'package'})
+        self.assertFalse((output / 'build-manifest.json').exists())
+        self.assertFalse(self.args.dist_dir.exists())
+
+    def test_zip_preserves_symlinks_and_duplicate_delivery_is_rejected(self):
+        output = self.root / 'browser-output'
+        output.mkdir()
+        (output / 'binary').write_text('fixture')
+        if os.name != 'nt':
+            (output / 'link').symlink_to('binary')
+        identity = {'arch': 'arm64'}
+        nomad.seal(output, identity)
+        self.args.zip = True
+        self.args.num = 1
+        self.quiet(nomad.package, self.args, output, identity)
+        with zipfile.ZipFile(self.args.dist_dir / 'browser-output-1.zip') as archive:
+            if os.name != 'nt':
+                info = archive.getinfo('browser-output-1/link')
+                self.assertEqual(info.external_attr >> 16 & 0o170000, 0o120000)
+        with self.assertRaises(RuntimeError):
+            nomad.package(self.args, output, identity)
+
+
+if __name__ == '__main__':
+    unittest.main()
