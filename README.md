@@ -13,7 +13,7 @@
 | 内核、PC、Android 源码和版本混用 | 四个独立仓库分别配置 URL、tag/branch/commit |
 | Linux / Windows 缺少 ARM64 配置，桌面打包未接受 x86 | 每个系统一份 GN 配置，由 arch/link 生成参数；Windows / Linux 打包接受 x86 |
 | Android 指向旧 `chrome/browser/arupa`，桌面相对软链接错误 | 使用绝对路径挂载两个独立模块，并验证已有挂载目标 |
-| 构建图修改上游 BUILD.gn，切换 Chromium 版本容易冲突 | 独立生成 `src/arupa_build/<project>/BUILD.gn`，通过 GN root target/pattern 接入 |
+| 构建图修改上游 BUILD.gn，切换 Chromium 版本容易冲突 | 独立生成 `src/arupa_build/<project>/BUILD.gn`，通过 GN root target 接入 |
 | 代理修改 Git 全局设置、dry-run 仍可能写文件 | 代理仅影响子进程，dry-run 不创建文件、不执行命令 |
 | 部分架构不匹配只告警，失败后保留半成品 | 架构不匹配失败；打包失败清理本次不完整目录 |
 
@@ -179,7 +179,9 @@ Android 的 `include_both_v8_snapshots` 由构建入口按架构强制设置，�
 动作：`gen` 生成构建图；`build` 编译（没有 build.ninja 时自动 gen）；`package` 打包已有产物；
 内核的 `all` 按 gen → build → package 执行，也是省略动作时的默认行为；浏览器的 `all` 执行 build → package，不支持 gen。
 多个动作按该依赖顺序执行并去重。构建使用树内 GN/Ninja；桌面 `dynamic` 支持 gen/build，交付打包仅支持 static。
-GN 接入方式参见 [GN root target / root pattern 文档](https://gn.googlesource.com/gn/+/HEAD/docs/reference.md#dotfile)。
+GN 接入方式参见 [GN root target 文档](https://gn.googlesource.com/gn/+/HEAD/docs/reference.md#dotfile)；
+只用 `--root-target` 限制构建图，不再传同名的 `--root-pattern`（两者生成的 `build.ninja` 相同，
+但后者会在 Android 的 java build config 目标上误报生成输入错误）。
 
 ```bash
 # macOS

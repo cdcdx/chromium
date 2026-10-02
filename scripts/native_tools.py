@@ -119,17 +119,22 @@ def kernel_check(target_os, arches):
             paths = [sdk / f'platforms/android-{values["public_android_sdk_platform_version"]}/android.jar',
                      sdk / f'build-tools/{values["public_android_sdk_build_tools_version"]}/aapt2',
                      F.CHROMIUM_SRC / 'third_party/jdk/current/bin/java',
-                     F.CHROMIUM_SRC / 'third_party/jdk/current/bin/javac',
-                     ndk / 'source.properties']
+                     F.CHROMIUM_SRC / 'third_party/jdk/current/bin/javac']
             require_files(paths, '请运行 fetch toolchains --os android，同步 NDK、SDK 和 JDK')
+            # DEPS 固定的 NDK 是裁剪过的 CIPD 包（只有 simpleperf 和 toolchains，没有
+            # source.properties），所以用它自带的 sysroot 判断整包是否下载完整。
             if not list((ndk / 'toolchains/llvm/prebuilt').glob('linux-*/sysroot/usr/include/stdio.h')):
-                F.err('Android NDK sysroot 缺失；请运行 fetch toolchains --os android')
+                F.err('Android NDK sysroot 缺失（NDK 未下载完整）；请运行 fetch toolchains --os android')
     F.log(f'{target_os} 内核工具链检查通过')
 
 
 def setup_host(target_os, arches, installer=None):
     required_host = 'linux' if target_os == 'android' else target_os
-    if not F.DRY_RUN and F.HOST_OS != required_host:
+    if F.DRY_RUN:
+        # 预览模式不接触宿主，也不要求当前机器就是目标宿主。
+        F.log(f'(dry-run) 安装 {target_os} 宿主依赖（{required_host} 宿主，架构 {", ".join(arches)}）')
+        return
+    if F.HOST_OS != required_host:
         F.err(f'{target_os} 宿主依赖只能在 {required_host} 安装')
     if required_host == 'linux':
         # Upstream chooses distro-specific packages and owns sudo/interactive prompts.

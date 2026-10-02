@@ -108,10 +108,10 @@ class NativeToolsTest(unittest.TestCase):
         with patch('subprocess.run', return_value=subprocess.CompletedProcess([], 0, '', '')):
             with self.assertRaisesRegex(RuntimeError, 'android-37.0'):
                 N.kernel_check('android', ('arm64', 'x64'))
+            # DEPS 固定的 NDK 是裁剪包，没有 source.properties；sysroot 才是下载完成的标志。
             for name in ('third_party/android_sdk/public/platforms/android-37.0/android.jar',
                          'third_party/android_sdk/public/build-tools/37.0.0/aapt2',
-                         'third_party/jdk/current/bin/java', 'third_party/jdk/current/bin/javac',
-                         'third_party/android_toolchain/ndk/source.properties'):
+                         'third_party/jdk/current/bin/java', 'third_party/jdk/current/bin/javac'):
                 self.touch(src / name)
             with self.assertRaisesRegex(RuntimeError, 'NDK sysroot'):
                 N.kernel_check('android', ('arm64',))
