@@ -136,6 +136,11 @@ def pc_build(root, args, target_os, arch, version, output):
         if not (web / 'package.json').is_file():
             F.err(f'缺少 WebUI 项目: {web}；已有资源时可显式 --no-web')
         npm = 'npm.cmd' if target_os == 'win' else 'npm'
+        if not F.DRY_RUN:
+            if not shutil.which('node') or not shutil.which(npm):
+                F.err('WebUI 需要完整 Node.js/npm；请安装 package.json engines 要求的版本，已有资源可用 --no-web')
+            F.run(['node', '--version'], web)
+            F.run([npm, '--version'], web)
         if not (web / 'node_modules').is_dir():
             F.run([npm, 'ci' if (web / 'package-lock.json').exists() else 'install'], web)
         F.run([npm, 'run', 'build'], web)

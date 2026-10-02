@@ -235,13 +235,16 @@ def chromium_version():
 
 def build_parser():
     p = argparse.ArgumentParser(description="更新 depot_tools 及工具链；拉取指定版本 Chromium、DEPS 和四个业务仓库")
-    p.add_argument("targets", nargs="*", help="all（默认）/ depot_tools / chromium / deps / hooks / android / update / toolchains / metal / dotnet / android-sdk / jdk / " + " / ".join(PROJECTS))
+    p.add_argument("targets", nargs="*", help="all（默认）/ depot_tools / chromium / deps / hooks / android / update / toolchains / host-deps / sysroots / metal / dotnet / android-sdk / jdk / " + " / ".join(PROJECTS))
     for name, (prefix, _) in PROJECTS.items():
         option = prefix.replace("_", "-")
         p.add_argument(f"--{option}-src", dest=prefix + "_src", default=None, help=f"{name} Git 地址")
         p.add_argument(f"--{option}-ver", dest=prefix + "_ver", default=None, help=f"{name} tag / branch / commit")
     p.add_argument("--ver", default="", help="Chromium X.Y.Z.W；默认 .env chromium_ver")
     p.add_argument("--os", choices=("win", "mac", "linux", "android"), default=HOST_OS)
+    p.add_argument("--arch", choices=("x86", "x64", "arm64", "all"), default="all", help="工具链准备的目标架构，默认 all")
+    p.add_argument("--install-host-deps", action="store_true", help="显式安装宿主依赖；Linux 可能需要 sudo，Windows 需官方 VS 安装器")
+    p.add_argument("--vs-installer", type=Path, help="Windows 官方 Visual Studio bootstrapper 路径（用于 host-deps）")
     p.add_argument("--jobs", type=int, default=8)
     p.add_argument("--proxy", default=None)
     p.add_argument("--nohooks", "--no-hooks", action="store_true")
@@ -262,7 +265,7 @@ def main(argv=None):
     cfg = load_config()
     requested = args.targets or ["all"]
     import toolchains
-    valid = {"all", "update", "depot_tools", "chromium", "deps", "hooks", "android", "toolchains", *toolchains.TARGETS, *PROJECTS}
+    valid = {"all", "update", "depot_tools", "chromium", "deps", "hooks", "android", "toolchains", "host-deps", "sysroots", *toolchains.TARGETS, *PROJECTS}
     if set(requested) - valid:
         parser.error("未知目标: " + ", ".join(sorted(set(requested) - valid)))
     targets = set()
@@ -279,6 +282,19 @@ def main(argv=None):
                 targets.add("metal")
         else:
             targets.add(name)
+    if args.install_host_deps:
+        targets.add("host-deps")
+    if args.vs_installer and (args.os != "win" or "host-deps" not in targets):
+        parser.error("--vs-installer 仅用于 --os win 的 host-deps / --install-host-deps")
+    if targets & {"host-deps", "sysroots"} or "toolchains" in requested:
+        required_host = "linux" if args.os == "android" else args.os
+        if not DRY_RUN and HOST_OS != required_host:
+            parser.error(f"{args.os} 工具链准备需要 {required_host} 宿主")
+        if "sysroots" in targets and args.os != "linux":
+            parser.error("sysroots 仅适用于 --os linux")
+        if args.os in ("mac", "android") and args.arch == "x86":
+            parser.error(f"{args.os} 不支持 x86")
+    arches = (("x64", "arm64") if args.os in ("mac", "android") else ("x86", "x64", "arm64")) if args.arch == "all" else (args.arch,)
     version = args.ver or cget(cfg, "chromium_ver", "CHROMIUM_VERSION")
     if targets & {"chromium", "deps"} and not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", version):
         parser.error("请用 --ver 或 .env chromium_ver 指定 Chromium 四段版本号")
@@ -304,6 +320,9 @@ def main(argv=None):
     if "chromium" in targets:
         url = fetch_chromium(cfg, version, args.shallow)
         write_gclient(url, android, args.os)
+    import native_tools
+    if "host-deps" in targets:
+        native_tools.setup_host(args.os, arches, args.vs_installer)
     if "deps" in targets:
         sync_deps(cfg, version, android, args.shallow, args.nohooks, args.jobs, args.os)
     if "hooks" in targets and not targets & {"android-sdk", "jdk"}:
@@ -314,6 +333,12 @@ def main(argv=None):
     for name in ("metal", "dotnet", "jdk", "android-sdk"):
         if name in targets:
             toolchains.setup(name, cfg)
+    if "sysroots" in targets or ("toolchains" in requested and args.os == "linux"):
+        native_tools.setup_sysroots(arches)
+    if "toolchains" in requested and not args.nohooks:
+        native_tools.kernel_check(args.os, arches)
+    elif "toolchains" in requested:
+        log("已跳过 hooks，未验证完整工具链；编译前请重新运行 fetch toolchains（不带 --nohooks）")
     if args.save:
         path = WORKSPACE_ROOT / ".env"
         text = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -328,7 +353,7 @@ def main(argv=None):
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+    except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:

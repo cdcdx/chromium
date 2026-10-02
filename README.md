@@ -93,7 +93,39 @@ Android 可用 `fetch toolchains --os android`；单独 `android-sdk` / `jdk` �
 不配置 `android_home` / `java_home` 时，build 自动识别 `src/third_party/android_sdk/public` 和 `src/third_party/jdk/current`。
 Chromium 固定的 JDK 不保证满足浏览器 Gradle 的主版本要求；如项目要求另一版本，需配置对应完整 JDK 的 `java_home`。
 额外 SDK 包通过 `.env android_sdk_packages` 指定；sdkmanager 保留许可证交互，不自动同意许可证。
-完整 Xcode、Visual Studio/Windows SDK、Linux 系统开发依赖和 Node.js/npm 仍需在宿主安装。
+完整 Xcode 和 Node.js/npm 仍需在宿主安装；Linux 开发包和 Windows C++ 组件可通过以下显式入口准备。
+
+| 目标 | 自动下载/复用 | 编译前检查 |
+|---|---|---|
+| Windows | Chromium DEPS/hooks 的 GN、Ninja、Clang/LLD；指定官方 VS 安装器可安装 C++ 组件 | Chromium 自带 VS/SDK 检测；各目标架构的 MSVC、ATL/MFC、UCRT/UM 库及 x64 Debugging Tools |
+| macOS | Chromium DEPS/hooks；Xcode Metal 组件 | 完整 Xcode、macOS SDK、可执行的 Metal 编译器、Clang/LLD |
+| Linux | Chromium DEPS/hooks；每个目标架构的 sysroot | 上游开发包 quick-check、Clang/LLD、所选架构的 sysroot |
+| Android（Linux 宿主） | Chromium DEPS 固定的 NDK、SDK、JDK | Linux 开发包（含 32 位宿主库）、SDK 精确版本、NDK sysroot、Java/javac |
+
+```bash
+# Linux：安装发行版开发依赖，再同步工具与全部目标架构的 sysroot。
+bash fetch.sh toolchains --os linux --arch all --install-host-deps
+# Android：安装 Linux 宿主依赖，再同步 NDK/SDK/JDK。
+bash fetch.sh toolchains --os android --install-host-deps
+# 也可单独安装宿主依赖或补一个架构的 sysroot。
+bash fetch.sh host-deps --os linux --arch x86
+bash fetch.sh sysroots --os linux --arch arm64
+```
+
+```powershell
+# 使用符合当前 Chromium 要求的微软官方 VS bootstrapper，保留安装界面。
+.\fetch.ps1 host-deps --os win --arch all --vs-installer C:\Downloads\vs_Community.exe
+.\fetch.ps1 toolchains --os win --arch all
+```
+
+`--arch` 在工具链准备中默认 all。常规 `fetch toolchains` 不隐式安装系统包；
+仅 `host-deps` 或 `--install-host-deps` 执行宿主安装。Linux 调用当前源码的
+`build/install-build-deps.py`，由其处理发行版包清单、sudo 和交互；不会强行启用不受支持的发行版。
+Windows 安装器使用 NativeDesktop、ATL/MFC，并按需添加 ARM64 工具和 MFC；SDK 和 Debugging Tools
+仍需在安装界面按 `src/docs/windows_build_instructions.md` 选择，安装后检查缺项，不自动接受许可或重启。
+VS/SDK 版本解析使用当前 Chromium 的 `build/vs_toolchain.py`，不在外层脚本写死版本。
+`--nohooks` 会跳过完整工具链验证，不能视为编译环境已就绪。
+仅 package 不执行内核工具链检查；PC WebUI 构建会检查 Node.js/npm，`--no-web` 跳过此项。
 
 `.NET` 优先使用 `dotnet_version`，其次读取浏览器 `global.json`，均没有时使用 `dotnet_channel`（默认 10.0）。
 安装后 build 自动发现 `.tools/dotnet`；显式 `--dotnet` / `dotnet_path` 仍优先。

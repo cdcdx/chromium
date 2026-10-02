@@ -283,7 +283,7 @@ class WorkspaceTest(unittest.TestCase):
             tool.parent.mkdir(parents=True, exist_ok=True)
             tool.touch()
         arguments = ['desktop', '--os', 'mac', '--arch', 'arm64']
-        with patch.object(fetch, 'HOST_OS', 'mac'), patch.object(build, 'prepare_project'), patch.object(build, 'prepare_mac_toolchain'):
+        with patch.object(fetch, 'HOST_OS', 'mac'), patch.object(build, 'prepare_project'), patch.object(build, 'prepare_mac_toolchain'), patch.object(build.native_tools, 'kernel_check'):
             with patch.object(fetch, 'run', side_effect=RuntimeError('GN failed')):
                 with self.assertRaisesRegex(RuntimeError, 'GN failed'):
                     self.quiet(build.main, [*arguments[:1], 'gen', *arguments[1:]])
@@ -382,7 +382,7 @@ class WorkspaceTest(unittest.TestCase):
             path = self.src / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch()
-        with patch.object(fetch, 'HOST_OS', 'linux'), patch.object(build, 'prepare_project'), patch.object(fetch, 'run'):
+        with patch.object(fetch, 'HOST_OS', 'linux'), patch.object(build, 'prepare_project'), patch.object(fetch, 'run'), patch.object(build.native_tools, 'kernel_check'):
             self.quiet(build.main, ['android', 'gen', '--arch', 'all',
                                   '--args', str(self.root / 'build/android/args.gn')])
         for cpu, value in (('arm64', 'true'), ('x64', 'false')):

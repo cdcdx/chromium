@@ -15,6 +15,7 @@ import sys
 import tempfile
 
 import fetch as F
+import native_tools
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
@@ -275,6 +276,7 @@ def main(argv=None):
                     F.err(f"缺少工具 {tool}；请先运行 fetch（含 hooks）")
         config_path = args_template(target_os, args.args)
         templates = {cpu: render_args(config_path, target_os, cpu, args.link) for cpu in arches}
+        native_tools.kernel_check(target_os, arches)
         F.log(f"GN 配置: {config_path}（arch={arch}, link={args.link}）")
         prepare_project(project)
         for cpu in arches:
