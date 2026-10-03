@@ -111,3 +111,56 @@ class RepositoriesTest(unittest.TestCase):
         empty.mkdir()
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(R.show(empty, ['branch']), 0)
+
+    def test_pull_push_current_upstream_only_with_local_remote(self):
+        repo = self.init('project')
+        remote = self.root / 'fixtures/origin.git'
+        remote.mkdir(parents=True)
+        self.git(remote, 'init', '--bare')
+        self.git(repo, 'remote', 'add', 'origin', str(remote))
+        self.git(repo, 'push', '-u', 'origin', 'HEAD:refs/heads/shared')
+        seed = self.root / 'fixtures/seed'
+        self.git(remote.parent, 'clone', '-b', 'shared', str(remote), str(seed))
+        self.git(seed, 'config', 'user.name', 'Test')
+        self.git(seed, 'config', 'user.email', 'test@example.invalid')
+        (seed / 'file').write_text('remote update')
+        self.git(seed, '-c', 'commit.gpgsign=false', 'commit', '-am', 'remote update')
+        self.git(seed, 'push')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(R.sync(self.root, 'pull'), 0)
+        self.assertEqual((repo / 'file').read_text(), 'remote update')
+        (repo / 'file').write_text('local update')
+        self.git(repo, '-c', 'commit.gpgsign=false', 'commit', '-am', 'local update')
+        self.git(repo, 'branch', 'other')
+        self.git(repo, 'config', 'push.default', 'matching')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(R.sync(self.root, 'push'), 0)
+        self.assertEqual(self.git(remote, 'rev-parse', 'shared'), self.git(repo, 'rev-parse', 'HEAD'))
+        self.assertEqual(self.git(remote, 'for-each-ref', '--format=%(refname)', 'refs/heads'), 'refs/heads/shared')
+        self.assertEqual(self.git(repo, 'branch', '--show-current'), 'main')
+        (repo / 'file').write_text('uncommitted')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(R.sync(self.root, 'pull'), 1)
+        self.assertEqual((repo / 'file').read_text(), 'uncommitted')
+
+    def test_sync_errors_continue_and_dry_run_does_not_execute(self):
+        detached = self.init('a-detached')
+        self.git(detached, 'checkout', '--detach')
+        self.init('z-no-upstream')
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(R.sync(self.root, 'push'), 1)
+        self.assertIn('z-no-upstream', output.getvalue())
+        self.assertIn('错误 2 个', output.getvalue())
+        with patch.object(R, 'git', side_effect=AssertionError('executed')), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(R.sync(self.root, 'push', True), 0)
+
+    def test_sync_cli_without_fetch_config(self):
+        with patch.object(Path, 'cwd', return_value=self.root), \
+             patch.object(fetch, 'load_config', side_effect=AssertionError('config')), \
+             patch.object(R, 'sync', return_value=0) as sync:
+            self.assertEqual(fetch.main(['pull', '--dry-run']), 0)
+            sync.assert_called_once_with(self.root, 'pull', True)
+        for args in (['pull', 'push'], ['push', 'log'], ['pull', '--save']):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                fetch.main(args)

@@ -279,7 +279,7 @@ def chromium_version():
 
 def build_parser():
     p = argparse.ArgumentParser(description="更新 depot_tools 及工具链；拉取指定版本 Chromium、DEPS 和四个业务仓库")
-    p.add_argument("targets", nargs="*", help="log / branch（查看当前一级子目录中仓库的最新提交/本地分支）；all（默认）/ depot_tools / chromium / deps / hooks / android / update / toolchains / host-deps / sysroots / metal / dotnet / android-sdk / jdk / " + " / ".join(PROJECTS))
+    p.add_argument("targets", nargs="*", help="pull / push（同步当前一级子目录仓库的当前分支 upstream）；log / branch（查看最新提交/本地分支）；all（默认）/ depot_tools / chromium / deps / hooks / android / update / toolchains / host-deps / sysroots / metal / dotnet / android-sdk / jdk / " + " / ".join(PROJECTS))
     for name, (prefix, _) in PROJECTS.items():
         option = prefix.replace("_", "-")
         p.add_argument(f"--{option}-src", dest=prefix + "_src", default=None, help=f"{name} Git 地址")
@@ -307,6 +307,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     DRY_RUN = args.dry_run
     requested = args.targets or ["all"]
+    if set(requested) & {"pull", "push"}:
+        if len(requested) != 1 or args.save or args.install_host_deps or args.vs_installer:
+            parser.error("pull / push 必须单独执行，不能与其他动作混用")
+        import repositories
+        return repositories.sync(Path.cwd(), requested[0], args.dry_run)
     if set(requested) & {"log", "branch"}:
         if set(requested) - {"log", "branch"} or args.save or args.install_host_deps or args.vs_installer:
             parser.error("log / branch 是只读命令，不能与拉取、保存或安装动作混用")
