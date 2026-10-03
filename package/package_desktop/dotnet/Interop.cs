@@ -13,6 +13,33 @@ namespace Arupa
         public const string Dll = "arupa_kernel";
         public const int ABI_MAJOR = 1;
 
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct ViewportV1
+        {
+            public UIntPtr size;
+            public int x, y, width, height;
+            public double device_scale_factor;
+            public int max_frame_rate;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct KeyEventV2
+        {
+            public UIntPtr size;
+            public int type, windows_key_code, native_key_code, modifiers;
+            [MarshalAs(UnmanagedType.LPUTF8Str)] public string? dom_code;
+            [MarshalAs(UnmanagedType.LPUTF8Str)] public string? dom_key;
+            [MarshalAs(UnmanagedType.LPUTF8Str)] public string? text;
+        }
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_kernel_get_state();
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern IntPtr arupa_kernel_get_capabilities_json();
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_webview_set_viewport(IntPtr view, in ViewportV1 viewport);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_webview_send_key_v2(IntPtr view, in KeyEventV2 key);
+
+
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int arupa_kernel_abi_minor();
 

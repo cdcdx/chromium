@@ -15,6 +15,7 @@ import tempfile
 
 import fetch as F
 import native_tools
+from linux_shared_library import prepare_v8_tls
 from concurrency import automatic_jobs
 from apple_tools import prepare_mac_toolchain
 from platforms import MATRIX, normalize_os, architectures, host_for
@@ -57,7 +58,7 @@ def build_targets(project, target_os):
                "//third_party/hyphenation-patterns:bundle_hyphen_data"]
     if target_os in ("win", "mac", "linux"):
         targets.append(base + ":render")
-    if target_os == "win":
+    if target_os in ("win", "mac", "linux"):
         targets.append(base + ":arupa_plugin_host")
     return targets
 
@@ -82,6 +83,9 @@ def render_args(path, target_os, arch, link):
                 "use_siso": "false", "use_remoteexec": "false"}
     if target_os == "android":
         settings["include_both_v8_snapshots"] = "true" if arch == "arm64" else "false"
+    if target_os == "linux":
+        settings["blink_heap_inside_shared_library"] = "true"
+        settings["v8_tls_used_in_library"] = "true"
     for key, value in settings.items():
         # GN evaluates args sequentially: keep assignments before later uses.
         pattern = re.compile(rf"(?m)^([ \t]*){key}[ \t]*=[^\n]*")
@@ -154,7 +158,7 @@ def prepare_project(project):
         lines += ['  deps = [ "//chrome/browser/arupa_desktop:arupa_kernel", "//content/shell:pak",',
                   '            "//third_party/hyphenation-patterns:bundle_hyphen_data" ]',
                   '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:render" ] }',
-                  '  if (is_win) { deps += [ "//chrome/browser/arupa_desktop:arupa_plugin_host" ] }']
+                  '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:arupa_plugin_host" ] }']
     else:
         lines += ['  deps = [ "//chrome/browser/arupa_android/aar:arupa_kernel_aar", "//content/shell:pak" ]']
     write_if_changed(graph, "\n".join(lines + ['}', '']))
@@ -246,6 +250,14 @@ def main(argv=None):
         config_path = args_template(target_os, args.args)
         templates = {cpu: render_args(config_path, target_os, cpu, args.link) for cpu in arches}
         native_tools.kernel_check(target_os, arches)
+        if target_os == "linux":
+            if args.dry_run:
+                F.log("(dry-run) 检查 V8 共享库 TLS 配置")
+            else:
+                try:
+                    prepare_v8_tls(SRC)
+                except (OSError, ValueError) as exc:
+                    F.err(str(exc))
         F.log(f"GN 配置: {config_path}（arch={arch}, link={args.link}）")
         prepare_project(project)
         for cpu in arches:

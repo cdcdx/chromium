@@ -45,7 +45,7 @@
 # 复制映射（OUT = src\out\arupa-win-{arch}-{ver}-static）:
 #   OUT\arupa_kernel.dll        → kernel\（内核本体，必需）
 #   OUT\arupa_render.exe              → kernel\（渲染进程薄壳，必需）
-#   OUT\arupa_plugin_host.exe   → kernel\（插件宿主，缺失只告警）
+#   OUT\arupa_plugin_host.exe   → kernel\（插件宿主，缺失终止打包）
 #   OUT\<主 pak> + 其余 *.pak   → kernel\（原名平铺，必需至少一个）
 #   OUT\icudtl.dat              → kernel\（必需）
 #   OUT\snapshot_blob.bin / v8_context_snapshot*.bin → kernel\同名（至少一个，必需）
@@ -390,8 +390,8 @@ function Invoke-PackageArch {
     Add-RequiredFile -Src (Join-Path $OutPath (Get-LibName)) -DestDir $dest -Hint 'ninja 目标 chrome/browser/arupa_desktop:arupa_kernel'
     # 渲染进程薄壳：win 必需（BUILD.gn 的 win 分支里有 executable("render")）
     Add-RequiredFile -Src (Join-Path $OutPath (Get-HelperName)) -DestDir $dest -Hint 'ninja 目标 chrome/browser/arupa_desktop:render，少了它没有渲染进程'
-    # 插件宿主：arupa_kernel 的 data_deps，缺了只告警
-    Add-OptionalFile -Src (Join-Path $OutPath 'arupa_plugin_host.exe') -DestDir $dest
+    # 插件宿主：arupa_kernel 的 data_deps，三平台交付均必需
+    Add-RequiredFile -Src (Join-Path $OutPath 'arupa_plugin_host.exe') -DestDir $dest
 
     # 主 pak
     Add-RequiredFile -Src $script:PakSrc -DestDir $dest

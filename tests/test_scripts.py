@@ -286,7 +286,7 @@ class WorkspaceTest(unittest.TestCase):
         (out / 'hyphen-data').mkdir()
         (out / 'hyphen-data/manifest.json').write_text('{"manifest_version":2}')
         (out / 'hyphen-data/hyph-en-us.hyb').write_bytes(b'fixture')
-        for name in ('content_shell.pak', 'devtools_resources.pak', 'icudtl.dat', 'snapshot_blob.bin', 'arupa_render'):
+        for name in ('content_shell.pak', 'devtools_resources.pak', 'icudtl.dat', 'snapshot_blob.bin', 'arupa_render', 'arupa_plugin_host'):
             (out / name).write_bytes(b'fixture')
         for name in ('gen/extensions/strings/extensions_strings_en-US.pak',
                      'gen/extensions/extensions_renderer_generated_resources.pak',

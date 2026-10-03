@@ -52,7 +52,7 @@ V8_ARCH = {"arm64": "arm64", "x64": "x86_64", "x86": "x86_32"}
 # 交付件清单：required 缺一即终止；optional 缺了只告警
 ARTIFACTS = {
     "mac": {
-        "required": ["libarupa_kernel.dylib", "arupa_render"],
+        "required": ["libarupa_kernel.dylib", "arupa_render", "arupa_plugin_host"],
         "optional": ["icudtl.dat", "snapshot_blob.bin", "v8_context_snapshot.{v8}.bin",
                      "content_shell.pak", "devtools_resources.pak", "shell_resources.pak",
                      "libEGL.dylib", "libGLESv2.dylib", "libvk_swiftshader.dylib",
@@ -63,14 +63,14 @@ ARTIFACTS = {
                      "Libraries/libtest_trace_processor.dylib"],
     },
     "win": {
-        "required": ["arupa_kernel.dll", "arupa_render.exe"],
+        "required": ["arupa_kernel.dll", "arupa_render.exe", "arupa_plugin_host.exe"],
         "optional": ["icudtl.dat", "snapshot_blob.bin", "v8_context_snapshot.{v8}.bin",
                      "content_shell.pak", "devtools_resources.pak", "shell_resources.pak",
                      "libEGL.dll", "libGLESv2.dll", "vk_swiftshader.dll",
                      "vk_swiftshader_icd.json"],
     },
     "linux": {
-        "required": ["libarupa_kernel.so", "arupa_render"],
+        "required": ["libarupa_kernel.so", "arupa_render", "arupa_plugin_host"],
         "optional": ["icudtl.dat", "snapshot_blob.bin", "v8_context_snapshot.{v8}.bin",
                      "content_shell.pak", "devtools_resources.pak", "shell_resources.pak",
                      "libEGL.so", "libGLESv2.so", "libvk_swiftshader.so",

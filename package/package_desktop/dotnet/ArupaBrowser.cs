@@ -317,6 +317,12 @@ namespace Arupa
         public IReadOnlyList<string> ManagedHosts { get; init; } = Array.Empty<string>();
     }
 
+    /// <summary>One Chromium lifetime per process; stopped/failed requires a new process.</summary>
+    public enum ArupaKernelState
+    {
+        NotStarted = 0, Starting = 1, Running = 2, Stopping = 3, Stopped = 4, Failed = 5
+    }
+
     public sealed class ArupaKernel : IDisposable
     {
         /// <summary>
@@ -364,6 +370,17 @@ namespace Arupa
                 throw new InvalidOperationException($"Mac main-loop host failed: {result}");
             return result;
         }
+
+        /// <summary>Null when the loaded kernel predates lifecycle.state.v1.</summary>
+        public static ArupaKernelState? ProcessState =>
+            Interop.arupa_kernel_supports("lifecycle.state.v1") == 1
+                ? (ArupaKernelState)Interop.arupa_kernel_get_state() : null;
+
+        /// <summary>Capability schema with compiled, requiresHost and nullable runtimeAvailable.
+        /// Null means the loaded kernel does not provide capabilities.v1.</summary>
+        public static string? GetCapabilitiesJson() =>
+            Interop.arupa_kernel_supports("capabilities.v1") == 1
+                ? Interop.TakeOwned(Interop.arupa_kernel_get_capabilities_json()) : null;
 
         private IntPtr _handle;
         public ArupaKernel(ArupaKernelOptions? opts = null)
@@ -1989,6 +2006,37 @@ namespace Arupa
         public string? Url => Interop.TakeOwned(Interop.arupa_webview_get_url(_handle));
         public string? Title => Interop.TakeOwned(Interop.arupa_webview_get_title(_handle));
         public void Resize(int w, int h) => Interop.arupa_webview_resize(_handle, w, h);
+        /// <summary>Set screen origin and content size in DIP, per-display scale, and a 1..240 FPS cap.</summary>
+        public void SetViewport(int x, int y, int width, int height, double scale, int maxFrameRate = 60)
+        {
+            if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(ArupaWebView));
+            if (Interop.arupa_kernel_supports("viewport.v1") != 1)
+                throw new NotSupportedException("The kernel does not support viewport.v1.");
+            var viewport = new Interop.ViewportV1 {
+                size = (UIntPtr)Marshal.SizeOf<Interop.ViewportV1>(), x = x, y = y,
+                width = width, height = height, device_scale_factor = scale, max_frame_rate = maxFrameRate
+            };
+            int result = Interop.arupa_webview_set_viewport(_handle, in viewport);
+            if (result != 0) throw new InvalidOperationException($"SetViewport failed: {result}");
+        }
+
+        /// <summary>Send the actual layout key and physical DOM code on all desktop platforms.
+        /// nativeKeyCode=-1 derives the native code from domCode. Strings are copied by the kernel.</summary>
+        public void SendKeyV2(int type, int windowsKeyCode, string domCode, string domKey,
+            int modifiers = 0, string? text = null, int nativeKeyCode = -1)
+        {
+            if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(ArupaWebView));
+            if (Interop.arupa_kernel_supports("input.key.v2") != 1)
+                throw new NotSupportedException("The kernel does not support input.key.v2.");
+            var key = new Interop.KeyEventV2 {
+                size = (UIntPtr)Marshal.SizeOf<Interop.KeyEventV2>(), type = type,
+                windows_key_code = windowsKeyCode, native_key_code = nativeKeyCode,
+                modifiers = modifiers, dom_code = domCode, dom_key = domKey, text = text
+            };
+            int result = Interop.arupa_webview_send_key_v2(_handle, in key);
+            if (result != 0) throw new InvalidOperationException($"SendKeyV2 failed: {result}");
+        }
+
         /// <summary>Mac OSR content view's actual screen rectangle in DIP.
         /// Re-send when the host window moves or the view layout changes.</summary>
         public void SetScreenRect(int x, int y, int width, int height)

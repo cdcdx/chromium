@@ -273,7 +273,7 @@ class NomadTest(unittest.TestCase):
         (output / 'binary').write_text('fixture')
         if os.name != 'nt':
             (output / 'link').symlink_to('binary')
-        identity = {'arch': 'arm64'}
+        identity = {'os': 'mac', 'arch': 'arm64'}
         nomad.seal(output, identity)
         self.args.zip = True
         self.args.num = 1
