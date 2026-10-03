@@ -70,6 +70,16 @@ class WorkspaceTest(unittest.TestCase):
             with self.subTest(args=args), self.assertRaises(SystemExit):
                 self.quiet(build.main, args + ['--dry-run'])
 
+    def test_every_desktop_platform_builds_subprocess_helper(self):
+        for target_os in ('win', 'mac', 'linux'):
+            with self.subTest(target_os=target_os):
+                self.assertIn('//chrome/browser/arupa_desktop:render',
+                              build.build_targets('arupa_desktop', target_os))
+        with patch.object(build, 'exclude_generated'):
+            self.quiet(build.prepare_project, 'arupa_desktop')
+        graph = (self.src / 'arupa_build/arupa_desktop/BUILD.gn').read_text()
+        self.assertIn('if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:render" ] }', graph)
+
     def test_fetch_order_includes_all_four_versioned_projects(self):
         calls = []
         (self.root / '.env').write_text(''.join(f'{prefix}_src=local\n{prefix}_ver=v1\n' for prefix, _ in fetch.PROJECTS.values()))
@@ -243,6 +253,19 @@ class WorkspaceTest(unittest.TestCase):
             resource.parent.mkdir(parents=True, exist_ok=True)
             resource.write_bytes(name.encode())
         return out
+
+    @unittest.skipUnless(sys.platform == 'darwin' or sys.platform.startswith('linux'),
+                         'POSIX package integration')
+    def test_linux_package_rejects_missing_subprocess_helper(self):
+        out = self.package_fixture()
+        (out / 'libarupa_kernel.so').write_bytes(b'fixture')
+        (out / 'arupa_render').unlink()
+        result = subprocess.run(['bash', str(self.root / 'scripts/packaging/package-arupa_desktop.sh'),
+                                 '--os', 'linux', '--arch', 'x64', '--ver', VERSION, '--out', str(out)],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('arupa_render', result.stderr + result.stdout)
+        self.assertFalse((self.root / f'dist/arupa-linux-x64-{VERSION}-static-1').exists())
 
     @unittest.skipUnless(sys.platform == 'darwin', 'macOS package integration')
     def test_mac_package_rejects_missing_extension_resources(self):

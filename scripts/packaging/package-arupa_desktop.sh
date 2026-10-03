@@ -16,7 +16,7 @@
 #     docs/ dotnet/ …        ← <repo>/package 下的一级文件/文件夹整份搬过来（有则带）
 #     macKernel -> kernel     ← 仅 mac：PC 侧按 macKernel/ 取内核件（软链，勿实体复制）
 #     SHA256SUMS.txt / MANIFEST.md
-#   linux 同理，库名 libarupa_kernel.so（linux 分支若没编 render 会告警而非失败）
+#   linux 同理，库名 libarupa_kernel.so，arupa_render 同样为必需件
 #
 # 参考: dist/arupa-win-154.0.8037.21+17（Windows 交付包的目录与收件口径）
 #
@@ -291,11 +291,9 @@ package_arch() {
 
   # 内核本体
   want "${out}/$(lib_name "${OS}")" "${dest}" "ninja 目标 chrome/browser/arupa_desktop:arupa_kernel"
-  # 渲染进程薄壳：mac 必需；linux 的 BUILD.gn 目前没有 linux 分支，放宽为告警
+  # 渲染进程薄壳：mac/linux 都依赖它启动 renderer / GPU / utility 子进程
   if [[ -f "${out}/$(helper_name)" ]]; then
     want "${out}/$(helper_name)" "${dest}" ""
-  elif [[ "${OS}" == "linux" ]]; then
-    MISSING_OPTIONAL+=("arupa_render")
   else
     err "缺 ${out}/arupa_render（ninja 目标 chrome/browser/arupa_desktop:render，产物名 output_name=arupa_render，少了它没有渲染进程）"
   fi

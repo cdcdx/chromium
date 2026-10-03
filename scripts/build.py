@@ -55,7 +55,7 @@ def build_targets(project, target_os):
         return [base + "/aar:arupa_kernel_aar", "//content/shell:pak"]
     targets = [base + ":arupa_kernel", "//content/shell:pak",
                "//third_party/hyphenation-patterns:bundle_hyphen_data"]
-    if target_os in ("win", "mac"):
+    if target_os in ("win", "mac", "linux"):
         targets.append(base + ":render")
     if target_os == "win":
         targets.append(base + ":arupa_plugin_host")
@@ -153,7 +153,7 @@ def prepare_project(project):
         # 那一份（PC 侧 Mac/ArupaDelivery.props 逐件校验它）。它默认不在本工程的图里，得显式挂进来。
         lines += ['  deps = [ "//chrome/browser/arupa_desktop:arupa_kernel", "//content/shell:pak",',
                   '            "//third_party/hyphenation-patterns:bundle_hyphen_data" ]',
-                  '  if (is_win || is_mac) { deps += [ "//chrome/browser/arupa_desktop:render" ] }',
+                  '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:render" ] }',
                   '  if (is_win) { deps += [ "//chrome/browser/arupa_desktop:arupa_plugin_host" ] }']
     else:
         lines += ['  deps = [ "//chrome/browser/arupa_android/aar:arupa_kernel_aar", "//content/shell:pak" ]']
