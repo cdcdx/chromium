@@ -127,6 +127,25 @@ class NomadTest(unittest.TestCase):
             nomad.validate_apk(path / 'app.apk', manifest['identity']['arch'])
             self.assertTrue((path / 'SHA256SUMS.txt').is_file())
 
+    def test_mac_invalid_delivery_stops_before_web_and_publish(self):
+        self.pc_fixture('mac')
+        self.args.no_web = False
+        with patch.object(nomad, 'prepare_dotnet', return_value='dotnet'), \
+             patch.object(nomad, 'prepare_web_tools') as web, \
+             patch.object(fetch, 'run', side_effect=RuntimeError('missing hyphen-data')) as run:
+            with self.assertRaisesRegex(RuntimeError, 'missing hyphen-data'):
+                nomad.pc_build(self.root, self.args, 'mac', 'x64', VERSION, self.root / 'output')
+        web.assert_not_called()
+        self.assertEqual(run.call_count, 1)
+        command = run.call_args.args[0]
+        self.assertIn('-t:ValidateArupaDelivery', command)
+        self.assertIn('-p:RuntimeIdentifier=osx-x64', command)
+
+    def test_desktop_ninja_builds_hyphen_data(self):
+        for target_os in ('win', 'mac', 'linux'):
+            self.assertIn('//third_party/hyphenation-patterns:bundle_hyphen_data',
+                          build.build_targets('arupa_desktop', target_os))
+
     def test_wrong_apk_and_changed_output_cannot_be_packaged(self):
         apk = self.root / 'bad.apk'
         with zipfile.ZipFile(apk, 'w') as archive:

@@ -231,9 +231,28 @@ class WorkspaceTest(unittest.TestCase):
             (attachments / 'plugin-runtime/runtime.js').write_text('ordinary attachment')
         out = self.root / 'output'
         out.mkdir()
+        (out / 'hyphen-data').mkdir()
+        (out / 'hyphen-data/manifest.json').write_text('{"manifest_version":2}')
+        (out / 'hyphen-data/hyph-en-us.hyb').write_bytes(b'fixture')
         for name in ('content_shell.pak', 'icudtl.dat', 'snapshot_blob.bin', 'arupa_render'):
             (out / name).write_bytes(b'fixture')
         return out
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS package integration')
+    def test_mac_package_rejects_missing_hyphen_data(self):
+        out = self.package_fixture()
+        (out / 'libarupa_kernel.dylib').write_bytes(struct.pack('<IiiIIIII', 0xfeedfacf, 0x100000c, 0, 6, 0, 0, 0, 0))
+        for missing in ('manifest.json', 'hyph-en-us.hyb'):
+            path = out / 'hyphen-data' / missing
+            content = path.read_bytes()
+            path.unlink()
+            result = subprocess.run(['bash', str(self.root / 'scripts/packaging/package-arupa_desktop.sh'),
+                                     '--os', 'mac', '--arch', 'arm64', '--ver', VERSION, '--out', str(out)],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('hyphen-data', result.stderr + result.stdout)
+            self.assertFalse((self.root / f'dist/arupa-mac-arm64-{VERSION}-static-1').exists())
+            path.write_bytes(content)
 
     @unittest.skipUnless(sys.platform == 'darwin', 'macOS package integration')
     def test_desktop_package_and_arch_mismatch_cleanup(self):

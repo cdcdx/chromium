@@ -188,6 +188,10 @@ def pc_build(root, args, target_os, arch, version, output):
         if developer_dir:
             os.environ['DEVELOPER_DIR'] = developer_dir
     dotnet = prepare_dotnet(args, repo, project)
+    if target_os == 'mac':
+        # Run the browser's authoritative delivery contract before WebUI/publish.
+        F.run([dotnet, 'msbuild', project, '-t:ValidateArupaDelivery',
+               f'-p:RuntimeIdentifier={rid}', *props], repo)
     web = repo / 'NomadWebUI/nomadwebui'
     if not args.no_web:
         if not (web / 'package.json').is_file():

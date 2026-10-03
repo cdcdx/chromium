@@ -53,7 +53,8 @@ def build_targets(project, target_os):
     base = f"//chrome/browser/{project}"
     if project == "arupa_android":
         return [base + "/aar:arupa_kernel_aar", "//content/shell:pak"]
-    targets = [base + ":arupa_kernel", "//content/shell:pak"]
+    targets = [base + ":arupa_kernel", "//content/shell:pak",
+               "//third_party/hyphenation-patterns:bundle_hyphen_data"]
     if target_os in ("win", "mac"):
         targets.append(base + ":render")
     if target_os == "win":

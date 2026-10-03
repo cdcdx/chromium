@@ -337,6 +337,10 @@ package_arch() {
   fi
 
   # 数据目录
+  if [[ "${OS}" == "mac" ]]; then
+    [[ -f "${out}/hyphen-data/manifest.json" ]] || err "缺少 ${out}/hyphen-data/manifest.json；请先执行 build.sh arupa_desktop gen build --os mac --arch ${cpu}"
+    compgen -G "${out}/hyphen-data/*.hyb" >/dev/null || err "缺少 ${out}/hyphen-data/*.hyb；请构建 third_party/hyphenation-patterns:bundle_hyphen_data"
+  fi
   for d in angledata hyphen-data resources locales; do
     have_dir "${out}/${d}" "${dest}"
   done
