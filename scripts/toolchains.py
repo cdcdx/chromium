@@ -5,9 +5,11 @@ import json
 import os
 from pathlib import Path
 import shutil
+import ssl
 import subprocess
 import tempfile
 import urllib.request
+import urllib.error
 
 import fetch as F
 from apple_tools import xcode_directory
@@ -48,6 +50,35 @@ def setup_metal(cfg):
     F.run(['env', f'DEVELOPER_DIR={developer}', '/usr/bin/xcrun', '--sdk', 'macosx', 'metal', '--version'])
 
 
+def download_installer(url, destination):
+    """Keep TLS verification enabled when Python's CA store is incomplete."""
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response, destination.open('wb') as stream:
+            shutil.copyfileobj(response, stream)
+        return
+    except urllib.error.URLError as exc:
+        if not isinstance(exc.reason, ssl.SSLCertVerificationError):
+            raise
+        # macOS Python builds may not use the system trust store; the system curl does.
+        curl = '/usr/bin/curl' if F.HOST_OS == 'mac' and Path('/usr/bin/curl').is_file() else shutil.which('curl')
+        if not curl:
+            F.err('Python HTTPS 证书验证失败，且未找到 curl；请修复 Python CA 证书，'
+                  '或设置 SSL_CERT_FILE 指向可信 CA PEM 文件后重试。')
+        F.log('Python CA 证书验证失败，改用 curl 下载（仍验证 HTTPS 证书）')
+        command = [curl, '--disable', '--fail', '--location', '--show-error', '--silent',
+                   '--proto', '=https', '--proto-redir', '=https',
+                   '--connect-timeout', '30', '--max-time', '120']
+        if os.environ.get('SSL_CERT_FILE'):
+            command += ['--cacert', os.environ['SSL_CERT_FILE']]
+        command += ['--output', destination, url]
+        try:
+            F.run(command)
+        except (OSError, subprocess.CalledProcessError) as error:
+            destination.unlink(missing_ok=True)
+            F.err('curl 下载失败，未执行安装脚本；请检查网络、代理和 CA 证书。'
+                  '企业代理证书可通过 SSL_CERT_FILE 指定可信 CA PEM 文件。\n' + str(error))
+
+
 def setup_dotnet(cfg):
     repo = F.WORKSPACE_ROOT / 'nomadbrowser.pc'
     pin = repo / 'global.json'
@@ -75,8 +106,7 @@ def setup_dotnet(cfg):
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='dotnet-install-', dir=destination.parent) as temporary:
         installer = Path(temporary) / f'dotnet-install.{extension}'
-        with urllib.request.urlopen(url, timeout=60) as response, installer.open('wb') as stream:
-            shutil.copyfileobj(response, stream)
+        download_installer(url, installer)
         if F.IS_WIN:
             powershell = shutil.which('pwsh') or shutil.which('powershell')
             if not powershell:

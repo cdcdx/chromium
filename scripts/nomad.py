@@ -10,12 +10,13 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+import xml.etree.ElementTree as ET
 
 import fetch as F
 import toolchains
 
 
-def prepare_dotnet(args, repo):
+def prepare_dotnet(args, repo, project=None):
     executable = args.dotnet or toolchains.dotnet_executable(F.load_config())
     executable = os.path.expanduser(executable)
     if not F.DRY_RUN:
@@ -26,12 +27,59 @@ def prepare_dotnet(args, repo):
         result = subprocess.run([resolved, '--version'], cwd=repo, capture_output=True, text=True)
         if result.returncode or not result.stdout.strip():
             F.err('没有可用的项目 .NET SDK（仅安装 Runtime 不够）；请检查 global.json。\n' + result.stderr.strip())
+        if project and project.stat().st_size:
+            frameworks = [element.text or '' for element in ET.parse(project).iter()
+                          if element.tag.rsplit('}', 1)[-1] in ('TargetFramework', 'TargetFrameworks')]
+            required = [tuple(map(int, match)) for value in frameworks
+                        for match in re.findall(r'\bnet(\d+)\.(\d+)', value)]
+            actual = re.match(r'(\d+)\.(\d+)', result.stdout.strip())
+            if required and (not actual or tuple(map(int, actual.groups())) < max(required)):
+                F.err(f'.NET SDK {result.stdout.strip()} 不支持项目目标 {", ".join(frameworks)}；'
+                      '请先 bash fetch.sh dotnet（Windows 使用 .\\fetch.ps1 dotnet），或用 --dotnet 指定兼容 SDK')
         executable = resolved
         sdk_root = str(Path(resolved).resolve().parent)
         os.environ['DOTNET_ROOT'] = sdk_root
         os.environ['PATH'] = sdk_root + os.pathsep + os.environ.get('PATH', '')
         F.log(f'.NET SDK: {result.stdout.strip()} ({executable})')
     return executable
+
+
+def prepare_web_tools(web):
+    """Use npm's semver implementation; keep node and npm from the same install."""
+    metadata = json.loads((web / 'package.json').read_text(encoding='utf-8'))
+    required = metadata.get('engines', {}).get('node', '*')
+    if F.DRY_RUN:
+        F.log(f'(dry-run) 检查 Node.js/npm，Node 要求 {required}')
+        return 'npm.cmd' if F.IS_WIN else 'npm'
+    configured = F.cget(F.load_config(), 'node_path')
+    current = shutil.which('node')
+    candidates = [Path(configured).expanduser()] if configured else ([Path(current)] if current else [])
+    if not configured:
+        nvm = Path(os.environ.get('NVM_DIR', str(Path.home() / '.nvm')))
+        def version_key(path):
+            return tuple(map(int, re.findall(r'\d+', path.parent.parent.name)))
+        candidates += sorted((nvm / 'versions/node').glob('v*/bin/node'), key=version_key, reverse=True)
+    failures = []
+    for node in dict.fromkeys(candidates):
+        npm = node.parent / ('npm.cmd' if F.IS_WIN else 'npm')
+        if not node.is_file() or not npm.is_file():
+            failures.append(f'{node}: 缺少配套 node/npm')
+            continue
+        # npm.cmd is a launcher, while POSIX npm is normally a symlink to npm-cli.js.
+        cli = node.parent / 'node_modules/npm/bin/npm-cli.js' if F.IS_WIN else npm.resolve()
+        check = subprocess.run([str(node), '-e',
+            'const s=require(require.resolve("semver",{paths:[process.argv[1]]}));'
+            'console.log(process.version);process.exit(s.satisfies(process.version,process.argv[2])?0:1)',
+            str(cli.parent), required], cwd=web, capture_output=True, text=True)
+        if check.returncode:
+            failures.append(f'{node}: {check.stdout.strip()} {check.stderr.strip()}')
+            continue
+        os.environ['PATH'] = str(node.parent) + os.pathsep + os.environ.get('PATH', '')
+        F.log(f'Node.js: {check.stdout.strip()} ({node})，要求 {required}')
+        F.run([npm, '--version'], web)
+        return str(npm)
+    F.err(f'WebUI 需要 Node.js {required} 和配套 npm；请安装兼容版本，或在 .env 设置 node_path。\n'
+          + '\n'.join(failures))
 
 
 def prepare_android_sdk(args, repo):
@@ -130,17 +178,12 @@ def pc_build(root, args, target_os, arch, version, output):
         developer_dir = F.cget(F.load_config(), 'pc_developer_dir')
         if developer_dir:
             os.environ['DEVELOPER_DIR'] = developer_dir
-    dotnet = prepare_dotnet(args, repo)
+    dotnet = prepare_dotnet(args, repo, project)
     web = repo / 'NomadWebUI/nomadwebui'
     if not args.no_web:
         if not (web / 'package.json').is_file():
             F.err(f'缺少 WebUI 项目: {web}；已有资源时可显式 --no-web')
-        npm = 'npm.cmd' if target_os == 'win' else 'npm'
-        if not F.DRY_RUN:
-            if not shutil.which('node') or not shutil.which(npm):
-                F.err('WebUI 需要完整 Node.js/npm；请安装 package.json engines 要求的版本，已有资源可用 --no-web')
-            F.run(['node', '--version'], web)
-            F.run([npm, '--version'], web)
+        npm = prepare_web_tools(web)
         if not (web / 'node_modules').is_dir():
             F.run([npm, 'ci' if (web / 'package-lock.json').exists() else 'install'], web)
         F.run([npm, 'run', 'build'], web)

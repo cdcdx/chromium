@@ -153,6 +153,8 @@ VS/SDK 版本解析使用当前 Chromium 的 `build/vs_toolchain.py`，不在外
 `.NET` 优先使用 `dotnet_version`，其次读取浏览器 `global.json`，均没有时使用 `dotnet_channel`（默认 10.0）。
 安装后 build 自动发现 `.tools/dotnet`；显式 `--dotnet` / `dotnet_path` 仍优先。
 安装器使用 [Microsoft 官方安装脚本](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-install-script)，不会修改系统 PATH。
+下载脚本时若 Python 报 CA 证书验证失败，会改用 curl（macOS 优先系统 curl），仍验证 HTTPS 证书，且仅允许 HTTPS 重定向。
+如果代理使用自签 CA，可设置 `SSL_CERT_FILE=/path/to/trusted-ca.pem`；Python 和备用 curl 均使用该证书文件，不关闭证书验证。
 
 | 入口 | 项目 | 目标系统 | CPU |
 |---|---|---|---|
@@ -257,6 +259,12 @@ Linux 当前项目 GN 未定义 render 目标，交付中缺少 arupa_render 会
 先用 fetch 拉取对应浏览器源码。PC 需要项目要求的 .NET SDK、Node.js/npm，以及同系统、同架构、同 Chromium 版本的静态内核交付包。
 dotnet 选择顺序为 `--dotnet`、`dotnet_path` 配置（支持大写环境变量）、工作区 `.tools/dotnet`、PATH。
 脚本在浏览器仓库目录执行 `dotnet --version`，检查 `global.json` 所要求的 SDK 能否被选中；仅安装 Runtime 会提前报错。
+还会按主工程显式声明的 `TargetFramework` / `TargetFrameworks` 检查 SDK 最低版本；
+例如 `net10.0` 不能使用 SDK 6。缺少兼容 SDK 时先执行 `bash fetch.sh dotnet`（Windows 使用 `fetch.ps1 dotnet`）。
+WebUI 构建前使用 npm 自带的 semver 校验 `package.json` 的 `engines.node`。
+优先使用 `.env` 的 `node_path`，否则使用 PATH 中的 Node；后者不兼容时，尝试 `$NVM_DIR`（默认 `~/.nvm`）中已安装的版本。
+选中的 Node 与配套 npm 一起加入本次构建的 PATH，确保 npm 子脚本使用相同版本，不修改 shell 默认版本。
+没有兼容版本则在 npm 安装/构建前停止；不会删除 `--experimental-strip-types` 或跳过 WebUI 测试。
 默认从工作区 `dist/` 选择最新匹配序号，或通过 `--delivery` 指定交付目录；`--dist-dir` 仅控制输出。
 `--ver` 在浏览器命令中表示消费的内核版本，可在没有 Chromium 源码时显式指定。
 默认 Release；`--variant debug` 可切换。默认构建 WebUI，`--no-web` 复用已有资源，资源缺失会报错。

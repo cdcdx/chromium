@@ -158,6 +158,56 @@ class NomadTest(unittest.TestCase):
                 nomad.prepare_android_sdk(self.args, repo)
             self.assertEqual(local.read_text(), 'sdk.dir=/another/sdk\n')
 
+    def test_dotnet_rejects_old_sdk_before_web_build(self):
+        self.pc_fixture('mac')
+        repo = self.root / 'nomadbrowser.pc'
+        project = repo / 'NomadBrowser.Avalonia.Mac/NomadBrowser.Avalonia.Mac.csproj'
+        project.write_text('<Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>')
+        self.args.no_web = False
+        with patch.object(nomad.shutil, 'which', return_value='/custom/dotnet'), \
+             patch.object(nomad.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '6.0.301', '')), \
+             patch.object(fetch, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'net10.0'):
+                nomad.pc_build(self.root, self.args, 'mac', 'x64', VERSION, self.root / 'out')
+            run.assert_not_called()
+
+    def test_web_selects_compatible_nvm_node_and_matching_npm(self):
+        web = self.root / 'web'
+        web.mkdir()
+        (web / 'package.json').write_text('{"engines":{"node":">=22.6.0"}}')
+        nvm = self.root / 'nvm'
+        paths = []
+        for version in ('20.5.1', '22.23.3'):
+            folder = nvm / f'versions/node/v{version}/bin'
+            folder.mkdir(parents=True)
+            (folder / 'node').touch()
+            (folder / 'npm').touch()
+            paths.append(folder / 'node')
+        with patch.dict(os.environ, {'NVM_DIR': str(nvm)}), \
+             patch.object(fetch, 'IS_WIN', False), patch.object(fetch, 'load_config', return_value={}), \
+             patch.object(nomad.shutil, 'which', return_value=str(paths[0])), \
+             patch.object(nomad.subprocess, 'run', side_effect=[
+                 subprocess.CompletedProcess([], 1, 'v20.5.1', ''),
+                 subprocess.CompletedProcess([], 0, 'v22.23.3', '')]) as check, \
+             patch.object(fetch, 'run') as run:
+            self.assertEqual(self.quiet(nomad.prepare_web_tools, web), str(paths[1].parent / 'npm'))
+            self.assertTrue(os.environ['PATH'].startswith(str(paths[1].parent) + os.pathsep))
+            self.assertEqual(check.call_args.args[0][-1], '>=22.6.0')
+            run.assert_called_once_with([paths[1].parent / 'npm', '--version'], web)
+
+    def test_web_explicit_invalid_node_is_not_silently_replaced(self):
+        web = self.root / 'web'
+        web.mkdir()
+        (web / 'package.json').write_text('{"engines":{"node":">=22.6.0"}}')
+        with patch.object(fetch, 'load_config', return_value={'node_path': str(web / 'missing')}), \
+             patch.object(fetch, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'Node.js >=22.6.0'):
+                nomad.prepare_web_tools(web)
+            run.assert_not_called()
+        fetch.DRY_RUN = True
+        with patch.object(nomad.subprocess, 'run', side_effect=AssertionError('executed')):
+            self.quiet(nomad.prepare_web_tools, web)
+
     def test_toolchain_dry_run_never_executes(self):
         fetch.DRY_RUN = True
         with patch.object(nomad.subprocess, 'run', side_effect=AssertionError('executed')):

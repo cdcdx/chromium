@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import ssl
+import urllib.error
 import sys
 import tempfile
 import unittest
@@ -75,6 +77,36 @@ class ToolchainsTest(unittest.TestCase):
         executable.touch()
         self.assertEqual(toolchains.dotnet_executable({}), str(executable))
         self.assertEqual(toolchains.dotnet_executable({'dotnet_path': '/custom/dotnet'}), '/custom/dotnet')
+
+    def test_certificate_failure_uses_verified_curl_and_explicit_ca(self):
+        failure = urllib.error.URLError(ssl.SSLCertVerificationError(1, 'missing issuer'))
+        destination = self.root / 'installer.sh'
+        with patch('urllib.request.urlopen', side_effect=failure), \
+             patch.object(fetch, 'HOST_OS', 'linux'), patch('shutil.which', return_value='/usr/bin/curl'), \
+             patch.dict(os.environ, {'SSL_CERT_FILE': '/trusted/ca.pem'}), patch.object(fetch, 'run') as run:
+            self.quiet(toolchains.download_installer, 'https://dot.net/v1/dotnet-install.sh', destination)
+        command = run.call_args.args[0]
+        self.assertIn('--fail', command)
+        self.assertIn('--proto-redir', command)
+        self.assertIn('/trusted/ca.pem', command)
+        self.assertNotIn('--insecure', command)
+        self.assertNotIn('-k', command)
+
+    def test_failed_download_never_runs_installer(self):
+        failure = urllib.error.URLError(ssl.SSLCertVerificationError(1, 'missing issuer'))
+        with patch('urllib.request.urlopen', side_effect=failure), \
+             patch('shutil.which', return_value='/usr/bin/curl'), \
+             patch.object(fetch, 'run', side_effect=subprocess.CalledProcessError(60, ['curl'])) as run:
+            with self.assertRaisesRegex(RuntimeError, '未执行安装脚本'):
+                self.quiet(toolchains.setup_dotnet, {})
+        self.assertEqual(run.call_count, 1)
+
+    def test_http_error_does_not_trigger_certificate_fallback(self):
+        failure = urllib.error.HTTPError('https://example.invalid', 404, 'missing', {}, None)
+        with patch('urllib.request.urlopen', side_effect=failure), patch.object(fetch, 'run') as run:
+            with self.assertRaises(urllib.error.HTTPError):
+                toolchains.download_installer('https://example.invalid', self.root / 'installer')
+        run.assert_not_called()
 
     def test_android_existing_tools_reused_and_packages_explicit(self):
         sdk, jdk = toolchains.android_paths({})
