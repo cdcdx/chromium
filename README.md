@@ -258,6 +258,11 @@ Linux 当前项目 GN 未定义 render 目标，交付中缺少 arupa_render 会
 
 先用 fetch 拉取对应浏览器源码。PC 需要项目要求的 .NET SDK、Node.js/npm，以及同系统、同架构、同 Chromium 版本的静态内核交付包。
 dotnet 选择顺序为 `--dotnet`、`dotnet_path` 配置（支持大写环境变量）、工作区 `.tools/dotnet`、PATH。
+PC 构建默认显式使用 `build/nuget.config` 的官方 NuGet v3 源，覆盖浏览器仓库和用户配置的源选择。
+该配置同时传给内核 .NET 门面、浏览器和 Windows 更新器的 build/publish。
+需要私有源、认证或镜像时，用 `--nuget-config /path/to/nuget.config` 指定完整配置。
+NuGet restore 不按源的排列顺序回退；不能仅把有效源放在前面就保留失效源。
+
 脚本在浏览器仓库目录执行 `dotnet --version`，检查 `global.json` 所要求的 SDK 能否被选中；仅安装 Runtime 会提前报错。
 还会按主工程显式声明的 `TargetFramework` / `TargetFrameworks` 检查 SDK 最低版本；
 例如 `net10.0` 不能使用 SDK 6。缺少兼容 SDK 时先执行 `bash fetch.sh dotnet`（Windows 使用 `fetch.ps1 dotnet`）。

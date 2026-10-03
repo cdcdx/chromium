@@ -166,13 +166,22 @@ def pc_project(repo, target_os, explicit):
 def pc_build(root, args, target_os, arch, version, output):
     repo = root / 'nomadbrowser.pc'
     project = pc_project(repo, target_os, args.pc_project)
+    nuget_config = (args.nuget_config or Path(__file__).resolve().parent.parent / 'build/nuget.config').expanduser().resolve()
+    if not nuget_config.is_file():
+        F.err(f'NuGet 配置不存在: {nuget_config}')
+    try:
+        ET.parse(nuget_config)
+    except ET.ParseError as exc:
+        F.err(f'NuGet 配置 XML 无效: {nuget_config}: {exc}')
+    restore_props = [f'-p:RestoreConfigFile={nuget_config}']
+    F.log(f'NuGet 配置: {nuget_config}')
     kernel = delivery(root, args, target_os, arch, version)
     rid = f'{"osx" if target_os == "mac" else target_os}-{arch}'
     if target_os == 'linux' and arch == 'x86':
         F.log('Linux x86 发布要求项目提供 linux-x86 运行时及原生依赖；官方 .NET SDK 无法保证支持')
     cfg = args.variant.capitalize()
     props = [f'-p:ArupaDeliveryRoot={kernel}', f'-p:ArupaSdkDir={kernel}',
-             f'-p:Platform={arch}', '-p:UseSharedCompilation=false']
+             f'-p:Platform={arch}', '-p:UseSharedCompilation=false', *restore_props]
     if target_os == 'mac':
         props += ['-p:BuildMac=true', f'-p:MacRuntimeIdentifier={rid}']
         developer_dir = F.cget(F.load_config(), 'pc_developer_dir')
@@ -189,7 +198,7 @@ def pc_build(root, args, target_os, arch, version, output):
         F.run([npm, 'run', 'build'], web)
     facade = kernel / 'dotnet/ArupaKernel.csproj'
     if target_os != 'mac' and facade.is_file() and not (kernel / 'dotnet/ArupaKernel.dll').is_file():
-        F.run([dotnet, 'build', facade, '-c', cfg, f'-p:Platform={arch}', '-o', kernel / 'dotnet'], repo)
+        F.run([dotnet, 'build', facade, '-c', cfg, f'-p:Platform={arch}', '-o', kernel / 'dotnet', *restore_props], repo)
     stage = output.parent / ('.' + output.name + '.publish') if F.DRY_RUN else Path(tempfile.mkdtemp(prefix='.publish-', dir=output.parent))
     try:
         bundle_root = stage / 'bundles'

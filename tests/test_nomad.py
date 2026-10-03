@@ -83,6 +83,30 @@ class NomadTest(unittest.TestCase):
                 main = next(cmd for cmd in commands if 'publish' in cmd)
                 self.assertIn(f'{"osx" if target_os == "mac" else target_os}-{arch}', main)
                 self.assertIn(f'-p:Platform={arch}', main)
+                expected = Path(nomad.__file__).resolve().parent.parent / 'build/nuget.config'
+                for command in commands:
+                    if 'publish' in command:
+                        self.assertIn(f'-p:RestoreConfigFile={expected}', command)
+
+    def test_custom_nuget_config_reaches_facade_and_all_publish_commands(self):
+        self.pc_fixture('win')
+        facade = self.args.delivery / 'dotnet/ArupaKernel.csproj'
+        facade.parent.mkdir()
+        facade.touch()
+        self.args.nuget_config = self.root / 'private feed.config'
+        self.args.nuget_config.write_text('<configuration/>')
+        fetch.DRY_RUN = True
+        with patch.object(fetch, 'run') as run:
+            self.quiet(nomad.pc_build, self.root, self.args, 'win', 'x64', VERSION, self.root / 'out')
+        commands = [list(map(str, call.args[0])) for call in run.call_args_list]
+        self.assertEqual(len(commands), 4)
+        for command in commands:
+            self.assertIn(f'-p:RestoreConfigFile={self.args.nuget_config.resolve()}', command)
+        self.args.nuget_config.unlink()
+        with patch.object(fetch, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'NuGet 配置不存在'):
+                nomad.pc_build(self.root, self.args, 'win', 'x64', VERSION, self.root / 'out')
+            run.assert_not_called()
 
     def test_android_both_abis_build_and_package_separately(self):
         repo = self.android_fixture()

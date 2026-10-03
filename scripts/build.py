@@ -37,6 +37,7 @@ def build_parser():
     p.add_argument("--variant", choices=("debug", "release"), default="release", help="浏览器构建配置")
     p.add_argument("--no-web", action="store_true", help="PC 浏览器复用已有 WebUI 资源")
     p.add_argument("--dotnet", help="PC 浏览器的 dotnet 可执行文件；默认 dotnet_path 配置或 PATH")
+    p.add_argument("--nuget-config", type=Path, help="PC 构建使用的 NuGet 配置；默认 build/nuget.config（官方 v3 源）")
     p.add_argument("--android-sdk", type=Path, help="Android 浏览器 SDK 目录；也可设置 ANDROID_HOME")
     p.add_argument("--ver", default="", help="内核版本；默认读取 src/chrome/VERSION，编译内核时必须与源码一致")
     p.add_argument("--link", "--mode", choices=("static", "dynamic"), default="static")
