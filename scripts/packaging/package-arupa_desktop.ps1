@@ -395,6 +395,7 @@ function Invoke-PackageArch {
 
     # 主 pak
     Add-RequiredFile -Src $script:PakSrc -DestDir $dest
+    Add-RequiredFile -Src (Join-Path $OutPath 'devtools_resources.pak') -DestDir $dest -Hint 'ninja 目标 chrome/browser/arupa_desktop:arupa_devtools_resources'
 
     # 其余 *.pak（shell_resources / ui_resources / extensions_* 等）
     $pakCount = 0

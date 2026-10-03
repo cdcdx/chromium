@@ -25,6 +25,11 @@ namespace Arupa
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int arupa_webview_open_devtools(IntPtr inspected, IntPtr frontend);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_webview_open_devtools_checked(IntPtr inspected, IntPtr frontend);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void arupa_webview_set_browser_command_callback(IntPtr view, IntPtr callback, IntPtr user);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern void arupa_webview_close_devtools(IntPtr frontend);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         internal delegate int OnBrowserCommandNative(IntPtr user, int command);
@@ -859,6 +864,15 @@ namespace Arupa
             [MarshalAs(UnmanagedType.LPUTF8Str)] string urlOrDomain);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         public static extern void arupa_webview_set_block_third_party_cookies(IntPtr view, int block);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr arupa_webview_apply_third_party_cookie_blocking(IntPtr view, int block);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr arupa_webview_get_third_party_cookie_blocking(IntPtr view);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr arupa_webview_get_partition_key(IntPtr view);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr arupa_webview_clear_site_data(IntPtr view, [MarshalAs(UnmanagedType.LPUTF8Str)] string? typesJson);
 
         public static string? Utf8(IntPtr p) => p == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(p);
         public static string? TakeOwned(IntPtr p)

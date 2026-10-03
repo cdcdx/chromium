@@ -50,7 +50,7 @@
 #   OUT/libEGL.* / libGLESv2.* / libvk_swiftshader.* / libvulkan.*  → kernel/（有则带）
 #   OUT/angledata/ hyphen-data/ resources/ locales/  → kernel/同名目录（有则带）
 #   OUT/vk_swiftshader_icd.json                  → kernel/（有则带）
-#   OUT/devtools_resources.pak 或 OUT/gen/content/browser/devtools/devtools_resources.pak → kernel/（有则带）
+#   OUT/devtools_resources.pak 或 OUT/gen/content/browser/devtools/devtools_resources.pak → kernel/（必需）
 #   OUT/Libraries/libtest_trace_processor.dylib  → kernel/Libraries/（mac，有则带）
 #   <repo>/arupa_desktop/public/*.h              → include/…
 #   <repo>/package/package_desktop/{docs,dotnet,…}               → 交付根同名（有则带，跟 scripts/builder/kernel.py
@@ -300,6 +300,7 @@ package_arch() {
 
   # 主 pak
   want "${PAK_SRC}" "${dest}" ""
+  want "${out}/devtools_resources.pak" "${dest}" "ninja 目标 chrome/browser/arupa_desktop:arupa_devtools_resources"
 
   # 其余 *.pak（ui_resources / extensions_* 等）：必须有这些 UI 资源，缺 warn
   local f any_pak=0

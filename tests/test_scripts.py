@@ -47,6 +47,48 @@ class WorkspaceTest(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return func(*args)
 
+    def test_windows_build_refreshes_facade_even_with_existing_dll(self):
+        import nomad
+        from types import SimpleNamespace
+        repo = self.root / 'nomadbrowser.pc'
+        project = repo / 'NomadBrowser.Avalonia/NomadBrowser.Avalonia.csproj'
+        project.parent.mkdir(parents=True)
+        project.write_text('<Project />')
+        for name in ('NomadBrowser.Updater', 'NomadBrowser.Windows.Updater'):
+            folder = repo / name
+            folder.mkdir()
+            (folder / (name + '.csproj')).write_text('<Project />')
+        kernel = self.root / 'delivery'
+        sdk = kernel / 'dotnet'
+        sdk.mkdir(parents=True)
+        facade = sdk / 'ArupaKernel.csproj'
+        facade.write_text('<Project />')
+        (sdk / 'ArupaKernel.dll').write_bytes(b'old SDK without OpenDevTools')
+        args = SimpleNamespace(pc_project=None, nuget_config=self.root / 'build/nuget.config',
+                               variant='release', no_web=True)
+        with patch.object(fetch, 'DRY_RUN', True), patch.object(nomad, 'delivery', return_value=kernel), \
+             patch.object(nomad, 'prepare_dotnet', return_value='dotnet'), patch.object(fetch, 'run') as run:
+            self.quiet(nomad.pc_build, self.root, args, 'win', 'x64', VERSION, self.root / 'output')
+            builds = [call.args[0] for call in run.call_args_list if call.args[0][1] == 'build']
+            self.assertEqual(len(builds), 1)
+            self.assertEqual(builds[0][2], facade)
+            self.assertEqual(builds[0][builds[0].index('-o') + 1], sdk)
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS extended attributes')
+    def test_mac_payload_copy_preserves_signature_attributes_and_symlinks(self):
+        import nomad
+        source = self.root / 'signed app'
+        source.mkdir()
+        payload = source / 'managed.dll'
+        payload.write_bytes(b'managed payload')
+        (source / 'link').symlink_to('managed.dll')
+        subprocess.run(['xattr', '-w', 'com.nomad.signature-test', 'preserved', str(payload)], check=True)
+        destination = self.root / 'copied app'
+        self.quiet(nomad.copy_payload_tree, source, destination, 'mac')
+        self.assertEqual(subprocess.check_output(['xattr', '-p', 'com.nomad.signature-test',
+            str(destination / 'managed.dll')]).strip(), b'preserved')
+        self.assertTrue((destination / 'link').is_symlink())
+
     def test_matrix_dry_run_has_no_writes_or_subprocesses(self):
         (self.src / '.git').mkdir()
         (self.root / '.env').write_text(''.join(f'{prefix}_src=https://example.invalid/{name}.git\n{prefix}_ver=v1\n' for name, (prefix, _) in fetch.PROJECTS.items()))
@@ -244,7 +286,7 @@ class WorkspaceTest(unittest.TestCase):
         (out / 'hyphen-data').mkdir()
         (out / 'hyphen-data/manifest.json').write_text('{"manifest_version":2}')
         (out / 'hyphen-data/hyph-en-us.hyb').write_bytes(b'fixture')
-        for name in ('content_shell.pak', 'icudtl.dat', 'snapshot_blob.bin', 'arupa_render'):
+        for name in ('content_shell.pak', 'devtools_resources.pak', 'icudtl.dat', 'snapshot_blob.bin', 'arupa_render'):
             (out / name).write_bytes(b'fixture')
         for name in ('gen/extensions/strings/extensions_strings_en-US.pak',
                      'gen/extensions/extensions_renderer_generated_resources.pak',
@@ -265,6 +307,19 @@ class WorkspaceTest(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('arupa_render', result.stderr + result.stdout)
+        self.assertFalse((self.root / f'dist/arupa-linux-x64-{VERSION}-static-1').exists())
+
+    @unittest.skipUnless(sys.platform == 'darwin' or sys.platform.startswith('linux'),
+                         'POSIX package integration')
+    def test_package_rejects_missing_devtools_resources(self):
+        out = self.package_fixture()
+        (out / 'libarupa_kernel.so').write_bytes(b'fixture')
+        (out / 'devtools_resources.pak').unlink()
+        result = subprocess.run(['bash', str(self.root / 'scripts/packaging/package-arupa_desktop.sh'),
+                                 '--os', 'linux', '--arch', 'x64', '--ver', VERSION, '--out', str(out)],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('devtools_resources.pak', result.stderr + result.stdout)
         self.assertFalse((self.root / f'dist/arupa-linux-x64-{VERSION}-static-1').exists())
 
     @unittest.skipUnless(sys.platform == 'darwin', 'macOS package integration')

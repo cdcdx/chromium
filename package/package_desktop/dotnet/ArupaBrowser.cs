@@ -1813,6 +1813,9 @@ namespace Arupa
                         throw new InvalidOperationException($"arupa_webview_create failed: {r}");
                 }
             }
+            if (Interop.arupa_kernel_supports("browser.shortcuts.callback") == 1)
+                Interop.arupa_webview_set_browser_command_callback(_handle,
+                    Marshal.GetFunctionPointerForDelegate(_onBrowserCommand), IntPtr.Zero);
             // 装配了 PiP 回调 = 宿主接管画中画 → 让网页显示 PiP 入口。保持默认关闭时
             // document.pictureInPictureEnabled=false, 请求根本不会到内核 (也就不会回调)。
             EnableHostPictureInPicture();
@@ -1957,9 +1960,12 @@ namespace Arupa
             ArgumentNullException.ThrowIfNull(frontend);
             if (_handle == IntPtr.Zero || frontend._handle == IntPtr.Zero)
                 throw new ObjectDisposedException(nameof(ArupaWebView));
-            if (Interop.arupa_kernel_supports("devtools.frontend.v1") != 1)
-                throw new NotSupportedException("The kernel does not support devtools.frontend.v1.");
-            int result = Interop.arupa_webview_open_devtools(_handle, frontend._handle);
+            bool checkedApi = Interop.arupa_kernel_supports("devtools.frontend.checked.v1") == 1;
+            if (!checkedApi && Interop.arupa_kernel_supports("devtools.frontend.v1") != 1)
+                throw new NotSupportedException("The kernel does not support DevTools.");
+            int result = checkedApi
+                ? Interop.arupa_webview_open_devtools_checked(_handle, frontend._handle)
+                : Interop.arupa_webview_open_devtools(_handle, frontend._handle);
             if (result != 0)
                 throw new InvalidOperationException($"arupa_webview_open_devtools failed: {result}");
         }
@@ -1968,8 +1974,9 @@ namespace Arupa
         public void CloseDevTools()
         {
             if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(ArupaWebView));
-            if (Interop.arupa_kernel_supports("devtools.frontend.v1") != 1)
-                throw new NotSupportedException("The kernel does not support devtools.frontend.v1.");
+            if (Interop.arupa_kernel_supports("devtools.frontend.checked.v1") != 1 &&
+                Interop.arupa_kernel_supports("devtools.frontend.v1") != 1)
+                throw new NotSupportedException("The kernel does not support DevTools.");
             Interop.arupa_webview_close_devtools(_handle);
         }
 
@@ -2487,6 +2494,18 @@ namespace Arupa
         // 第三方 cookie 拦截开关 (Chromium CookieControlsMode)。
         public void SetBlockThirdPartyCookies(bool block)
             => Interop.arupa_webview_set_block_third_party_cookies(_handle, block ? 1 : 0);
+
+        // Keep the existing Windows SDK privacy APIs when rebuilding the shared wrapper.
+        public string ApplyThirdPartyCookieBlocking(bool blocked)
+            => Interop.TakeOwned(Interop.arupa_webview_apply_third_party_cookie_blocking(_handle, blocked ? 1 : 0))
+                ?? throw new InvalidOperationException("Cookie policy update returned no result.");
+        public string GetThirdPartyCookieBlocking()
+            => Interop.TakeOwned(Interop.arupa_webview_get_third_party_cookie_blocking(_handle))
+                ?? throw new InvalidOperationException("Cookie policy query returned no result.");
+        public string PartitionKey => Interop.TakeOwned(Interop.arupa_webview_get_partition_key(_handle))
+            ?? throw new InvalidOperationException("Partition key is unavailable.");
+        public string? ClearSiteData(IEnumerable<string>? types = null)
+            => Interop.TakeOwned(Interop.arupa_webview_clear_site_data(_handle, types is null ? null : JsonSerializer.Serialize(types)));
 
         // 输入 (OSR 宿主转发): type 鼠标 0=move/1=down/2=up; 键盘 0=rawkeydown/1=keyup/2=char。
         public void SendMouse(int type, int x, int y, int button = 0, int modifiers = 0)

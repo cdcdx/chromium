@@ -132,6 +132,16 @@ def digest(path):
     return h.hexdigest()
 
 
+def copy_payload_tree(source, destination, target_os):
+    # On macOS, signatures of managed DLLs live in extended attributes.
+    # Python shutil on Apple's Python does not preserve them; ditto also
+    # preserves bundle symlinks and resource forks.
+    if target_os == 'mac':
+        F.run(['ditto', source, destination])
+    else:
+        shutil.copytree(source, destination, dirs_exist_ok=True, symlinks=True)
+
+
 def delivery(root, args, target_os, arch, version):
     if args.delivery:
         path = args.delivery.expanduser().resolve()
@@ -201,7 +211,9 @@ def pc_build(root, args, target_os, arch, version, output):
             F.run([npm, 'ci' if (web / 'package-lock.json').exists() else 'install'], web)
         F.run([npm, 'run', 'build'], web)
     facade = kernel / 'dotnet/ArupaKernel.csproj'
-    if target_os != 'mac' and facade.is_file() and not (kernel / 'dotnet/ArupaKernel.dll').is_file():
+    # A bundled DLL may predate the source (and lack OpenDevTools). Rebuild
+    # incrementally into the exact directory consumed by the Windows host.
+    if target_os != 'mac' and facade.is_file():
         F.run([dotnet, 'build', facade, '-c', cfg, f'-p:Platform={arch}', '-o', kernel / 'dotnet', *restore_props], repo)
     stage = output.parent / ('.' + output.name + '.publish') if F.DRY_RUN else Path(tempfile.mkdtemp(prefix='.publish-', dir=output.parent))
     try:
@@ -226,7 +238,8 @@ def pc_build(root, args, target_os, arch, version, output):
                 F.err(f'期望 MacDistRoot 下唯一 .app，实际 {len(apps)} 个: {bundle_root}')
             payload = stage / 'delivery'
             payload.mkdir()
-            shutil.copytree(apps[0], payload / apps[0].name, symlinks=True)
+            copy_payload_tree(apps[0], payload / apps[0].name, target_os)
+            F.run(['codesign', '--verify', '--deep', '--strict', payload / apps[0].name])
             if not (payload / apps[0].name / 'Contents/Resources/arupa-mac').is_dir():
                 F.err('macOS bundle 缺少内核 Contents/Resources/arupa-mac')
         else:
@@ -343,22 +356,19 @@ def package(args, output, identity):
     stage = None
     try:
         stage = Path(tempfile.mkdtemp(prefix='.browser-package-', dir=destination))
-        shutil.copytree(output, stage, dirs_exist_ok=True, symlinks=True)
+        copy_payload_tree(output, stage, identity['os'])
+        if identity['os'] == 'mac':
+            for app in stage.glob('*.app'):
+                F.run(['codesign', '--verify', '--deep', '--strict', app])
         (stage / 'SHA256SUMS.txt').write_text(''.join(f'{hash_value}  {name}\n' for name, hash_value in sorted(actual.items())))
         stage.rename(final)
         if args.zip:
             archive_path = Path(str(final) + '.zip')
             try:
-                with zipfile.ZipFile(archive_path, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
-                    for path in sorted(final.rglob('*')):
-                        name = path.relative_to(destination).as_posix()
-                        if path.is_symlink():
-                            entry = zipfile.ZipInfo(name)
-                            entry.create_system = 3
-                            entry.external_attr = 0o120777 << 16
-                            archive.writestr(entry, os.readlink(path))
-                        else:
-                            archive.write(path, name)
+                if identity['os'] == 'mac':
+                    F.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', final, archive_path])
+                else:
+                    write_portable_zip(final, archive_path, destination)
             except BaseException:
                 archive_path.unlink(missing_ok=True)
                 raise
@@ -367,6 +377,19 @@ def package(args, output, identity):
             shutil.rmtree(stage)
         lock.unlink()
     F.log(f'浏览器交付包: {final}')
+
+
+def write_portable_zip(final, archive_path, destination):
+    with zipfile.ZipFile(archive_path, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(final.rglob('*')):
+            name = path.relative_to(destination).as_posix()
+            if path.is_symlink():
+                entry = zipfile.ZipInfo(name)
+                entry.create_system = 3
+                entry.external_attr = 0o120777 << 16
+                archive.writestr(entry, os.readlink(path))
+            else:
+                archive.write(path, name)
 
 
 def run(root, args, project, target_os, arches, version, actions):
