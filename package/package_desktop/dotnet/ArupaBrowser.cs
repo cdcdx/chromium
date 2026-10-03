@@ -1442,7 +1442,7 @@ namespace Arupa
         private readonly Interop.OnStringNative _onNavigationState;
         private readonly Interop.OnPresentationChangedNative _onPresentationChanged;   // MINOR25 presentation.v1
         private readonly Interop.OnStringNative _onNewWindow;
-        private readonly Interop.OnStringNative _onNewContents;
+        private readonly Interop.OnNewContentsNative _onNewContents;
         private readonly Interop.OnBrowserCommandNative _onBrowserCommand;
         /// <summary>F11/F12 请求，在内核 UI 线程触发。处理器须投递到宿主 UI 线程。
         /// 未订阅时按键继续交给网页。F11 切换宿主窗口；F12 创建/激活专用 OSR view 并调用 OpenDevTools。</summary>
@@ -1634,9 +1634,29 @@ namespace Arupa
                 try { handler((BrowserCommand)command); return 1; }
                 catch { return 0; } // Never unwind a managed exception through Chromium.
             };
-            _onNewContents = (u, json) => {
-                try { if (Interop.Utf8(json) is string value) NewContentsRequested?.Invoke(value); }
-                catch { /* The native pending view expires if the host cannot accept it. */ }
+            _onNewContents = (u, token, targetUrl, disposition, userGesture) =>
+            {
+                // The native callback carries fields, not a JSON pointer. Keep the IPC
+                // token as a decimal string so its full int64 value survives serialization.
+                try
+                {
+                    var handler = NewContentsRequested;
+                    if (handler == null)
+                    {
+                        Console.Error.WriteLine("[arupa][new-contents] No host listener for pending contents.");
+                        return;
+                    }
+                    handler(JsonSerializer.Serialize(new
+                    {
+                        token = token.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        url = Interop.Utf8(targetUrl), disposition, userGesture = userGesture != 0,
+                    }));
+                }
+                catch (Exception error)
+                {
+                    // Never unwind across the native callback, but retain a diagnostic.
+                    Console.Error.WriteLine($"[arupa][new-contents] Callback failed: {error.GetType().Name}");
+                }
             };
             _onNewWindow = (u, url) => NewWindowRequested?.Invoke(Interop.Utf8(url));
             _onShouldOverride = (u, url, m, r, g) =>
@@ -1763,21 +1783,35 @@ namespace Arupa
             // 新内核只复制 caller_size 内的完整字段，截断字段直接拒绝；缺尾字段置零 → wrapper 不同步也只
             // 少订阅新回调, 永不野跳崩 (断 FB-P012/P016/P018 一族)。旧 dll(MINOR<2)无此导出 →
             // EntryPointNotFoundException 回退完整信任版 (维持原行为)。
-            try
+            if (opts.PendingContentsToken is string pendingToken)
             {
-                int r = Interop.arupa_webview_create_checked(kernel,
-                    in cfg, (nuint)Marshal.SizeOf<Interop.WebViewConfig>(),
-                    in cbs, (nuint)Marshal.SizeOf<Interop.WebViewCallbacks>(),
-                    in osr, (nuint)Marshal.SizeOf<Interop.OsrSink>(),
-                    out _handle);
+                if (!long.TryParse(pendingToken, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out long token) || token <= 0)
+                    throw new ArgumentException("Pending contents token must be a positive int64.", nameof(opts));
+                // Adoption creates the ArupaWebView itself and attaches the original
+                // WebContents. Do not create/reload a replacement: that loses opener/POST.
+                int r = Interop.arupa_webview_adopt_pending(kernel, token, in cfg, in cbs, in osr, out _handle);
                 if (r != 0)
-                    throw new InvalidOperationException($"arupa_webview_create_checked failed: {r}");
+                    throw new InvalidOperationException($"arupa_webview_adopt_pending failed: {r}");
             }
-            catch (EntryPointNotFoundException)
+            else
             {
-                int r = Interop.arupa_webview_create(kernel, in cfg, in cbs, in osr, out _handle);
-                if (r != 0)
-                    throw new InvalidOperationException($"arupa_webview_create failed: {r}");
+                try
+                {
+                    int r = Interop.arupa_webview_create_checked(kernel,
+                        in cfg, (nuint)Marshal.SizeOf<Interop.WebViewConfig>(),
+                        in cbs, (nuint)Marshal.SizeOf<Interop.WebViewCallbacks>(),
+                        in osr, (nuint)Marshal.SizeOf<Interop.OsrSink>(),
+                        out _handle);
+                    if (r != 0)
+                        throw new InvalidOperationException($"arupa_webview_create_checked failed: {r}");
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    int r = Interop.arupa_webview_create(kernel, in cfg, in cbs, in osr, out _handle);
+                    if (r != 0)
+                        throw new InvalidOperationException($"arupa_webview_create failed: {r}");
+                }
             }
             // 装配了 PiP 回调 = 宿主接管画中画 → 让网页显示 PiP 入口。保持默认关闭时
             // document.pictureInPictureEnabled=false, 请求根本不会到内核 (也就不会回调)。
@@ -1785,7 +1819,6 @@ namespace Arupa
             if (Interop.arupa_kernel_abi_minor() >= 27)
                 Interop.arupa_webview_set_new_contents_callback(_handle,
                     Marshal.GetFunctionPointerForDelegate(_onNewContents), IntPtr.Zero);
-            if (opts.PendingContentsToken is string token) AdoptPendingContents(token);
         }
 
         private void OnPaintThunk(IntPtr u, IntPtr px, int w, int h, int dx, int dy, int dw, int dh)
@@ -1901,11 +1934,9 @@ namespace Arupa
                 Referer = Interop.Utf8(referer),
             });
 
+        [Obsolete("Set ArupaWebViewOptions.PendingContentsToken when creating a view instead.")]
         public void AdoptPendingContents(string token)
-        {
-            if (Interop.arupa_webview_adopt_pending(_handle, token) != 0)
-                throw new InvalidOperationException("new_contents_expired");
-        }
+            => throw new NotSupportedException("Pending contents must be adopted when creating a view.");
         public async Task<bool> RequestCloseAsync()
         {
             NativeEvalRequests.Request? request;
@@ -2049,7 +2080,14 @@ namespace Arupa
         public void SetRenderActive(bool active) => Interop.arupa_webview_set_render_active(_handle, active ? 1 : 0);
         public string? GetImeState() => Interop.TakeOwned(Interop.arupa_webview_get_ime_state(_handle));
         public bool UpdateIme(string text, int selection, bool commit, long document)
-            => document >= 0 && Interop.arupa_webview_update_ime(_handle, text, selection, commit ? 1 : 0, (ulong)document) == 0;
+        {
+            if (_handle == IntPtr.Zero || document < 0 || text == null || text.Length > 32768) return false;
+            // The C ABI is (view, action, UTF-8 text, selectionStart, selectionEnd), returning void.
+            // It queues the edit; true means submitted, not a native status code.
+            int caret = Math.Clamp(selection, 0, text.Length);
+            Interop.arupa_webview_update_ime(_handle, commit ? 1 : 0, text, caret, caret);
+            return true;
+        }
         public string? GetNetworkSettings()
             => Interop.TakeOwned(Interop.arupa_webview_get_network_settings(_handle));
 

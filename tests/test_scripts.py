@@ -236,7 +236,30 @@ class WorkspaceTest(unittest.TestCase):
         (out / 'hyphen-data/hyph-en-us.hyb').write_bytes(b'fixture')
         for name in ('content_shell.pak', 'icudtl.dat', 'snapshot_blob.bin', 'arupa_render'):
             (out / name).write_bytes(b'fixture')
+        for name in ('gen/extensions/strings/extensions_strings_en-US.pak',
+                     'gen/extensions/extensions_renderer_generated_resources.pak',
+                     'gen/components/test resources/fixture.pak'):
+            resource = out / name
+            resource.parent.mkdir(parents=True, exist_ok=True)
+            resource.write_bytes(name.encode())
         return out
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS package integration')
+    def test_mac_package_rejects_missing_extension_resources(self):
+        out = self.package_fixture()
+        (out / 'libarupa_kernel.dylib').write_bytes(struct.pack('<IiiIIIII', 0xfeedfacf, 0x100000c, 0, 6, 0, 0, 0, 0))
+        for relative in ('gen/extensions/strings/extensions_strings_en-US.pak',
+                         'gen/extensions/extensions_renderer_generated_resources.pak'):
+            path = out / relative
+            content = path.read_bytes()
+            path.unlink()
+            result = subprocess.run(['bash', str(self.root / 'scripts/packaging/package-arupa_desktop.sh'),
+                                     '--os', 'mac', '--arch', 'arm64', '--ver', VERSION, '--out', str(out)],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(relative, result.stderr + result.stdout)
+            self.assertFalse((self.root / f'dist/arupa-mac-arm64-{VERSION}-static-1').exists())
+            path.write_bytes(content)
 
     @unittest.skipUnless(sys.platform == 'darwin', 'macOS package integration')
     def test_mac_package_rejects_missing_hyphen_data(self):
@@ -270,8 +293,12 @@ class WorkspaceTest(unittest.TestCase):
         self.assertTrue(Path(str(delivery) + '.zip').is_file())
         self.assertEqual((delivery / 'docs/readme.txt').read_text(), 'desktop')
         self.assertTrue((delivery / '.hidden').is_file())
-        self.assertTrue((delivery / 'plugin-runtime/runtime.js').is_file())
-        self.assertFalse((delivery / 'kernel/plugin-runtime').exists())
+        self.assertTrue((delivery / 'kernel/plugin-runtime/runtime.js').is_file())
+        self.assertFalse((delivery / 'plugin-runtime').exists())
+        for resource in (out / 'gen').rglob('*.pak'):
+            relative = resource.relative_to(out)
+            self.assertEqual((delivery / 'kernel' / relative).read_bytes(), resource.read_bytes())
+            self.assertIn('kernel/' + relative.as_posix(), (delivery / 'SHA256SUMS.txt').read_text())
         self.assertFalse((delivery / 'package_android').exists())
         self.assertIn('docs/readme.txt', (delivery / 'SHA256SUMS.txt').read_text())
         with zipfile.ZipFile(str(delivery) + '.zip') as archive:

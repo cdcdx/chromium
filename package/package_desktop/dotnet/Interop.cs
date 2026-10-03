@@ -19,8 +19,8 @@ namespace Arupa
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern IntPtr arupa_webview_get_ime_state(IntPtr view);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int arupa_webview_update_ime(IntPtr view,
-            [MarshalAs(UnmanagedType.LPUTF8Str)] string text, int selection, int commit, ulong document);
+        internal static extern void arupa_webview_update_ime(IntPtr view, int action,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string text, int selectionStart, int selectionEnd);
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int arupa_webview_open_devtools(IntPtr inspected, IntPtr frontend);
@@ -31,8 +31,12 @@ namespace Arupa
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern void arupa_webview_set_new_contents_callback(IntPtr view, IntPtr callback, IntPtr user);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        internal delegate void OnNewContentsNative(IntPtr user, long token, IntPtr targetUrl,
+            int disposition, int userGesture);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int arupa_webview_adopt_pending(IntPtr view, [MarshalAs(UnmanagedType.LPUTF8Str)] string token);
+        internal static extern int arupa_webview_adopt_pending(IntPtr kernel, long token,
+            in WebViewConfig config, in WebViewCallbacks callbacks, in OsrSink osr, out IntPtr view);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern void arupa_webview_request_close(IntPtr view, IntPtr callback, IntPtr user);
 

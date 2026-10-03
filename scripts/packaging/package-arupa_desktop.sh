@@ -313,6 +313,24 @@ package_arch() {
   done
   [[ ${any_pak} -eq 1 ]] || err "out 里没有任何 *.pak: ${out}"
 
+  # Chromium leaves extension/component packs under gen/. The runtime uses the
+  # same relative paths as a fallback, so root-only pak collection is incomplete.
+  local relative gen_paks=0
+  if [[ -d "${out}/gen" ]]; then
+    while IFS= read -r -d '' f; do
+      relative="${f#"${out}/"}"
+      mkdir -p "${dest}/$(dirname "${relative}")"
+      cp -f "${f}" "${dest}/${relative}"
+      gen_paks=$((gen_paks+1))
+    done < <(find "${out}/gen" -type f -name '*.pak' -print0)
+  fi
+  log "  gen/**/*.pak: ${gen_paks} 个（保留运行时相对路径）"
+  for relative in gen/extensions/strings/extensions_strings_en-US.pak \
+                  gen/extensions/extensions_renderer_generated_resources.pak; do
+    [[ -f "${dest}/${relative}" || -f "${dest}/$(basename "${relative}")" ]] \
+      || err "缺必需的扩展资源: ${relative}（请先构建内核资源）"
+  done
+
   # icudtl / 快照
   want "${out}/icudtl.dat" "${dest}" ""
   local n_snap=0
