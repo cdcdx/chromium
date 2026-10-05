@@ -48,7 +48,29 @@ def delivery_props(c: Ctx, delivery: Path) -> list:
     props = [f"-p:ArupaDeliveryRoot={delivery}"]
     if c.os != "mac":
         props.append(f"-p:ArupaSdkDir={delivery}")
+        # 交付顶层门面若是 ref 程序集（~4KB，无实现），改用稳定副本引用，
+        # 避免构建中途交付目录被外部进程还原导致 CS0246。
+        stable = stable_facade(c, delivery)
+        if stable:
+            props.append(f"-p:ArupaKernelAssembly={stable}")
     return props
+
+
+FACADE_MIN_BYTES = 50_000  # ref/reference-only 程序集只有 ~4KB
+# 稳定副本位置: PC 仓内（交付目录会被外部进程按打包快照恢复，不能放那儿）。
+STABLE_FACADE = PC_REPO / "build" / "kernel-facade" / "ArupaKernel.dll"
+
+
+def facade_bytes_ok(p: Path) -> bool:
+    return p.exists() and p.stat().st_size >= FACADE_MIN_BYTES
+
+
+def stable_facade(c: Ctx, delivery: Path) -> Path | None:
+    """稳定副本存在就返回它（引用一律走稳定副本，规避交付目录构建中被还原的竞态）；
+    否则返回 None（走默认 HintPath = 交付顶层）。ensure_kernel_facade 会在构建前刷新/创建副本。"""
+    if facade_bytes_ok(STABLE_FACADE):
+        return STABLE_FACADE
+    return None
 
 
 def compile_props(c: Ctx) -> list:
@@ -85,15 +107,41 @@ def ensure_kernel_facade(c: Ctx, delivery: Path):
         return
     if not proj.exists():
         return
-    for cand in (d / "ArupaKernel.dll",
-                 d / "bin" / "x64" / "Release" / "net10.0" / "ArupaKernel.dll"):
-        if cand.exists():
-            return
-    log(f"交付只带内核门面源码 —— 先用它自带工程编出 ArupaKernel.dll: {proj}")
-    if common.DRY_RUN:
-        log(f"(dry-run) dotnet build {proj} -c Release -p:Platform=x64")
+    # 门面有效性: 必须是完整程序集。~4KB 的是 ref/reference-only 程序集（只有签名没有实现），
+    # 引用它宿主会满屏 CS0246 "未能找到 Arupa/ArupaWebView/ArupaKernel"。
+    # (2026-10-04: static-5/6 交付出包时顶层 dotnet/ArupaKernel.dll 就是 ref 程序集，
+    #  且交付目录会被外部进程按打包时快照恢复，手修会被还原 —— 所以每次构建现场自愈。)
+    MIN_FACADE_BYTES = 50_000
+
+    def facade_ok(p: Path) -> bool:
+        return p.exists() and p.stat().st_size >= MIN_FACADE_BYTES
+
+    top = d / "ArupaKernel.dll"
+    if facade_ok(top):
+        # 稳定副本始终与顶层同步，构建中引用一律走稳定副本（delivery_props），
+        # 这样构建中途交付目录被外部进程还原也不会打断编译。
+        STABLE_FACADE.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(top, STABLE_FACADE)
         return
-    run([dotnet(), "build", str(proj), "-c", "Release", "-p:Platform=x64"], cwd=PC_REPO)
+    if not facade_ok(STABLE_FACADE):
+        log(f"交付门面缺失或只有 ref 程序集({top.stat().st_size}B)，且无稳定副本 —— 现场编译: {proj}")
+        if common.DRY_RUN:
+            log(f"(dry-run) dotnet build {proj} -c Release -p:Platform=x64")
+            return
+        run([dotnet(), "build", str(proj), "-c", "Release", "-p:Platform=x64"], cwd=PC_REPO)
+        built = d / "bin" / "x64" / "Release" / "net10.0" / "ArupaKernel.dll"
+        if not facade_ok(built):
+            built = d / "bin" / "Release" / "net10.0" / "ArupaKernel.dll"
+        if facade_ok(built):
+            log(f"现场编译完成 —— 部署门面: {built} -> {top} 和 {STABLE_FACADE}")
+            top.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(built, top)
+            STABLE_FACADE.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(built, STABLE_FACADE)
+        else:
+            err(f"现场编译后仍没有可用的 ArupaKernel.dll（顶层与 bin 产物都缺失或过小）: {d}")
+    else:
+        log(f"交付顶层门面无效({top.stat().st_size}B) —— 沿用稳定副本: {STABLE_FACADE}")
 
 
 def resolve_delivery(c: Ctx) -> Path:
@@ -261,6 +309,70 @@ SINGLE_FILE_ARGS = ["-p:PublishSingleFile=true",          # 单 exe 自带运行
                     "-p:PublishReadyToRun=true",                      # 换启动速度
                     "-p:DebugType=none", "-p:DebugSymbols=false"]
 
+# ── 原生宿主形态（内核静态链进浏览器进程 EXE）────────────────────────────────
+# 背景: Chromium 的 Windows 沙箱在 CreateProcess(CREATE_SUSPENDED) 之后、ResumeThread
+# 之前做跨进程地址交接，那一刻只有**主 EXE 镜像**被映射（实测挂起态连 PEB 都读不到）。
+# 所以 broker 侧用来交接的符号必须住在主镜像里 —— 库式嵌入（浏览器代码在 arupa_kernel.dll、
+# 由 .NET 宿主 EXE 加载）先天不满足，表现为 GPU 子进程 err=64/57 → FATAL。
+# 原生宿主动作: 把内核静态链进浏览器进程 EXE（arupa_desktop），子进程由**同一个 EXE** 拉起。
+#
+# macOS/Linux 的沙箱不做跨进程地址交接，库式嵌入本就安全 —— 那边这个形态是**可选能力**，
+# 不是沙箱必需。装配逻辑三平台共用一套，是否启用由交付件决定。
+#
+# 形态判据取**交付件自身**: kernel/ 下有没有原生宿主（arupa_desktop[.exe]）。
+# 不用开关/环境变量，也**不按平台硬编** —— 产物在不在才是事实，开关会和产物不一致。
+_DESKTOP_HOST_BY_OS = {
+    "win": "arupa_desktop.exe",
+    "mac": "arupa_desktop",
+    "linux": "arupa_desktop",
+}
+_NATIVE_HOST_AS_BY_OS = {
+    "win": "NomadBrowser.exe",
+    "mac": "NomadBrowser",
+    "linux": "NomadBrowser",
+}
+_SUBPROCESS_HOST_BY_OS = {
+    "win": "arupa_render.exe",
+    "mac": "arupa_render",
+    "linux": "arupa_render",
+}
+
+# Linux 的 OOP 内核宿主工程/产物名（Windows 走原生宿主、不经过它；macOS 走 Mac 命名版本）。
+# 产物名与 NomadBrowser.Avalonia.Linux/Program.cs::ResolveKernelHostPath 的探测名一致。
+LINUX_KERNELHOST_PROJ = (PC_REPO / "Posix" / "NomadBrowser.Linux.KernelHost"
+                         / "NomadBrowser.Linux.KernelHost.csproj")
+LINUX_KERNELHOST_EXE = "NomadBrowser.Linux.KernelHost"
+
+
+def desktop_host_name(c: Ctx) -> str:
+    """原生宿主产物名（交付里那一件）。与 kernel.py 的 desktop_artifact 同源约定。"""
+    return _DESKTOP_HOST_BY_OS.get(c.os, "arupa_desktop")
+
+
+def native_host(c: Ctx, delivery: Path):
+    """交付里若带原生宿主则返回它，否则 None（= 库式嵌入形态）。
+
+    判据取**交付件自身**，三平台同一套逻辑，不按平台硬编。默认只有 Windows 交付
+    带原生宿主（见 scripts/build.py 生成的 delivery 根目标里那条 is_win 分支），
+    macOS/Linux 交付里没有它 → 返回 None → 装配行为与今天完全一致。
+    """
+    p = delivery / "kernel" / desktop_host_name(c)
+    return p if p.is_file() else None
+
+
+def native_host_publish_args() -> list:
+    """原生宿主形态的 publish 参数。与 SINGLE_FILE_ARGS 只差一处，但那一处是致命的：
+
+      🔴 单文件会把 **NomadBrowser.dll 嵌进 exe**，磁盘上不再留它。原生宿主形态的
+         浏览器进程是原生 EXE，靠 hostfxr 加载 NomadBrowser.dll +
+         NomadBrowser.runtimeconfig.json —— 这两个文件必须真实躺在磁盘上，否则启动期
+         hostfxr 找不到程序集。
+         （--self-contained true 保留，所以"客户机零 .NET 依赖"这条不破。）
+    """
+    return ["-p:PublishSingleFile=false",
+            "-p:PublishReadyToRun=true",     # 换启动速度
+            "-p:DebugType=none", "-p:DebugSymbols=false"]
+
 
 def publish_updater(dn: str, c: Ctx, cfg: str, out: Path):
     """独立更新器: 必须在主程序退出后仍能覆盖主程序文件 ⇒ 独立自包含发布。
@@ -320,6 +432,112 @@ def strip_pdbs(payload: Path):
         n += 1
     if n:
         log(f"  剔 PDB: {n} 个 / {total / 1048576:.0f} MB")
+
+
+def assert_native_host_exports(host: Path):
+    """原生宿主形态的成败全押在一件事上: 内核 C API 真的从主镜像导出。
+
+    EXE 目标的导出表来自 arupa_kernel_capi_*.cc 里的导出标注（source_set 把目标文件
+    直接放在链接行上）。若哪天有人把 source_set 改成 static_library、或加了 /OPT:REF
+    之外的去符号手段，"导出表为空"这件事在编译期**完全不报错** —— 要等到装机后托管侧
+    P/Invoke 炸 DllNotFoundException，或者 Windows 沙箱又回到 err=64。
+
+    导出名必然出现在符号表里: PE 的导出目录、ELF 的 .dynsym、Mach-O 的符号表都会带上
+    它。按原始字节找一次即可，三平台通用。缺失 = 铁定坏，直接拦在出包这一步。
+    """
+    needle = b"arupa_kernel_abi_minor"
+    # 分块扫，不整个读进内存（主镜像是 ~230MB 的 Chrome，read_bytes() 会白占一份）。
+    # 块间留 needle-1 字节重叠，避免刚好跨块的匹配被漏掉。
+    overlap = len(needle) - 1
+    found = False
+    tail = b""
+    with host.open("rb") as fh:
+        while chunk := fh.read(8 << 20):
+            if needle in (tail + chunk):
+                found = True
+                break
+            tail = chunk[-overlap:] if overlap else b""
+    if not found:
+        err(f"{host.name} 里找不到内核 C API 导出（{needle.decode()}）—— 原生宿主形态下内核必须"
+            f"静态链进主镜像并导出。常见成因: BUILD.gn 里 arupa_kernel_static 被从 "
+            f"source_set 改成了 static_library（静态库按'被引用才拉取'链接，C API 链接期"
+            f"无人引用 → 目标文件不进 EXE → 导出表为空）。")
+
+
+def install_native_host(c: Ctx, host: Path, payload: Path):
+    """把原生宿主装成主程序（Windows: NomadBrowser.exe；Linux: NomadBrowser）。
+
+    为什么必须**覆盖** publish 产出的那个 apphost: 那是个 ~217KB 的小启动器，双击它走的
+    是库式嵌入路径（内核在 arupa_kernel.dll 里）—— Windows 上沙箱照旧 err=64。换汤不换药。
+    为什么沿用 NomadBrowser 这个名字: 快捷方式、更新器、tasklist 检查、
+    Environment.ProcessPath 全都不用动，换掉的只是"这个 exe 是谁编的"。
+    """
+    assert_native_host_exports(host)
+    if c.os == "mac":
+        # macOS 的主程序在 .app bundle 里（Contents/MacOS/...），覆盖它还要重签；
+        # 那是一条独立链路，未实现。显式拦下，别让半个装配静默产出坏包。
+        err("macOS 的原生宿主装配需要改写 .app bundle 内的可执行文件并重签，尚未实现；"
+            "请勿在 macOS 交付里携带 arupa_desktop。")
+    dst = payload / _NATIVE_HOST_AS_BY_OS[c.os]
+    old = dst.stat().st_size if dst.exists() else 0
+    shutil.copy2(host, dst)
+    log(f"  原生宿主主程序: {host.name} -> {dst.name}"
+        f"（{host.stat().st_size / 1048576:.0f} MB，替换原 apphost {old / 1024:.0f} KB）")
+
+    # 资产目录里那份同名的 EXE 是给"内核交付包单独使用"的，载荷里主程序已有一份 ——
+    # 同一份 230MB 的浏览器躺两遍没意义。顺手把已经不被任何路径使用的子进程薄壳
+    # （原生宿主形态下子进程就是主程序本身）一起清掉，只报不拦。
+    for name in (desktop_host_name(c), _SUBPROCESS_HOST_BY_OS[c.os]):
+        stale = payload / "arupa-desktop" / name
+        if stale.exists():
+            size = stale.stat().st_size
+            stale.unlink()
+            log(f"  载荷去重: arupa-desktop/{name}（{size / 1048576:.0f} MB）"
+                f" —— 原生宿主形态下主程序兼任子进程，不再需要它")
+
+    # arupa_kernel.dll 保留不删: 原生宿主形态下沙箱路径确实不再用它（KernelModuleBinding 会把
+    # arupa_kernel 解到主镜像），但它仍是开发工具（Test/ArupaCdpHeadersProbe 在 EXE 形态下
+    # 靠它而不是靠主镜像 —— 把 EXE 当库加载时 CRT 静态初始化不跑，C API 起不来）。
+    # 要瘦掉这 230MB 得先给这些工具换成"主镜像外挂"的用法，属于独立改动。
+    kernel_dll = payload / "arupa-desktop" / "arupa_kernel.dll"
+    if kernel_dll.exists():
+        warn(f"载荷里仍带 arupa-desktop/arupa_kernel.dll（{kernel_dll.stat().st_size / 1048576:.0f} MB）"
+             f" —— 原生宿主形态的运行时不再需要它，保留是为了开发工具；要瘦身需先改工具的内核获取方式")
+
+
+def publish_linux_kernelhost(c: Ctx, cfg: str, delivery: Path, kernel_dir: Path):
+    """把 OOP 内核宿主发布进交付的 kernel/ 目录（Linux 便携包）。
+
+    为什么 Linux 也有 KernelHost（而 Windows 没有）：
+      Windows 必须走"原生宿主"（内核静态链进主镜像）—— Chromium 的 Windows 沙箱在
+      CreateProcess(CREATE_SUSPENDED) 与 ResumeThread 之间做**跨进程地址交接**，那一刻只有
+      主 EXE 镜像被映射，broker 侧要交接的符号必须住在主镜像里。macOS/Linux 的沙箱不交接
+      地址（策略编译成字符串交子进程自 sandbox_init），库式嵌入/OOP 本身就是安全形态。
+      故 Linux 与 Mac 同走 OOP，交付里带一个独立宿主进程。
+
+    为什么装进 kernel/ 而不是别处（两条硬约束各钉一个）：
+      · 宿主自己：NomadBrowser.Avalonia.Linux/Program.cs::ResolveKernelHostPath 按
+        <ArupaDir>/NomadBrowser.Linux.KernelHost 探，而 ArupaDir 就是便携包的 kernel/。
+      · chromium：按**主可执行文件所在目录**找 icudtl.dat 与 *.pak，宿主必须与内核件同目录。
+
+    自包含策略与主程序**保持一致**：主程序的 linux publish 不带 --self-contained（框架依赖），
+      宿主也不带 —— 否则包体平白多 ~70MB，而且"主程序跑得起来"就已经隐含"机器上有 .NET 运行时"。
+    """
+    if not LINUX_KERNELHOST_PROJ.is_file():
+        warn(f"缺 Linux 内核宿主工程 {LINUX_KERNELHOST_PROJ} —— 交付里不会有 "
+             f"{LINUX_KERNELHOST_EXE}，OOP 形态起不来内核（UI 侧会报找不到宿主）")
+        return
+    dn = dotnet()
+    log(f"[kernelhost] publish {LINUX_KERNELHOST_PROJ.name} -> {kernel_dir}")
+    # -f net10.0：与主程序同样的理由（多 TFM 工程 publish 不带 -f 会 NETSDK1047）。
+    run([dn, "publish", str(LINUX_KERNELHOST_PROJ), "-c", cfg, "-r", rid(c), "-f", "net10.0",
+         f"-p:ArupaDeliveryRoot={delivery}", "-o", str(kernel_dir)], cwd=PC_REPO)
+    exe = kernel_dir / LINUX_KERNELHOST_EXE
+    if not exe.is_file():
+        err(f"{LINUX_KERNELHOST_EXE} 没被发布出来（{kernel_dir}）—— 无扩展名的 apphost 缺失，"
+            f"启动时 OOP 形态会直接起不来内核")
+    exe.chmod(0o755)        # zip/tar 往返可能丢可执行位，显式补一次
+    log(f"  内核宿主: kernel/{LINUX_KERNELHOST_EXE}（{exe.stat().st_size / 1048576:.1f} MB）")
 
 
 def warn_running_browser():
@@ -442,9 +660,12 @@ def do_package(c: Ctx):
              *delivery_props(c, delivery)], cwd=PC_REPO)
     else:
         # 与 assemble-release-payload.ps1 同款出货形态: 单文件 exe + 原生库/runtimes 散放。
+        # 原生宿主交付（kernel\ 下带 arupa_desktop.exe）改走 native_host_publish_args()
+        # —— 那种形态**不能**单文件，原因见该函数注释（hostfxr 要磁盘上真实的 dll）。
+        style = native_host_publish_args() if native_host(c, delivery) else SINGLE_FILE_ARGS
         run([dn, "publish", str(main_proj), "-c", cfg, "-r", rid(c),
              "--self-contained", "true", "--no-restore", "-o", str(payload),
-             "-p:Platform=x64", *SINGLE_FILE_ARGS,
+             "-p:Platform=x64", *style,
              *delivery_props(c, delivery), *compile_props(c)], cwd=PC_REPO)
         publish_updater(dn, c, cfg, payload)
         publish_windows_updater(dn, c, cfg, payload / "Helpers" / "WindowsUpdater")
@@ -456,8 +677,19 @@ def do_package(c: Ctx):
     # dist/ 交付件两处都能直接跑（之前只有 dist 那一份带内核，从 out/.../payload 启动必崩）。
     if c.os == "win":
         shutil.copytree(delivery / "kernel", payload / "arupa-desktop", dirs_exist_ok=True)
+        # 原生宿主: 接管成主程序（覆盖上面 publish 出的那个 apphost）。
+        # 必须在 copytree 之后 —— 它要顺手清掉资产目录里那份同名的 EXE。
+        host = native_host(c, delivery)
+        if host:
+            install_native_host(c, host, payload)
         assemble_webui(payload)
         strip_pdbs(payload)
+    elif c.os == "linux":
+        # Linux 无 bundle: 原生宿主（若交付带了）直接覆盖 payload/NomadBrowser。
+        # 默认交付不带（见 native_host 注释），这里恒为 None，行为与今天一致。
+        host = native_host(c, delivery)
+        if host:
+            install_native_host(c, host, payload)
 
     # 组装交付目录
     n = next_delivery_no(c)
@@ -477,6 +709,9 @@ def do_package(c: Ctx):
         if c.os == "linux":
             # Linux 没有 bundle 概念：便携目录 = 主程序 + kernel/ + Resources/ + run.sh
             shutil.copytree(delivery / "kernel", stage / "kernel", dirs_exist_ok=True)
+            # OOP 内核宿主必须落在 kernel/（理由见 publish_linux_kernelhost）。放在 copytree
+            # 之后：交付根的 kernel/ 是产出方的目录，不往里写；只写我们自己的交付暂存。
+            publish_linux_kernelhost(c, cfg, delivery, stage / "kernel")
             res = PC_REPO / "dist" / "Debug" / "Resources"
             if res.is_dir():
                 shutil.copytree(res, dst / "Resources", dirs_exist_ok=True)
@@ -486,14 +721,24 @@ def do_package(c: Ctx):
                 "exec ./NomadBrowser \"$@\"\n", encoding="utf-8")
             (stage / "run.sh").chmod(0o755)
 
-    # 内核件必须真的进了载荷，否则这包装起来也跑不起来
+    # 内核件必须真的进了载荷，否则这包装起来也跑不起来。
+    # 内核形态不同，该查的标记物也不同：
+    #   · 库式嵌入    → arupa-desktop\arupa_kernel.dll（内核本体就是它）
+    #   · 原生宿主形态 → arupa-desktop\arupa_plugin_host.exe
+    #     （内核在主程序里，磁盘上没有 arupa_kernel.dll 这个名字了 —— 但 arupa_plugin_host.exe
+    #       两种形态都在，且同属"内核件进没进载荷"这件事，用它当标记物最稳）
+    win_marks = [dst / "NomadBrowser.exe",
+                 dst / "Resources" / "index.html",
+                 dst / "NomadBrowser.Updater.exe",
+                 dst / "Helpers" / "WindowsUpdater" / "NomadBrowser.Windows.Updater.exe"]
+    if native_host(c, delivery):
+        win_marks.append(dst / "arupa-desktop" / "arupa_plugin_host.exe")
+    else:
+        win_marks.append(dst / "arupa-desktop" / "arupa_kernel.dll")
     marks = {"mac": [dst / "Contents" / "Resources" / "arupa-mac"],
-             "linux": [stage / "kernel"],
-             "win": [dst / "NomadBrowser.exe",
-                     dst / "arupa-desktop" / "arupa_kernel.dll",
-                     dst / "Resources" / "index.html",
-                     dst / "NomadBrowser.Updater.exe",
-                     dst / "Helpers" / "WindowsUpdater" / "NomadBrowser.Windows.Updater.exe"]}[c.os]
+             # Linux 便携包：内核件在 stage/kernel/，OOP 宿主必须与它同目录（缺失即起不来内核）。
+             "linux": [stage / "kernel", stage / "kernel" / LINUX_KERNELHOST_EXE],
+             "win": win_marks}[c.os]
     missing = [str(m) for m in marks if not m.exists()]
     if missing:
         err("载荷缺必需件: " + ", ".join(missing))

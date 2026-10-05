@@ -33,6 +33,21 @@ from . import common
 MODULE_RELDIR = "chrome/browser/arupa_desktop"
 KERNEL_TARGET = f"{MODULE_RELDIR}:arupa_kernel"
 RENDER_TARGET = f"{MODULE_RELDIR}:render"
+# 原生宿主形态: 内核静态链进浏览器进程 EXE，子进程由**同一个 EXE** 拉起。
+# 三平台都能编这个目标，产物名随平台（arupa_desktop.exe / arupa_desktop）；
+# 是否编、是否随交付一律以**构建图里有没有该目标**为准 —— 老内核仓没有它，未启用的
+# 平台交付根也不带它，两种情况都表现为"图里没有"，行为一致（见 desktop_host_in_build）。
+DESKTOP_TARGET = f"{MODULE_RELDIR}:arupa_desktop"
+_DESKTOP_ARTIFACT_BY_OS = {
+    "win": "arupa_desktop.exe",
+    "mac": "arupa_desktop",
+    "linux": "arupa_desktop",
+}
+
+
+def desktop_artifact(c: Ctx) -> str:
+    """原生宿主产物名（随平台）。与 browser.py 的 desktop_host_name 同源约定。"""
+    return _DESKTOP_ARTIFACT_BY_OS.get(c.os, "arupa_desktop")
 # Android 交付件需要 v8_context_snapshot_64.bin（v8 上下文快照）。
 # 注意：ninja 目标名不带 gn 的前导 "//"（build.ninja 里写作
 # tools/v8_context_snapshot$:generate_v8_context_snapshot）
@@ -306,6 +321,31 @@ def target_in_graph(c: Ctx, target: str) -> bool:
     return ninja_name in f.read_text(encoding="utf-8", errors="replace")
 
 
+def desktop_host_in_build(c: Ctx) -> bool:
+    """构建图里有没有原生宿主目标（arupa_desktop）。
+
+    判据用**构建图**而不是平台/源码/开关: 目标进图才算数。三平台都能编这个目标，
+    但它只在交付根的 deps 里被带上时才进图（scripts/build.py 生成的 delivery 目标
+    默认只在 Windows 带）—— 所以老内核仓、以及未启用的平台，这里都是 False，行为
+    与"根本没有这个目标"完全一致。
+    """
+    return target_in_graph(c, DESKTOP_TARGET)
+
+
+def required_artifacts(c: Ctx) -> list:
+    """必带件清单（{v8} 未展开，见 artifact_names）。
+
+    启用原生宿主时**多一件**（arupa_desktop[.exe]），而不是把 arupa_kernel 内核模块 /
+    arupa_render 换掉 —— 那两件仍是开发工具的依赖: Test/ArupaCdpHeadersProbe 在原生
+    宿主形态下靠内核模块（把浏览器 EXE 当库 LoadLibrary 时 CRT 静态初始化不跑，C API
+    起不来）。摘掉它们的时机 = 工具改完，属独立改动。
+    """
+    req = list(ARTIFACTS[c.os]["required"])
+    if desktop_host_in_build(c):
+        req.append(desktop_artifact(c))
+    return req
+
+
 def resolve_targets(c: Ctx):
     targets = [KERNEL_TARGET]
     if target_in_graph(c, RENDER_TARGET):
@@ -313,6 +353,13 @@ def resolve_targets(c: Ctx):
     else:
         warn(f"构建图里没有 {RENDER_TARGET}（子进程薄壳）—— 只编内核本体，"
              f"打包时若缺 render 会直接拦下")
+    if target_in_graph(c, DESKTOP_TARGET):
+        # 三平台都编：原生宿主在 macOS/Linux 上不是沙箱必需（那边的沙箱无跨进程内存写），
+        # 但形态可选（见 arupa_desktop_main.cc 头部）。目标进图 = 有人显式要它，就编。
+        targets.append(DESKTOP_TARGET)
+    elif c.os == "win":
+        warn(f"构建图里没有 {DESKTOP_TARGET}（原生宿主）—— 交付走库式嵌入形态，"
+             f"Windows 沙箱要靠 ARUPA_UNSAFE_DISABLE_SANDBOX 才起得来")
     if c.os == "android":
         # 门面 Java 层（classes.jar 主体）—— 与 .so 同源，出 AAR 必需。
         if target_in_graph(c, JAVA_FACE_TARGET):
@@ -351,7 +398,7 @@ def do_build(c: Ctx):
         if not run_build(c, targets):
             err("编译失败")
 
-    required = [r.format(v8=V8_ARCH.get(c.arch, c.arch)) for r in ARTIFACTS[c.os]["required"]]
+    required = [r.format(v8=V8_ARCH.get(c.arch, c.arch)) for r in required_artifacts(c)]
     missing = [f for f in required if not (c.out_dir / f).exists()]
     for f in required:
         p = c.out_dir / f
@@ -505,8 +552,7 @@ def copy_gen_paks(c: Ctx, kernel_dir: Path) -> int:
         return 0        # Android 的资源走 AAR/骨架里的 arupa_kernel.pak，不吃 gen/ 树
     gen = c.out_dir / "gen"
     if not gen.is_dir():
-        warn(f"构建目录没有 gen/（{gen}）—— 运行时资源不会随包，宿主起渲染进程会缺 pak")
-        return 0
+        err(f"构建目录没有 gen/（{gen}）—— 运行时资源不会随包，宿主起渲染进程会缺 pak")
     n = 0
     total = 0
     for src in gen.rglob("*.pak"):
@@ -517,6 +563,12 @@ def copy_gen_paks(c: Ctx, kernel_dir: Path) -> int:
         total += src.stat().st_size
     if n:
         log(f"  资源: gen/**/*.pak {n} 个 / {total / 1048576:.1f} MB -> kernel/gen/")
+    # 两个硬必需（口径同 package-arupa_desktop.sh）：缺了不是功能降级，是运行期
+    # CHECK 崩 —— FB-P095（扩展层本地化错误）/ FB-P104（扩展 renderer 绑定 JS 不在）。
+    for rel in ("gen/extensions/strings/extensions_strings_en-US.pak",
+                "gen/extensions/extensions_renderer_generated_resources.pak"):
+        if not (kernel_dir / rel).is_file():
+            err(f"缺必需的扩展资源: {rel}（构建目录 {gen} 里没有 —— 先编内核资源目标）")
     return n
 
 
@@ -1102,7 +1154,7 @@ def artifact_names(c: Ctx) -> tuple[list, list]:
         return [snap if "{v8}" in i else i.format(v8=V8_ARCH.get(c.arch, c.arch))
                 for i in items]
 
-    return _fmt(ARTIFACTS[c.os]["required"]), _fmt(ARTIFACTS[c.os]["optional"])
+    return _fmt(required_artifacts(c)), _fmt(ARTIFACTS[c.os]["optional"])
 
 
 def stage_kernel_files(c: Ctx, kernel_dir: Path):

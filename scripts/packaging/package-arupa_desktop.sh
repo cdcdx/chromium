@@ -303,6 +303,20 @@ package_arch() {
   want "${PAK_SRC}" "${dest}" ""
   want "${out}/devtools_resources.pak" "${dest}" "ninja 目标 chrome/browser/arupa_desktop:arupa_devtools_resources"
 
+  # 原生宿主（可选形态）：内核静态链进 arupa_desktop，子进程由同一可执行文件经 --type=
+  # 分流拉起。macOS/Linux 的沙箱（Seatbelt / Linux 命名空间）把策略交给子进程自己套用，
+  # 没有跨进程内存写，libarupa_kernel.{dylib,so} 的库式嵌入本来就是安全形态 —— 所以这一件
+  # **不是必需件**：构建图里带了就随包（下游装配层 kernel/ 里见到它就切原生宿主装配），
+  # 没带就维持库式嵌入。三平台同一套判据，不按平台硬编。
+  local cand
+  for cand in arupa_desktop arupa_desktop.exe; do
+    if [[ -f "${out}/${cand}" ]]; then
+      want "${out}/${cand}" "${dest}" "ninja 目标 chrome/browser/arupa_desktop:arupa_desktop（原生宿主形态）"
+      log "  原生宿主形态: 随包带 ${cand}，下游会据此改走原生宿主装配"
+      break
+    fi
+  done
+
   # 其余 *.pak（ui_resources / extensions_* 等）：必须有这些 UI 资源，缺 warn
   local f any_pak=0
   for f in "${out}"/*.pak; do

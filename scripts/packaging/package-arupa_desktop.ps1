@@ -45,6 +45,8 @@
 # 复制映射（OUT = src\out\arupa-win-{arch}-{ver}-static）:
 #   OUT\arupa_kernel.dll        → kernel\（内核本体，必需）
 #   OUT\arupa_render.exe              → kernel\（渲染进程薄壳，必需）
+#   OUT\arupa_desktop.exe       → kernel\（**有就带**：方案 A 原生宿主，内核静态链进 EXE、
+#                                       子进程为同一 EXE。下游 builder/browser.py 按它在不在切形态）
 #   OUT\arupa_plugin_host.exe   → kernel\（插件宿主，缺失终止打包）
 #   OUT\<主 pak> + 其余 *.pak   → kernel\（原名平铺，必需至少一个）
 #   OUT\icudtl.dat              → kernel\（必需）
@@ -393,6 +395,17 @@ function Invoke-PackageArch {
     # 插件宿主：arupa_kernel 的 data_deps，三平台交付均必需
     Add-RequiredFile -Src (Join-Path $OutPath 'arupa_plugin_host.exe') -DestDir $dest
 
+    # 原生宿主形态（Windows）：内核静态链进浏览器进程 EXE，渲染/GPU 子进程
+    # 由**同一个 EXE** 拉起。这不是"多一个可选工具"—— 它决定交付走哪种形态，
+    # 下游 scripts/builder/browser.py 就是按 kernel\ 下有没有它来切形态的。
+    # 只有内核仓有 chrome/browser/arupa_desktop:arupa_desktop 目标时才编得出来，
+    # 所以按"在不在"判定，不硬编进上面的必需件列表（老内核仓会直接 unknown target）。
+    $desktopHost = Join-Path $OutPath 'arupa_desktop.exe'
+    if (Test-Path -LiteralPath $desktopHost -PathType Leaf) {
+        Add-RequiredFile -Src $desktopHost -DestDir $dest -Hint 'ninja 目标 chrome/browser/arupa_desktop:arupa_desktop（原生宿主）'
+        Write-Info '  原生宿主形态: kernel\ 里同时带 arupa_desktop.exe，下游会据此改走原生宿主装配'
+    }
+
     # 主 pak
     Add-RequiredFile -Src $script:PakSrc -DestDir $dest
     Add-RequiredFile -Src (Join-Path $OutPath 'devtools_resources.pak') -DestDir $dest -Hint 'ninja 目标 chrome/browser/arupa_desktop:arupa_devtools_resources'
@@ -405,6 +418,32 @@ function Invoke-PackageArch {
         Add-OptionalFile -Src $f.FullName -DestDir $dest
     }
     if ($pakCount -eq 0) { throw "out 里没有任何 *.pak: $OutPath" }
+
+    # gen/ 下的运行时资源 pak（口径同 scripts/builder/kernel.py 的 copy_gen_paks 与
+    # package-arupa_desktop.sh）：内核资源加载（arupa_content_main_delegate.cc）先找
+    # <dir>/xxx.pak，再回退 <dir>/gen/.../xxx.pak。只收 out 根那几个 pak 的话
+    # extensions_strings_* / extensions_renderer_generated_resources 全都不在包里：
+    #   · 缺 extensions_strings_en-US.pak  → 扩展层一报本地化错误就 CHECK 崩（FB-P095）
+    #   · 缺 extensions_renderer_generated_resources.pak → 扩展 renderer 绑定 JS 不在，
+    #     一碰 chrome.contextMenus 等就崩 SW（FB-P104）
+    $genPakCount = 0
+    $genDir = Join-Path $OutPath 'gen'
+    if (Test-Path -LiteralPath $genDir -PathType Container) {
+        foreach ($f in (Get-ChildItem -LiteralPath $genDir -Recurse -File -Filter '*.pak' -ErrorAction SilentlyContinue)) {
+            $relative = $f.FullName.Substring($genDir.Length).TrimStart('\')
+            $target = Join-Path (Join-Path $dest 'gen') $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+            Copy-Item -LiteralPath $f.FullName -Destination $target -Force
+            $genPakCount++
+        }
+    }
+    Write-Step ("  gen/**/*.pak {0} 个（保留运行时相对路径）" -f $genPakCount)
+    foreach ($rel in @('gen\extensions\strings\extensions_strings_en-US.pak',
+                       'gen\extensions\extensions_renderer_generated_resources.pak')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $dest $rel) -PathType Leaf)) {
+            throw "缺必需的扩展资源: $rel（先编内核资源目标，或检查 out\gen\extensions）"
+        }
+    }
 
     # icudtl / 快照
     Add-RequiredFile -Src (Join-Path $OutPath 'icudtl.dat') -DestDir $dest

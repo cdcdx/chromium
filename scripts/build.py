@@ -157,6 +157,18 @@ def prepare_project(project):
         # 那一份（PC 侧 Mac/ArupaDelivery.props 逐件校验它）。它默认不在本工程的图里，得显式挂进来。
         lines += ['  deps = [ "//chrome/browser/arupa_desktop:arupa_kernel", "//content/shell:pak",',
                   '            "//third_party/hyphenation-patterns:bundle_hyphen_data" ]',
+                  # 原生宿主形态: 内核静态链进 arupa_desktop, 子进程由同一 EXE 经
+                  # --type= 分流拉起 —— Windows 沙箱要求 broker 符号住在主镜像, 只有
+                  # 这一形态满足。
+                  # ⚠ 必须显式挂进来: gn 只展开从 delivery 出发可达的依赖闭包, 目标没被
+                  #   引用就会被**静默剪掉**, 表现为 out/ 里根本没有 arupa_desktop —— 而
+                  #   构建仍然"成功"、打包脚本也只是安静地按旧形态出包。这就是原生宿主
+                  #   落地后"从未编出"的根因 (BUILD.gn 里目标一直在, 图里一直没它)。
+                  # 三平台都能编这个目标; 这里只在 Windows 带 —— macOS/Linux 的沙箱不做
+                  #   跨进程地址交接, 库式嵌入本就安全, 该形态是可选能力。要在某平台启用:
+                  #   把下面的 is_win 放宽成 is_win || is_mac || is_linux, 装配层与打包
+                  #   脚本都是形态感知的, 会自动跟着切, 不需要改别处。
+                  '  if (is_win) { deps += [ "//chrome/browser/arupa_desktop:arupa_desktop" ] }',
                   '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:render" ] }',
                   '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:arupa_plugin_host" ] }']
     else:

@@ -386,6 +386,20 @@ namespace Arupa
         public ArupaKernel(ArupaKernelOptions? opts = null)
         {
             opts ??= new ArupaKernelOptions();
+            // 临时缓解（2026-10-04）：新版内核 base 的 Win 沙箱 broker 有了
+            // 「broker 必须在 EXE 模块」(broker_services.cc PreSpawnTarget) 与
+            // 「挂起子进程期写跨进程握手变量」(target_process.cc TransferVariable)
+            // 两个硬假设，库式嵌入（内核在 arupa_kernel.dll、子进程是 arupa_render.exe）
+            // 下必然失败 → GPU 进程 spawn 报 SBOX_ERROR(64/57)×9 →
+            // gpu_data_manager_impl_private.cc:417 FATAL 整体崩溃。
+            // 内核源码侧已有 ARUPA_DLL_BROKER 豁免补丁（patches/arupa_dll_broker_library_mode.diff），
+            // 但跨进程变量写入需要内核架构级重构，等内核团队修复前先启用内核自带的
+            // no-sandbox 逃生开关保证可用性。用户显式设置的值优先。
+            if (OperatingSystem.IsWindows() &&
+                Environment.GetEnvironmentVariable("ARUPA_UNSAFE_DISABLE_SANDBOX") is null)
+            {
+                Environment.SetEnvironmentVariable("ARUPA_UNSAFE_DISABLE_SANDBOX", "1");
+            }
             var cfg = new Interop.KernelConfig
             {
                 abi_major = Interop.ABI_MAJOR,
