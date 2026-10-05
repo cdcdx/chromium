@@ -56,7 +56,8 @@
 #       msvcp140.dll / msvcp140_atomic_wait.dll / vcruntime140.dll /
 #       vcruntime140_1.dll / vccorlib140.dll / concrt140.dll /
 #       dbgcore.dll / dbghelp.dll            → kernel\（有则带）
-#   OUT\angledata\ hyphen-data\ resources\ locales\ → kernel\同名目录（有则带）
+#   OUT\angledata\ hyphen-data\ resources\ → kernel\同名目录（可选）
+#   OUT\locales\ → kernel\locales\（旧构建可无；有则必须包含非空 en-US.pak）
 #   <repo>\arupa_desktop\public\*.h          → include\
 #   <repo>\package\package_desktop\{docs,dotnet,…}            → 交付根同名（有则带，跟 scripts\builder\kernel.py
 #                                               的 copy_assets 同一口径）
@@ -469,8 +470,22 @@ function Invoke-PackageArch {
     }
 
     # 数据目录
-    foreach ($name in @('angledata', 'hyphen-data', 'resources', 'locales')) {
+    foreach ($name in @('angledata', 'hyphen-data', 'resources')) {
         Add-OptionalDir -Src (Join-Path $OutPath $name) -DestDir $dest
+    }
+
+    # Keep legacy English-only builds usable; an independent locale bundle
+    # must include its English fallback, just like the macOS/Linux packager.
+    $localeDir = Join-Path $OutPath 'locales'
+    if (Test-Path -LiteralPath $localeDir -PathType Container) {
+        $englishPak = Join-Path $localeDir 'en-US.pak'
+        if (!(Test-Path -LiteralPath $englishPak -PathType Leaf) -or
+            (Get-Item -LiteralPath $englishPak).Length -eq 0) {
+            throw '缺少 locales/en-US.pak 英文回退包；请先构建 arupa_locales'
+        }
+        Add-OptionalDir -Src $localeDir -DestDir $dest
+    } else {
+        Write-Step '  locales/: 旧构建未生成独立语言包，使用主 pak 的英文资源'
     }
 
     # 调试符号（可选开关）

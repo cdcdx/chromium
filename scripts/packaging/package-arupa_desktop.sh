@@ -48,7 +48,8 @@
 #   OUT/icudtl.dat                               → kernel/icudtl.dat（必需）
 #   OUT/snapshot_blob.bin / v8_context_snapshot* → kernel/同名（至少一个，必需）
 #   OUT/libEGL.* / libGLESv2.* / libvk_swiftshader.* / libvulkan.*  → kernel/（有则带）
-#   OUT/angledata/ hyphen-data/ resources/ locales/  → kernel/同名目录（有则带）
+#   OUT/angledata/ hyphen-data/ resources/          → kernel/同名目录（可选）
+#   OUT/locales/                                 → kernel/locales/（旧构建可无；有则必须包含非空 en-US.pak）
 #   OUT/vk_swiftshader_icd.json                  → kernel/（有则带）
 #   OUT/devtools_resources.pak 或 OUT/gen/content/browser/devtools/devtools_resources.pak → kernel/（必需）
 #   OUT/Libraries/libtest_trace_processor.dylib  → kernel/Libraries/（mac，有则带）
@@ -373,9 +374,19 @@ package_arch() {
     [[ -f "${out}/hyphen-data/manifest.json" ]] || err "缺少 ${out}/hyphen-data/manifest.json；请先执行 build.sh arupa_desktop gen build --os mac --arch ${cpu}"
     compgen -G "${out}/hyphen-data/*.hyb" >/dev/null || err "缺少 ${out}/hyphen-data/*.hyb；请构建 third_party/hyphenation-patterns:bundle_hyphen_data"
   fi
-  for d in angledata hyphen-data resources locales; do
+  for d in angledata hyphen-data resources; do
     have_dir "${out}/${d}" "${dest}"
   done
+
+  # Older content-shell deliveries embed English strings in the main pak.
+  # New locale bundles must include the English fallback, even when shipping
+  # a reduced set of translations. Never create an empty locales/ placeholder.
+  if [[ -d "${out}/locales" ]]; then
+    [[ -s "${out}/locales/en-US.pak" ]] || err "缺少 locales/en-US.pak 英文回退包；请先构建 arupa_locales"
+    have_dir "${out}/locales" "${dest}"
+  else
+    log "  locales/: 旧构建未生成独立语言包，使用主 pak 的英文资源"
+  fi
 
   # 与 scripts/builder/kernel.py 的 ARTIFACTS[<os>].optional 同口径的散件。
   # PC 侧 Mac/ArupaDelivery.props 会逐件校验（缺一件就拦发布），所以宁可这里带全：

@@ -29,6 +29,7 @@ dist/
 docs/
 out/
 package/
+patches/
 src/chrome/browser/arupa_android
 src/chrome/browser/arupa_desktop
 .env
