@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -191,6 +192,89 @@ class BackupTest(unittest.TestCase):
         self.assertEqual(list(self.output.iterdir()), [])
         self.run_backup('--os', 'win', '--num', '1')
         self.assertTrue((self.output / 'src-win-1.2.3.4-1.patches').is_dir())
+
+    def test_unchanged_files_are_not_rehashed_through_clean_filters(self):
+        marker = self.root / 'filter calls'
+        helper = self.root / 'identity filter.py'
+        helper.write_text(
+            'import sys\nfrom pathlib import Path\n'
+            f'with Path({str(marker)!r}).open("ab") as stream: stream.write(b"called\\n")\n'
+            'sys.stdout.buffer.write(sys.stdin.buffer.read())\n')
+        command = shlex.join([Path(sys.executable).as_posix(), helper.as_posix()])
+        self.git('config', 'filter.backup-probe.clean', command)
+        self.git('config', 'filter.backup-probe.required', 'true')
+        (self.src / '.git/info/attributes').write_text('cached.dat filter=backup-probe\n')
+        (self.src / 'cached.dat').write_bytes(b'already stored content\n' * 4096)
+        # Keep the fixture out of Git's same-timestamp (racy index) safety path.
+        os.utime(self.src / 'cached.dat', (946684800, 946684800))
+        self.git('add', 'cached.dat')
+        self.git('commit', '-qm', 'cached large file')
+        self.git('tag', '-f', '1.2.3.4')
+        marker.write_bytes(b'')
+        (self.src / 'unstaged.txt').write_text('one local edit\n')
+        self.run_backup()
+        self.assertEqual(marker.read_bytes(), b'', 'unchanged content was read and filtered again')
+        _, manifest = self.result()
+        self.assertEqual({item['path'] for item in manifest['changes']},
+                         {'unstaged.txt'})
+
+    def test_final_worktree_wins_over_staged_content(self):
+        (self.src / 'staged.txt').write_text('staged intermediate\n')
+        self.git('add', 'staged.txt')
+        (self.src / 'staged.txt').write_text('base\n')
+        self.git('rm', 'deleted.txt')
+        (self.src / 'deleted.txt').write_text('recreated after staged deletion\n')
+        before = self.source_state()
+        self.run_backup('--tracked-only')
+        self.assertEqual(before, self.source_state())
+        directory, manifest = self.result()
+        self.assertEqual(manifest['changes'], [{'status': 'M', 'path': 'deleted.txt'}])
+        self.assertIn(b'+recreated after staged deletion', (directory / 'chromium.patch').read_bytes())
+
+    def test_staged_ignored_addition_is_kept(self):
+        (self.src / 'ignored').mkdir()
+        (self.src / 'ignored/added.txt').write_text('initial staged content\n')
+        self.git('add', '-f', 'ignored/added.txt')
+        (self.src / 'ignored/added.txt').write_text('final working content\n')
+        (self.src / 'ignored/untracked.txt').write_text('must stay excluded\n')
+        self.run_backup('--tracked-only')
+        directory, manifest = self.result()
+        self.assertEqual(manifest['changes'], [{'status': 'A', 'path': 'ignored/added.txt'}])
+        self.assertIn(b'+final working content', (directory / 'chromium.patch').read_bytes())
+
+    def test_index_flags_do_not_hide_local_content_from_backup(self):
+        self.git('update-index', '--assume-unchanged', 'staged.txt')
+        self.git('update-index', '--skip-worktree', 'unstaged.txt', 'deleted.txt')
+        (self.src / 'staged.txt').write_text('hidden by assume-unchanged\n')
+        (self.src / 'unstaged.txt').write_text('hidden by skip-worktree\n')
+        (self.src / 'deleted.txt').unlink()  # An absent sparse file is not a deletion.
+        self.assertEqual(self.git('status', '--porcelain'), b'')
+        before = self.source_state()
+        self.run_backup()
+        self.assertEqual(before, self.source_state())
+        directory, manifest = self.result()
+        self.assertEqual(manifest['changes'], [
+            {'status': 'M', 'path': 'staged.txt'},
+            {'status': 'M', 'path': 'unstaged.txt'}])
+        self.assertIn(b'+hidden by assume-unchanged', (directory / 'chromium.patch').read_bytes())
+        self.assertIn(b'+hidden by skip-worktree', (directory / 'chromium.patch').read_bytes())
+
+    def test_file_replaced_by_directory_does_not_bypass_tracked_only(self):
+        (self.src / 'deleted.txt').unlink()
+        (self.src / 'deleted.txt').mkdir()
+        (self.src / 'deleted.txt/new.txt').write_text('untracked child\n')
+        self.run_backup('--tracked-only')
+        _, manifest = self.result()
+        self.assertEqual(manifest['changes'], [{'status': 'D', 'path': 'deleted.txt'}])
+
+    def test_backup_reports_progress_before_completion(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            backup.main(['--src', str(self.src), '--ver', '1.2.3.4',
+                         '--patches', str(self.output)])
+        self.assertIn('1/4 扫描本地改动', output.getvalue())
+        self.assertIn('4/4 写入备份', output.getvalue())
+        self.assertIn('耗时', output.getvalue())
 
 
 if __name__ == '__main__':

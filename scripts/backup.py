@@ -11,9 +11,11 @@ import platform
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from platforms import MATRIX, normalize_os
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -21,13 +23,52 @@ EXCLUDED = ('out', 'arupa_build', 'chrome/browser/arupa_desktop',
             'chrome/browser/arupa_android', 'chrome/browser/arupa')
 
 
-def git(src, args, *, env=None, data=None):
-    result = subprocess.run(['git', '--no-optional-locks', '-c', 'core.splitIndex=false', '-C', str(src), *args],
-                            input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            env=env, check=False)
-    if result.returncode:
-        raise RuntimeError(result.stderr.decode('utf-8', errors='replace').strip())
-    return result.stdout
+def log(message):
+    print(f'[INFO] {message}', flush=True)
+
+
+def git(src, args, *, env=None, data=None, progress=None):
+    command = ['git', '--no-optional-locks', '-c', 'core.splitIndex=false', '-C', str(src), *args]
+    started = time.monotonic()
+    # Own the worker so Ctrl+C also stops a long Git scan before scratch cleanup.
+    with subprocess.Popen(command, stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                          start_new_session=os.name != 'nt') as process:
+        try:
+            pending = data
+            while True:
+                try:
+                    stdout, stderr = process.communicate(input=pending, timeout=10)
+                    break
+                except subprocess.TimeoutExpired:
+                    pending = None  # communicate retains unsent input and output.
+                    if progress:
+                        log(f'{progress}，仍在执行（{time.monotonic() - started:.0f} 秒）')
+        except BaseException:
+            if process.poll() is None:
+                if os.name == 'nt':
+                    process.terminate()
+                else:
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                try:
+                    process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    if os.name == 'nt':
+                        process.kill()
+                    else:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    process.communicate()
+            raise
+        if process.returncode:
+            raise RuntimeError(stderr.decode('utf-8', errors='replace').strip()
+                               or f'Git 执行失败，退出码 {process.returncode}')
+        return stdout
 
 
 def excluded(name):
@@ -47,6 +88,48 @@ def collect_patch(src, base, include_untracked):
     """Use an isolated index AND object store; source index/objects stay untouched."""
     if git(src, ['ls-files', '--unmerged', '-z']):
         raise RuntimeError('src 有未解决的合并冲突；请先解决冲突再备份')
+    pathspec = ['.', *[':(exclude)' + path for path in EXCLUDED]]
+    log('1/4 扫描本地改动（复用现有 Git 索引的文件缓存）')
+    status = git(src, ['status', '--porcelain=v1', '-z', '--no-renames',
+                       '--ignore-submodules=all',
+                       '--untracked-files=all' if include_untracked else '--untracked-files=no',
+                       '--', *pathspec], progress='扫描本地改动')
+    # With renames disabled each record is exactly "XY path\0". Using status
+    # against the real index avoids hashing every Chromium file in a cold index.
+    names = {record[3:] for record in status.split(b'\0') if record}
+    entries = git(src, ['ls-files', '--stage', '-v', '-z', '--', *pathspec],
+                  progress='读取依赖仓库目录')
+    repositories = set()
+    for record in entries.split(b'\0'):
+        if not record:
+            continue
+        metadata, name = record.split(b'\t', 1)
+        if metadata[2:].startswith(b'160000 '):
+            repositories.add(name)
+        elif metadata[:1].islower() or metadata[:1] == b'S':
+            # status intentionally hides assume-unchanged/skip-worktree edits.
+            # Inspect those files explicitly; absent sparse files stay in HEAD.
+            path = src / os.fsdecode(name)
+            if metadata[:1].upper() != b'S' or path.exists() or path.is_symlink():
+                names.add(name)
+    skipped_dirs = {os.fsdecode(name) for name in repositories}
+    additions, removals = [], []
+    for raw in sorted(names):
+        name = os.fsdecode(raw)
+        if excluded(name.rstrip('/')) or raw in repositories:
+            continue
+        path = src / name
+        if path.is_symlink() or path.is_file():
+            additions.append(raw)
+        elif name.endswith('/'):
+            # An untracked embedded repository is reported as a directory.
+            skipped_dirs.add(name.rstrip('/'))
+        else:
+            # Includes deletion and file -> directory transitions. Do not stage
+            # the directory recursively: --tracked-only must stay tracked-only.
+            removals.append(raw)
+    log(f'2/4 收集工作区内容：{len(additions)} 个新增/修改，{len(removals)} 个删除；'
+        f'跳过 {len(skipped_dirs)} 个独立仓库目录')
     objects = Path(os.fsdecode(git(src, ['rev-parse', '--git-path', 'objects']).strip()))
     if not objects.is_absolute():
         objects = src / objects
@@ -57,39 +140,26 @@ def collect_patch(src, base, include_untracked):
         env = os.environ.copy()
         env.update(GIT_INDEX_FILE=str(scratch / 'index'), GIT_OBJECT_DIRECTORY=str(store),
                    GIT_ALTERNATE_OBJECT_DIRECTORIES=str(objects.resolve()), GIT_OPTIONAL_LOCKS='0')
-        git(src, ['read-tree', 'HEAD'], env=env)
-        pathspec = ['.', *[':(exclude)' + path for path in EXCLUDED]]
-        git(src, ['add', '-u', '--', *pathspec], env=env)
-        # Query the REAL index, so staged additions are included even though they
-        # are not yet in HEAD. Ignore rules apply only to genuinely untracked files.
-        flags = ['--cached'] + (['--others', '--exclude-standard'] if include_untracked else [])
-        names = git(src, ['ls-files', '-z', *flags]).split(b'\0')
-        additions = []
-        skipped_dirs = []
-        for raw in sorted(set(names)):
-            if not raw:
-                continue
-            name = os.fsdecode(raw)
-            if excluded(name.rstrip('/')):
-                continue
-            path = src / name
-            if path.is_symlink() or path.is_file():
-                additions.append(raw)
-            elif path.is_dir():
-                # Gitlinks and embedded repositories are not flattened into src.
-                skipped_dirs.append(name.rstrip('/'))
+        git(src, ['read-tree', 'HEAD'], env=env, progress='准备隔离索引')
+        if removals:
+            git(src, ['update-index', '--force-remove', '-z', '--stdin'], env=env,
+                data=b'\0'.join(removals) + b'\0', progress='记录删除文件')
         if additions:
-            git(src, ['--literal-pathspecs', 'add', '--pathspec-from-file=-', '--pathspec-file-nul'],
-                env=env, data=b'\0'.join(additions) + b'\0')
+            # Status already filtered genuinely untracked ignored files. Force
+            # permits tracked/staged files which now match an ignore rule.
+            git(src, ['--literal-pathspecs', 'add', '-f', '--pathspec-from-file=-', '--pathspec-file-nul'],
+                env=env, data=b'\0'.join(additions) + b'\0', progress='收集变更文件')
         options = ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all',
                    '--no-renames', base, '--', *pathspec]
-        patch = git(src, [*options[:1], '--binary', '--full-index', '--src-prefix=a/', '--dst-prefix=b/', *options[1:]], env=env)
+        log('3/4 生成相对基线的补丁（包含已提交修改）')
+        patch = git(src, [*options[:1], '--binary', '--full-index', '--src-prefix=a/', '--dst-prefix=b/', *options[1:]],
+                    env=env, progress='生成二进制补丁')
         changed = git(src, [*options[:1], '--name-status', '-z', *options[1:]], env=env).split(b'\0')
         changes = []
         # --no-renames gives a stable status/path pair; a rename restores as delete+add.
         for i in range(0, len(changed) - 1, 2):
             changes.append({'status': changed[i].decode('ascii'), 'path': os.fsdecode(changed[i + 1])})
-        return patch, changes, sorted(set(skipped_dirs))
+        return patch, changes, sorted(skipped_dirs)
 
 
 def build_parser():
@@ -140,6 +210,9 @@ def main(argv=None):
     if args.dry_run:
         print(f'[INFO] 基线 {args.base} -> {base}\n[INFO] HEAD {head}\n[INFO] 输出目录 {final}\n[INFO] dry-run：未生成补丁或写入文件')
         return 0
+    started = time.monotonic()
+    log(f'开始备份：基线 {args.base} ({base[:12]})，HEAD {head[:12]}')
+    log(f'输出根目录：{destination}')
     patch, changes, skipped = collect_patch(src, base, not args.tracked_only)
     # Reject a moving checkout, which could otherwise claim the wrong HEAD.
     if git(src, ['rev-parse', 'HEAD']).decode().strip() != head:
@@ -176,6 +249,7 @@ def main(argv=None):
         break
     stage = None
     try:
+        log(f'4/4 写入备份：{len(changes)} 个文件变更，补丁 {len(patch)} 字节')
         stage = Path(tempfile.mkdtemp(prefix='.backup-', dir=destination))
         manifest['number'] = number
         (stage / 'chromium.patch').write_bytes(patch)
@@ -197,7 +271,8 @@ def main(argv=None):
         raise
     finally:
         lock.unlink()
-    print(f'[INFO] 备份完成: {final}\n[INFO] {len(changes)} 个文件变更，补丁 {len(patch)} 字节')
+    log(f'备份完成: {final}')
+    log(f'{len(changes)} 个文件变更，补丁 {len(patch)} 字节，耗时 {time.monotonic() - started:.1f} 秒')
     return 0
 
 
