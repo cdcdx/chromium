@@ -49,7 +49,7 @@
 #   OUT/snapshot_blob.bin / v8_context_snapshot* → kernel/同名（至少一个，必需）
 #   OUT/libEGL.* / libGLESv2.* / libvk_swiftshader.* / libvulkan.*  → kernel/（有则带）
 #   OUT/angledata/ hyphen-data/ resources/          → kernel/同名目录（可选）
-#   OUT/locales/                                 → kernel/locales/（旧构建可无；有则必须包含非空 en-US.pak）
+#   OUT/locales/{en-US,zh-CN}.pak                 → kernel/locales/（旧构建可无；有则两者必需）
 #   OUT/vk_swiftshader_icd.json                  → kernel/（有则带）
 #   OUT/devtools_resources.pak 或 OUT/gen/content/browser/devtools/devtools_resources.pak → kernel/（必需）
 #   OUT/Libraries/libtest_trace_processor.dylib  → kernel/Libraries/（mac，有则带）
@@ -379,11 +379,15 @@ package_arch() {
   done
 
   # Older content-shell deliveries embed English strings in the main pak.
-  # New locale bundles must include the English fallback, even when shipping
-  # a reduced set of translations. Never create an empty locales/ placeholder.
+  # Nomad supports Simplified Chinese and English. Copy an explicit allowlist
+  # so stale outputs from previous multilingual builds cannot enter deliveries.
   if [[ -d "${out}/locales" ]]; then
-    [[ -s "${out}/locales/en-US.pak" ]] || err "缺少 locales/en-US.pak 英文回退包；请先构建 arupa_locales"
-    have_dir "${out}/locales" "${dest}"
+    mkdir -p "${dest}/locales"
+    local locale
+    for locale in en-US zh-CN; do
+      [[ -s "${out}/locales/${locale}.pak" ]] || err "缺少或为空: locales/${locale}.pak；请先构建 arupa_locales（中英文均为必需）"
+      want "${out}/locales/${locale}.pak" "${dest}/locales" "arupa_locales"
+    done
   else
     log "  locales/: 旧构建未生成独立语言包，使用主 pak 的英文资源"
   fi

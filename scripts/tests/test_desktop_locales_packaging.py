@@ -72,23 +72,28 @@ class LocalePackagingTest(unittest.TestCase):
                 self.package(os_name, None, check)
 
     def test_translations_and_fallback_are_delivered(self):
-        packs = {"en-US.pak": b"English", "zh-CN.pak": b"Chinese"}
+        packs = {"en-US.pak": b"English", "zh-CN.pak": b"Chinese",
+                 "de.pak": b"stale German", "en-XA.pak": b"stale pseudo-locale"}
         def check(result, delivery):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertNotIn("可选件缺失", result.stderr)
-            for name, data in packs.items():
-                self.assertEqual((delivery / "kernel/locales" / name).read_bytes(), data)
+            self.assertEqual(sorted(p.name for p in (delivery / "kernel/locales").iterdir()),
+                             ["en-US.pak", "zh-CN.pak"])
+            for name in ("en-US.pak", "zh-CN.pak"):
+                self.assertEqual((delivery / "kernel/locales" / name).read_bytes(), packs[name])
         for os_name in ("mac", "linux"):
             with self.subTest(os=os_name):
                 self.package(os_name, packs, check)
 
-    def test_missing_or_empty_english_fallback_rejects_partial_delivery(self):
+    def test_missing_or_empty_supported_language_rejects_partial_delivery(self):
         def check(result, delivery):
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("locales/en-US.pak", result.stderr)
+            self.assertIn("locales/", result.stderr)
             self.assertFalse(delivery.exists(), "failed package must be removed")
         for os_name in ("mac", "linux"):
-            for packs in ({}, {"zh-CN.pak": b"Chinese"}, {"en-US.pak": b""}):
+            for packs in ({}, {"zh-CN.pak": b"Chinese"}, {"en-US.pak": b"English"},
+                          {"en-US.pak": b"", "zh-CN.pak": b"Chinese"},
+                          {"en-US.pak": b"English", "zh-CN.pak": b""}):
                 with self.subTest(os=os_name, packs=list(packs)):
                     self.package(os_name, packs, check)
 
