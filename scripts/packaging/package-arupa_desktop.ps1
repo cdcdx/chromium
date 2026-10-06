@@ -548,6 +548,17 @@ function Invoke-PackageArch {
     # 架构核对：内核库必须就是本次打包的 arch
     Assert-LibArch -LibPath (Join-Path $dest (Get-LibName)) -WantCpu $Cpu
 
+    . (Join-Path $Root 'scripts\_find_python.ps1')
+    $python = Find-Python3
+    if (-not $python) { throw '网盘 V5 交付检查需要 Python 3.9+' }
+    $gateDir = Join-Path $DistPath 'tools'
+    New-Item -ItemType Directory -Force -Path $gateDir | Out-Null
+    $gate = Join-Path $gateDir 'verify_transfer_delivery.py'
+    Copy-Item -LiteralPath (Join-Path $Root 'arupa_desktop\tools\verify_transfer_delivery.py') -Destination $gate -Force
+    $gateArgs = @($python.Pre) + @($gate, '--library', (Join-Path $dest (Get-LibName)), '--platform', 'win', '--report', (Join-Path $DistPath 'transfer-abi.json'))
+    & $python.Exe @gateArgs
+    if ($LASTEXITCODE -ne 0) { throw '网盘 V5 必需 ABI 缺失；请重新编译配套内核' }
+
     if ($script:MissingOptional.Count -gt 0) {
         Write-Warn "可选件缺失 $($script:MissingOptional.Count) 项（不阻断）: $($script:MissingOptional -join ' ')"
     }

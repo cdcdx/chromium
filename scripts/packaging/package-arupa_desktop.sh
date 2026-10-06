@@ -573,6 +573,11 @@ for cpu in "${ARCHS[@]}"; do
   log "交付 id: ${DELIVERY_ID}  （ver=${VER} n=${NUM} os=${OS} arch=${cpu}）"
 
   package_arch "${cpu}" "${OUT}" "${DIST}"
+  mkdir -p "${DIST}/tools"
+  cp "${ROOT_DIR}/arupa_desktop/tools/verify_transfer_delivery.py" "${DIST}/tools/"
+  python3 "${DIST}/tools/verify_transfer_delivery.py" \
+    --library "${DIST}/kernel/$(lib_name "${OS}")" --platform "${OS}" \
+    --report "${DIST}/transfer-abi.json" || err "网盘 V5 必需 ABI 缺失；请重新编译配套内核"
   write_sums_and_manifest "${DIST}" "${cpu}"
 
   if [[ "${DO_ZIP}" -eq 1 ]]; then

@@ -1,5 +1,6 @@
 """Exercise the actual POSIX packager with small, isolated delivery fixtures."""
 import platform
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -13,9 +14,17 @@ PACKAGER = ROOT / "scripts/packaging/package-arupa_desktop.sh"
 
 @unittest.skipUnless(platform.system() in ("Darwin", "Linux"), "POSIX packager")
 class LocalePackagingTest(unittest.TestCase):
-    def package(self, target_os, locale_files, check):
+    def package(self, target_os, locale_files, check, symbols=None):
         with tempfile.TemporaryDirectory(prefix="arupa-package-test-") as tmp:
             root = Path(tmp)
+            # These tests isolate resource packaging, not native ABI behavior.
+            # The ABI checker has separate PE fixtures and real dylib acceptance.
+            tools = root / 'tools'; tools.mkdir()
+            nm = tools / 'llvm-nm'
+            names = symbols if symbols is not None else ['arupa_kernel_transfer_runtime', 'arupa_kernel_set_ext_api_handler_ctx', 'arupa_kernel_respond_ext_api', 'arupa_free']
+            output = '\n'.join('_'+n if target_os == 'mac' else n+' T 0 1' for n in names)
+            nm.write_text('#!/usr/bin/env python3\nprint('+repr(output)+')\n'); nm.chmod(0o755)
+            env = dict(os.environ, PATH=str(tools)+os.pathsep+os.environ['PATH'])
             out = root / "out"
             out.mkdir()
             files = ["arupa_render", "arupa_plugin_host", "content_shell.pak",
@@ -57,7 +66,7 @@ class LocalePackagingTest(unittest.TestCase):
                 ["bash", str(PACKAGER), "--os", target_os, "--arch", arch,
                  "--ver", "0.0.0.0", "--out", str(out), "--num", "1",
                  "--dist-dir", str(root / "dist"), "--no-package"],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, timeout=30, env=env)
             delivery = root / "dist" / f"arupa-{target_os}-{arch}-0.0.0.0-static-1"
             check(result, delivery)
 
@@ -70,6 +79,14 @@ class LocalePackagingTest(unittest.TestCase):
         for os_name in ("mac", "linux"):
             with self.subTest(os=os_name):
                 self.package(os_name, None, check)
+
+    def test_missing_transfer_runtime_rejects_and_removes_delivery(self):
+        def check(result, delivery):
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('arupa_kernel_transfer_runtime', result.stderr)
+            self.assertFalse(delivery.exists())
+        for os_name in ('mac', 'linux'):
+            with self.subTest(os=os_name): self.package(os_name, None, check, symbols=['arupa_free'])
 
     def test_translations_and_fallback_are_delivered(self):
         packs = {"en-US.pak": b"English", "zh-CN.pak": b"Chinese",
