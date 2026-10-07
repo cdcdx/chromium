@@ -254,6 +254,47 @@ class NomadTest(unittest.TestCase):
         with patch.object(nomad.subprocess, 'run', side_effect=AssertionError('executed')):
             self.quiet(nomad.prepare_web_tools, web)
 
+    def test_webui_install_command_is_resilient_and_uses_configured_mirror(self):
+        web = self.root / 'web'
+        web.mkdir()
+        (web / 'package-lock.json').write_text('{}')
+        with patch.object(fetch, 'load_config', return_value={'npm_registry': 'https://registry.npmmirror.com'}):
+            command = list(map(str, nomad.npm_install_command('npm', web)))
+        self.assertEqual(command[:2], ['npm', 'ci'])
+        for flag in ('--no-audit', '--no-fund', '--prefer-offline', '--fetch-retries=5',
+                     '--fetch-retry-maxtimeout=120000', '--fetch-timeout=600000',
+                     '--registry=https://registry.npmmirror.com'):
+            self.assertIn(flag, command)
+        (web / 'package-lock.json').unlink()
+        with patch.object(fetch, 'load_config', return_value={}):
+            command = list(map(str, nomad.npm_install_command('npm', web)))
+        self.assertEqual(command[:2], ['npm', 'install'])
+        self.assertFalse([item for item in command if item.startswith('--registry=')])
+
+    def test_half_installed_webui_modules_are_reinstalled_with_retry(self):
+        self.args.no_web = False
+        self.pc_fixture('linux')
+        web = self.root / 'nomad_desktop/NomadWebUI/nomadwebui'
+        web.mkdir(parents=True)
+        (web / 'package.json').write_text('{}')
+        (web / 'node_modules').mkdir()  # 中断残留：没有 npm 的成功标记
+        fetch.DRY_RUN = True
+        with patch.object(nomad, 'prepare_dotnet', return_value='dotnet'), \
+             patch.object(nomad, 'prepare_web_tools', return_value='npm'), \
+             patch.object(fetch, 'run') as run:
+            self.quiet(nomad.desktop_build, self.root, self.args, 'linux', 'x64', VERSION, self.root / 'out')
+        installs = [call for call in run.call_args_list
+                    if list(map(str, call.args[0]))[1:2] == ['install']]
+        self.assertEqual(len(installs), 1)
+        self.assertTrue(installs[0].kwargs.get('retry'))
+        (web / 'node_modules/.package-lock.json').write_text('{}')  # 装成功的标记
+        with patch.object(nomad, 'prepare_dotnet', return_value='dotnet'), \
+             patch.object(nomad, 'prepare_web_tools', return_value='npm'), \
+             patch.object(fetch, 'run') as run:
+            self.quiet(nomad.desktop_build, self.root, self.args, 'linux', 'x64', VERSION, self.root / 'out')
+        self.assertFalse([call for call in run.call_args_list
+                          if list(map(str, call.args[0]))[1:2] in (['ci'], ['install'])])
+
     def test_toolchain_dry_run_never_executes(self):
         fetch.DRY_RUN = True
         with patch.object(nomad.subprocess, 'run', side_effect=AssertionError('executed')):

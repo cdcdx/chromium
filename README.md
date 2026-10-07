@@ -321,6 +321,13 @@ NuGet restore 不按源的排列顺序回退；不能仅把有效源放在前面
 WebUI 构建前使用 npm 自带的 semver 校验 `package.json` 的 `engines.node`。
 优先使用 `.env` 的 `node_path`，否则使用 PATH 中的 Node；后者不兼容时，尝试 `$NVM_DIR`（默认 `~/.nvm`）中已安装的版本。
 选中的 Node 与配套 npm 一起加入本次构建的 PATH，确保 npm 子脚本使用相同版本，不修改 shell 默认版本。
+WebUI 依赖安装用 `npm ci`/`npm install`（有 lockfile 时优先 `ci`），并带抗抖动参数：
+`--prefer-offline`（复用本地缓存）、`--fetch-retries=5`、`--fetch-timeout=600000`、
+`--fetch-retry-maxtimeout=120000`、`--no-audit --no-fund`；安装失败若是瞬时网络错误
+（`ETIMEDOUT`/`ECONNRESET` 等）会按指数退避自动重试。安装是否完成以
+`node_modules/.package-lock.json` 为准——`npm ci` 会先删后装，中断留下的半成品会被重装，
+不会因为目录存在就跳过。需要换源时在 `.env` 设置
+`npm_registry=https://registry.npmmirror.com`（默认使用项目/npm 自身配置的源）。
 没有兼容版本则在 npm 安装/构建前停止；不会删除 `--experimental-strip-types` 或跳过 WebUI 测试。
 默认从工作区 `dist/` 选择最新匹配序号，或通过 `--delivery` 指定交付目录；`--dist-dir` 仅控制输出。
 `--ver` 在浏览器命令中表示消费的内核版本，可在没有 Chromium 源码时显式指定。

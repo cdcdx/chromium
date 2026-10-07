@@ -83,6 +83,22 @@ def prepare_web_tools(web):
           + '\n'.join(failures))
 
 
+# WebUI 安装：npm 默认只重试 2 次、不复用本地缓存，网络抖动（ETIMEDOUT/ECONNRESET）
+# 就会整体失败；这里放宽超时与重试，并优先用缓存里已有的包。
+NPM_INSTALL_FLAGS = ('--no-audit', '--no-fund', '--prefer-offline',
+                     '--fetch-retries=5', '--fetch-retry-mintimeout=10000',
+                     '--fetch-retry-maxtimeout=120000', '--fetch-timeout=600000')
+
+
+def npm_install_command(npm, web):
+    """npm ci/install 命令；`.env npm_registry` 可换镜像（默认仍用项目配置的源）。"""
+    command = [npm, 'ci' if (web / 'package-lock.json').is_file() else 'install', *NPM_INSTALL_FLAGS]
+    registry = F.cget(F.load_config(), 'npm_registry', 'NPM_REGISTRY')
+    if registry:
+        command.append(f'--registry={registry}')
+    return command
+
+
 def prepare_android_sdk(args, repo):
     cfg = F.load_config()
     local = repo / 'local.properties'
@@ -225,8 +241,10 @@ def desktop_build(root, args, target_os, arch, version, output):
         if not (web / 'package.json').is_file():
             F.err(f'缺少 WebUI 项目: {web}；已有资源时可显式 --no-web')
         npm = prepare_web_tools(web)
-        if not (web / 'node_modules').is_dir():
-            F.run([npm, 'ci' if (web / 'package-lock.json').exists() else 'install'], web)
+        # node_modules 存在 ≠ 装成功：npm ci 先删后装，中断留下的半成品没有 npm 的成功
+        # 标记（node_modules/.package-lock.json），只看目录会让它跳过安装、随后构建报缺包。
+        if not (web / 'node_modules/.package-lock.json').is_file():
+            F.run(npm_install_command(npm, web), web, retry=True)
         F.run([npm, 'run', 'build'], web)
     facade = kernel / 'dotnet/ArupaKernel.csproj'
     # A bundled DLL may predate the source (and lack OpenDevTools). Rebuild

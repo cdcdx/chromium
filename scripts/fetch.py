@@ -37,6 +37,8 @@ TRANSIENT_NETWORK = re.compile(
     r"|RPC failed|early EOF|remote end hung up|unexpected disconnect"
     r"|(?:Could not|Couldn't|unable to) resolve host|Temporary failure in name resolution"
     r"|Connection (?:reset|timed out|refused)|Operation timed out"
+    r"|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND"
+    r"|socket hang up|Client network socket disconnected|npm error network"
     r"|gnutls_handshake\(\) failed|SSL_ERROR", re.I)
 RATE_LIMITED = re.compile(
     r"RESOURCE_EXHAUSTED|rate limit|too many requests|returned error: 429|HTTP 429", re.I)
