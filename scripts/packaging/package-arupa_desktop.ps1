@@ -32,6 +32,8 @@
 #       --pak FILE      主 pak 来源，默认 out\content_shell.pak，
 #                       没有时取 out 根体积最大的 *.pak
 #       --include-dir DIR      默认 <repo>\arupa_desktop\public（里面的 *.h 拷进 include\）
+#       --verify-script FILE   交付 ABI 校验脚本（默认 <repo>\arupa_desktop\tools\verify_transfer_delivery.py）；
+#                              会被拷进交付根 tools\ 并执行，非零退出即判定交付不合格
 #       --package-dir DIR       把该目录下的一级文件/文件夹整份拷进交付根
 #                               （默认 <repo>\package\package_desktop，常见: docs\ dotnet\）
 #       --no-package    不拷 package 目录
@@ -134,6 +136,7 @@ $DistDir   = Join-Path $Root 'dist'
 $DistName  = ''
 $PakSrc    = ''
 $IncDir    = ''
+$VerifyScript = ''
 $PackageDir = ''
 $NoPackage = $false
 $DocsDir   = ''
@@ -163,6 +166,7 @@ try {
             'dist-name' { $DistName = (Read-Value $key); break }
             'pak' { $PakSrc = (Read-Value $key); break }
             'include-dir' { $IncDir = (Read-Value $key); break }
+            'verify-script' { $VerifyScript = (Read-Value $key); break }
             'package-dir' { $PackageDir = (Read-Value $key); break }
             'no-package' { $NoPackage = $true; break }
             'docs' { $DocsDir = (Read-Value $key); break }
@@ -270,6 +274,7 @@ $DeliveryId = "$Ver+$Num"
 
 # ---------------------------------------------------------------- 公共附件
 if (-not $IncDir) { $IncDir = Join-Path $Root 'arupa_desktop\public' }
+if (-not $VerifyScript) { $VerifyScript = Join-Path $Root 'arupa_desktop\tools\verify_transfer_delivery.py' }
 
 # package 附加件（docs\ dotnet\ …）：一级文件/文件夹整份搬进交付根，
 # 口径同 scripts\builder\kernel.py 的 copy_assets
@@ -551,10 +556,13 @@ function Invoke-PackageArch {
     . (Join-Path $Root 'scripts\_find_python.ps1')
     $python = Find-Python3
     if (-not $python) { throw '网盘 V5 交付检查需要 Python 3.9+' }
+    if (-not (Test-Path -LiteralPath $VerifyScript -PathType Leaf)) {
+        Fail "缺少交付 ABI 校验脚本: $VerifyScript（可用 --verify-script 指定）"
+    }
     $gateDir = Join-Path $DistPath 'tools'
     New-Item -ItemType Directory -Force -Path $gateDir | Out-Null
     $gate = Join-Path $gateDir 'verify_transfer_delivery.py'
-    Copy-Item -LiteralPath (Join-Path $Root 'arupa_desktop\tools\verify_transfer_delivery.py') -Destination $gate -Force
+    Copy-Item -LiteralPath $VerifyScript -Destination $gate -Force
     $gateArgs = @($python.Pre) + @($gate, '--library', (Join-Path $dest (Get-LibName)), '--platform', 'win', '--report', (Join-Path $DistPath 'transfer-abi.json'))
     & $python.Exe @gateArgs
     if ($LASTEXITCODE -ne 0) { throw '网盘 V5 必需 ABI 缺失；请重新编译配套内核' }

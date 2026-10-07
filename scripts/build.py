@@ -28,7 +28,7 @@ ALIASES = {"desktop": "arupa_desktop", "android": "arupa_android"}
 
 def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("project", choices=("arupa_desktop", "arupa_android", "nomadbrowser.pc", "nomadbrowser.android", "desktop", "android"))
+    p.add_argument("project", choices=("arupa_desktop", "arupa_android", "nomad_desktop", "nomad_android", "desktop", "android"))
     p.add_argument("actions", nargs="*", help="gen / build / package / all（默认 all；浏览器仅 build + package）")
     p.add_argument("--os", type=normalize_os, choices=tuple(MATRIX), default="")
     p.add_argument("--args", type=Path, help="build 目录内的 GN 配置；默认 build/<os>/args.gn")
@@ -57,10 +57,68 @@ def build_targets(project, target_os):
     targets = [base + ":arupa_kernel", "//content/shell:pak",
                "//third_party/hyphenation-patterns:bundle_hyphen_data"]
     if target_os in ("win", "mac", "linux"):
-        targets.append(base + ":render")
-    if target_os in ("win", "mac", "linux"):
-        targets.append(base + ":arupa_plugin_host")
+        targets += [base + ":render", base + ":arupa_plugin_host"]
     return targets
+
+
+def verify_deps(version):
+    """gn gen 前提示未同步的 DEPS 子仓库。
+
+    未同步的独立仓库会让 GN 报 `Unable to load "//third_party/skia/gn/shared_sources.gni"`，
+    看到的是"少了个文件"，看不到"DEPS 没同步完"这个真实原因；`fetch deps` 会按同一份清单
+    （.gclient_entries）自动补拉这些空仓库。这里只警告、不拦截：有些依赖（ANGLE/Dawn 的测试
+    数据）跟本次目标无关，不该因为它们挡住编译；真缺东西时 gn gen 会失败，由 gn_failure_hint
+    精确指出是哪个依赖。"""
+    broken = F.unsynced_deps()
+    if broken is None:
+        F.err(f"找不到 {F.WORKSPACE_ROOT / '.gclient_entries'}：DEPS 从未同步；"
+              f"请先运行: bash fetch.sh deps --ver {version}")
+    if not broken:
+        return
+    listing = "\n".join(f"  {relative}（应为 {url}）" for relative, url in broken[:10])
+    if len(broken) > 10:
+        listing += f"\n  …另有 {len(broken) - 10} 个"
+    F.log(f"警告: {len(broken)} 个 DEPS 仓库没有同步完成（独立 git 仓库为空）:\n" + listing
+          + f"\n若 gn gen 因缺文件失败，请先运行: bash fetch.sh deps --ver {version}")
+
+
+def repository_path(path):
+    """把 GN 报的路径归一成 src 下的相对路径。
+
+    GN 报 `Unable to load "..."` 时给的是绝对路径（/…/src/third_party/skia/gn/x.gni），
+    而 import 语句里是 `//third_party/skia/gn/x.gni`，两种都可能出现在输出里。"""
+    text = path.replace("\\", "/")
+    if text.startswith("//"):
+        return text[2:]
+    source = SRC.as_posix().rstrip("/")
+    if text.startswith(source + "/"):
+        return text[len(source) + 1:]
+    return text.lstrip("./")
+
+
+def gn_failure_hint(output, version):
+    """把 GN 的 `Unable to load "…"` 翻译成「哪个 DEPS 仓库没同步」+ 修复命令。
+
+    认不出来（GN 本身的配置错误等）就返回 None，让调用方原样抛出错误，不要掩盖真实信息。"""
+    if not output:
+        return None
+    missing = sorted({repository_path(path) for path in re.findall(r'Unable to load "([^"]+)"', output)})
+    if not missing:
+        return None
+    owners = {}
+    for relative, url, revision in (F.deps_entries() or []):
+        prefix = relative.removeprefix("src/").rstrip("/")
+        if prefix:
+            owners[prefix] = (relative, f"{url}@{revision}" if revision else url)
+    lines, matched = [], False
+    for path in missing:
+        best = max((prefix for prefix in owners
+                    if path == prefix or path.startswith(prefix + "/")), key=len, default=None)
+        matched = matched or best is not None
+        lines.append(f"  //{path}" + (f"  ← {owners[best][0]}（应为 {owners[best][1]}）" if best else ""))
+    head = "GN 生成失败：缺少以下 DEPS 依赖（独立 git 仓库为空）:" if matched else "GN 生成失败：缺少以下文件:"
+    return (head + "\n" + "\n".join(lines[:10])
+            + f"\n请运行: bash fetch.sh deps --ver {version}（按 .gclient_entries 自动补拉空仓库）")
 
 
 def args_template(target_os, explicit=None):
@@ -116,19 +174,8 @@ def write_if_changed(path, text):
 
 
 def exclude_generated(paths):
-    if F.DRY_RUN:
-        F.log("(dry-run) 将模块挂载和构建入口加入 src 的本地 Git exclude")
-        return
-    git_path = F.run(["git", "rev-parse", "--git-path", "info/exclude"], SRC, capture=True)
-    exclude = Path(git_path)
-    if not exclude.is_absolute():
-        exclude = SRC / exclude
-    text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-    for path in paths:
-        line = "/" + path
-        if line not in text.splitlines():
-            text = text.rstrip() + "\n" + line + "\n"
-    write_if_changed(exclude, text)
+    """把模块挂载和构建入口写进 src 的本地 Git exclude，避免被当成未跟踪改动。"""
+    F.exclude_paths(SRC, paths, "模块挂载和构建入口")
 
 
 def prepare_project(project):
@@ -198,8 +245,9 @@ def main(argv=None):
     args = p.parse_args(argv)
     F.DRY_RUN = args.dry_run
     project = ALIASES.get(args.project, args.project)
-    is_browser = project.startswith("nomadbrowser.")
-    is_android = project in ("arupa_android", "nomadbrowser.android")
+    # 浏览器工程与内核工程按前缀区分：arupa_* 是内核，nomad_* 是浏览器外壳。
+    is_browser = project in ("nomad_desktop", "nomad_android")
+    is_android = project in ("arupa_android", "nomad_android")
     target_os = args.os or ("android" if is_android else F.HOST_OS)
     target_os = normalize_os(target_os)
     if target_os not in MATRIX or is_android != (target_os == "android"):
@@ -259,6 +307,7 @@ def main(argv=None):
             for tool in (gn, ninja):
                 if not tool.is_file():
                     F.err(f"缺少工具 {tool}；请先运行 fetch（含 hooks）")
+            verify_deps(version)
         config_path = args_template(target_os, args.args)
         templates = {cpu: render_args(config_path, target_os, cpu, args.link) for cpu in arches}
         native_tools.kernel_check(target_os, arches)
@@ -288,7 +337,14 @@ def main(argv=None):
                 # （实测 24784 条 build 规则逐字节相同），却会让 GN 额外做一次生成输入校验，
                 # 在 Android 的 java build_config 目标上误报 58 个 "Input to target not
                 # generated by a dependency" 并以退出码 1 结束，所以只限制 root target。
-                F.run([gn, "gen", out, f"--root-target={root_target}"], SRC)
+                try:
+                    F.run([gn, "gen", out, f"--root-target={root_target}"], SRC, tee=True)
+                except subprocess.CalledProcessError as error:
+                    # GN 把错误打在 stdout、进度打在 stderr，两条流都要看。
+                    hint = gn_failure_hint(f"{error.stderr or ''}\n{error.output or ''}", version)
+                    if hint is None:
+                        raise
+                    F.err(hint)
                 write_if_changed(stamp, json.dumps(identity, indent=2) + "\n")
             elif "build" in actions and not args.dry_run:
                 # args.gn 由本脚本以 UTF-8 写出（含中文注释），必须显式按 UTF-8 回读：

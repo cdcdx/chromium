@@ -1,29 +1,73 @@
-"""Exercise the actual POSIX packager with small, isolated delivery fixtures."""
-import platform
+"""Exercise the actual POSIX desktop packager with small, isolated delivery fixtures.
+
+前提：工作区已存在 src/（打包器要求源码树），因此这里按 src 是否就绪跳过。
+内核仓库 arupa_desktop 无需提前 fetch —— 交付 ABI 校验脚本用 --verify-script 注入替身，
+本文件只验证 locale 收件口径和"校验失败必须失败并清掉半成品"这两条契约。
+"""
 import os
 from pathlib import Path
+import platform
 import struct
 import subprocess
 import tempfile
 import unittest
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 PACKAGER = ROOT / "scripts/packaging/package-arupa_desktop.sh"
+HAVE_SRC = (ROOT / "src").is_dir()
+
+# 内核仓 tools/verify_transfer_delivery.py 的测试替身：只保留"必需符号不得缺失"这条契约。
+VERIFIER = '''#!/usr/bin/env python3
+import argparse
+import json
+import subprocess
+import sys
+
+REQUIRED = ("arupa_kernel_transfer_runtime",)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--library", required=True)
+    parser.add_argument("--platform", required=True)
+    parser.add_argument("--report", required=True)
+    args = parser.parse_args()
+    dump = subprocess.run(["llvm-nm", args.library], capture_output=True, text=True).stdout
+    found = {line.split()[0].lstrip("_") for line in dump.splitlines() if line.split()}
+    missing = [name for name in REQUIRED if name not in found]
+    with open(args.report, "w", encoding="utf-8") as stream:
+        json.dump({"platform": args.platform, "missing": missing}, stream)
+    if missing:
+        print("缺少网盘 V5 必需 ABI: " + ", ".join(missing), file=sys.stderr)
+        return 1
+    return 0
+
+
+raise SystemExit(main())
+'''
 
 
 @unittest.skipUnless(platform.system() in ("Darwin", "Linux"), "POSIX packager")
+@unittest.skipUnless(HAVE_SRC, "需要工作区已 fetch src 源码树")
 class LocalePackagingTest(unittest.TestCase):
     def package(self, target_os, locale_files, check, symbols=None):
         with tempfile.TemporaryDirectory(prefix="arupa-package-test-") as tmp:
             root = Path(tmp)
             # These tests isolate resource packaging, not native ABI behavior.
-            # The ABI checker has separate PE fixtures and real dylib acceptance.
-            tools = root / 'tools'; tools.mkdir()
+            # The ABI gate itself is the kernel repo's script; here it is a stub.
+            tools = root / 'tools'
+            tools.mkdir()
             nm = tools / 'llvm-nm'
             names = symbols if symbols is not None else ['arupa_kernel_transfer_runtime', 'arupa_kernel_set_ext_api_handler_ctx', 'arupa_kernel_respond_ext_api', 'arupa_free']
             output = '\n'.join('_'+n if target_os == 'mac' else n+' T 0 1' for n in names)
-            nm.write_text('#!/usr/bin/env python3\nprint('+repr(output)+')\n'); nm.chmod(0o755)
+            nm.write_text('#!/usr/bin/env python3\nprint('+repr(output)+')\n')
+            nm.chmod(0o755)
+            verifier = root / 'verify_transfer_delivery.py'
+            verifier.write_text(VERIFIER)
+            headers = root / 'public'
+            headers.mkdir()
+            (headers / 'arupa_kernel_capi.h').write_text('/* fixture */\n')
             env = dict(os.environ, PATH=str(tools)+os.pathsep+os.environ['PATH'])
             out = root / "out"
             out.mkdir()
@@ -59,13 +103,15 @@ class LocalePackagingTest(unittest.TestCase):
             for name in ("angledata", "resources"):
                 (out / name).mkdir()
             if locale_files is not None:
-                (out / "locales").mkdir()
+                # 构建期目录名：不能是 locales/（Chromium 的 packed_resources 也写那里）。
+                (out / "arupa_locales").mkdir()
                 for name, data in locale_files.items():
-                    (out / "locales" / name).write_bytes(data)
+                    (out / "arupa_locales" / name).write_bytes(data)
             result = subprocess.run(
                 ["bash", str(PACKAGER), "--os", target_os, "--arch", arch,
                  "--ver", "0.0.0.0", "--out", str(out), "--num", "1",
-                 "--dist-dir", str(root / "dist"), "--no-package"],
+                 "--dist-dir", str(root / "dist"), "--no-package",
+                 "--include-dir", str(headers), "--verify-script", str(verifier)],
                 capture_output=True, text=True, timeout=30, env=env)
             delivery = root / "dist" / f"arupa-{target_os}-{arch}-0.0.0.0-static-1"
             check(result, delivery)
@@ -105,7 +151,7 @@ class LocalePackagingTest(unittest.TestCase):
     def test_missing_or_empty_supported_language_rejects_partial_delivery(self):
         def check(result, delivery):
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("locales/", result.stderr)
+            self.assertIn("arupa_locales/", result.stderr)
             self.assertFalse(delivery.exists(), "failed package must be removed")
         for os_name in ("mac", "linux"):
             for packs in ({}, {"zh-CN.pak": b"Chinese"}, {"en-US.pak": b"English"},

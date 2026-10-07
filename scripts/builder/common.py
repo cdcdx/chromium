@@ -28,8 +28,8 @@ WORKSPACE_ROOT = Path(__file__).resolve().parents[2]      # scripts/builder/ -> 
 SCRIPTS_DIR = WORKSPACE_ROOT / "scripts"
 SRC = WORKSPACE_ROOT / "src"
 KERNEL_REPO = WORKSPACE_ROOT / "nomadbrowser.kernel"
-PC_REPO = WORKSPACE_ROOT / "nomadbrowser.pc"
-ANDROID_REPO = WORKSPACE_ROOT / "nomadbrowser.android"
+PC_REPO = WORKSPACE_ROOT / "nomad_desktop"
+ANDROID_REPO = WORKSPACE_ROOT / "nomad_android"
 # 坑: 编译目录在 src/ 之外时，Windows 的 midl ACTION 会集体失败（midl.exe 把 GN rebase
 # 出来的 ../../src/... 写进注释，与按 src/out/<name> 布局生成的 checked-in 基线比对不上）。
 # 由 ensure_midl_out_of_tree_patch() 打补丁解决，目录位置保持工作区根的 out/。

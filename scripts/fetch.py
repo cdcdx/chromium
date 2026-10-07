@@ -6,11 +6,13 @@ import argparse
 import os
 from pathlib import Path
 import platform
+import random
 import re
 import shlex
-import shutil
 import subprocess
 import sys
+import threading
+import time
 from platforms import MATRIX, normalize_os, architectures, host_for
 
 if __name__ == "__main__":
@@ -23,13 +25,32 @@ IS_WIN = HOST_OS == "win"
 DRY_RUN = False
 URL_DEPOT_TOOLS = "https://chromium.googlesource.com/chromium/tools/depot_tools.git"
 URL_CHROMIUM = "https://chromium.googlesource.com/chromium/src.git"
-# target -> (.env key prefix, checkout directory)
-PROJECTS = {
-    "arupa_desktop": ("arupa_desktop", "arupa_desktop"),
-    "arupa_android": ("arupa_android", "arupa_android"),
-    "nomadbrowser.pc": ("nomad_desktop", "nomadbrowser.pc"),
-    "nomadbrowser.android": ("nomad_android", "nomadbrowser.android"),
-}
+# target -> (.env key prefix, checkout directory)；两者的名字当前总是同一个，
+# 用名字元组派生，避免同一串标识符写三遍后改名时漏改。
+PROJECT_NAMES = ("arupa_desktop", "arupa_android", "nomad_desktop", "nomad_android")
+PROJECTS = {name: (name, name) for name in PROJECT_NAMES}
+# 瞬时网络故障才重试：googlesource 对匿名共享配额限流时返回 429 / RESOURCE_EXHAUSTED，
+# 以及常见的 DNS/连接抖动。参数错误、引用不存在等确定性失败不在其中，重试没有意义。
+TRANSIENT_NETWORK = re.compile(
+    r"RESOURCE_EXHAUSTED|rate limit|too many requests"
+    r"|returned error: (?:429|5\d\d)|HTTP (?:429|5\d\d)"
+    r"|RPC failed|early EOF|remote end hung up|unexpected disconnect"
+    r"|(?:Could not|Couldn't|unable to) resolve host|Temporary failure in name resolution"
+    r"|Connection (?:reset|timed out|refused)|Operation timed out"
+    r"|gnutls_handshake\(\) failed|SSL_ERROR", re.I)
+RATE_LIMITED = re.compile(
+    r"RESOURCE_EXHAUSTED|rate limit|too many requests|returned error: 429|HTTP 429", re.I)
+DEFAULT_RETRIES = 5
+DEFAULT_RETRY_DELAY = 10.0
+MAX_RETRY_DELAY = 120.0
+# 超过这个时长没有输出就打印一次“仍在运行”，避免把静默下载误判成卡死。
+HEARTBEAT_SECONDS = 120.0
+# 补拉空 DEPS 仓库时的重试次数：这类仓库都不小，一次断流就得重下。
+DEPS_REPAIR_RETRIES = 8
+# depot_tools 自举生成、而它自己又没 gitignore 的路径；会被 require_clean 误判成"本地改动"。
+DEPOT_GENERATED = ("python-bin", "python3_bin_reldir.txt", "bootstrap-*_bin")
+RETRIES = DEFAULT_RETRIES
+RETRY_DELAY = DEFAULT_RETRY_DELAY
 
 
 def log(message):
@@ -79,14 +100,102 @@ def apply_proxy(cfg, proxy=None):
     return value
 
 
-def run(cmd, cwd=None, capture=False):
+def retry_wait(attempt):
+    """指数退避并加入抖动，避免多个失败请求在同一时刻一起重试。"""
+    return min(RETRY_DELAY * (2 ** attempt), MAX_RETRY_DELAY) + random.uniform(0, RETRY_DELAY / 2)
+
+
+def pump(stream, sink, chunks, state=None):
+    """分块转发子进程管道并留档。
+
+    分块（而不是按行）转发才能让 git --progress 的 \\r 进度行保持实时；每条管道一个
+    线程，两个管道同时读，不会因为写满而死锁。"""
+    while True:
+        chunk = os.read(stream.fileno(), 65536)
+        if not chunk:
+            return
+        text = chunk.decode("utf-8", "replace")
+        chunks.append(text)
+        if state is not None:
+            state["last"] = time.time()
+        sink.write(text)
+        sink.flush()
+
+
+def heartbeat(state):
+    """长时间没有输出时周期性提示。
+
+    gclient/vpython/CIPD 这类步骤会把子进程输出缓存到自己结束才打印；没有心跳时，
+    静默的慢速下载（例如 vpython 从 Google Artifact Registry 拉 wheel）看起来就像卡死。"""
+    while not state["done"].wait(HEARTBEAT_SECONDS):
+        idle = time.time() - state["last"]
+        if idle >= HEARTBEAT_SECONDS:
+            log(f"…仍在运行（已 {int((time.time() - state['start']) / 60)} 分钟，"
+                f"最近 {int(idle)}s 无输出）：{state['label']}")
+
+
+def execute(cmd, cwd, capture, tee):
+    """执行命令，返回 (stdout, returncode, stderr)。
+
+    tee 为真时 stdout/stderr 都一边实时转发一边留档：既可读输出判断失败是否属于可重试
+    的限流/网络抖动，也不丢实时进度。"""
+    if capture or not tee:
+        result = subprocess.run(cmd, cwd=cwd, check=False, text=True, encoding="utf-8",
+                                errors="replace", stdout=subprocess.PIPE if capture else None,
+                                stderr=subprocess.PIPE if tee else None)
+        message = result.stderr or ""
+        if message:
+            sys.stderr.write(message)
+            sys.stderr.flush()
+        return (result.stdout or "").strip() if capture else "", result.returncode, message
+    with subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        stdout_chunks, stderr_chunks = [], []
+        state = {"start": time.time(), "last": time.time(), "done": threading.Event(),
+                 "label": shlex.join(cmd)[:160]}
+        threads = [threading.Thread(target=pump, args=(process.stdout, sys.stdout, stdout_chunks, state), daemon=True),
+                   threading.Thread(target=pump, args=(process.stderr, sys.stderr, stderr_chunks, state), daemon=True),
+                   threading.Thread(target=heartbeat, args=(state,), daemon=True)]
+        for thread in threads:
+            thread.start()
+        try:
+            for thread in threads[:2]:
+                thread.join()
+            process.wait()
+        finally:
+            state["done"].set()
+    return "".join(stdout_chunks).strip(), process.returncode, "".join(stderr_chunks)
+
+
+def run(cmd, cwd=None, capture=False, retry=False, tee=False, retries=None):
+    """执行命令；retry 为真时对瞬时网络错误（含 googlesource 429 限流）退避重试。
+
+    retries 可覆盖默认重试次数（大仓补拉这类一次要下几百 MB 的操作用得着）。
+    tee 为真时 stdout/stderr 一边实时转发一边留档，失败时 stderr 随 CalledProcessError 返回
+    （gclient 这类把错误打到 stdout 的命令，两条流都会参与重试判断）。"""
     cmd = [str(item) for item in cmd]
     log(("(dry-run) " if DRY_RUN else "") + shlex.join(cmd))
     if DRY_RUN:
         return ""
-    result = subprocess.run(cmd, cwd=cwd, check=True, text=True,
-                            stdout=subprocess.PIPE if capture else None)
-    return result.stdout.strip() if capture else ""
+    attempts = max(0, int(RETRIES if retries is None else retries)) if retry else 0
+    for attempt in range(attempts + 1):
+        stdout, code, message = execute(cmd, cwd, capture, tee=tee or attempts > 0)
+        if code == 0:
+            return stdout if capture else ""
+        output = "\n".join(part for part in (message, stdout) if part)
+        if attempt < attempts and TRANSIENT_NETWORK.search(output):
+            reason = "远端限流（HTTP 429）" if RATE_LIMITED.search(output) else "网络瞬时失败"
+            wait = retry_wait(attempt)
+            log(f"{reason}，{wait:.1f}s 后进行第 {attempt + 2}/{attempts + 1} 次尝试")
+            time.sleep(wait)
+            continue
+        if attempts and RATE_LIMITED.search(output):
+            err("远端限流（HTTP 429）且连续 "
+                f"{attempt + 1} 次尝试均失败：Chromium googlesource 对匿名共享配额的短时限流是常见原因。"
+                "请稍等几分钟后重跑（本地 tag 和已下载对象会复用，不会重复下载）；"
+                "拉取 Chromium 可在 .env 设置 chromium_mirror=1 改用 GitHub 镜像；"
+                "也可设置 https_proxy 更换出口 IP 后重试。")
+        raise subprocess.CalledProcessError(code, cmd, output=stdout, stderr=message)
+    return ""
 
 
 def resolve_depot_tools_dir(cfg):
@@ -115,29 +224,78 @@ def sanitize_library_path():
     log(f"忽略 LIBRARY_PATH 里不存在的目录: {os.pathsep.join(i for i in items if i not in kept)}")
 
 
+def python3_candidates(depot):
+    """真解释器候选目录，按优先级返回。
+
+    depot_tools 新自举布局把解释器放在 bootstrap-*_bin/python3/bin，目录名记在
+    python3_bin_reldir.txt；旧布局是 python-bin。最后是 Chromium 自带的 cpython3。"""
+    candidates = []
+    reldir = depot / "python3_bin_reldir.txt"
+    if reldir.is_file():
+        relative = reldir.read_text(encoding="utf-8", errors="replace").strip()
+        if relative:
+            candidates.append(depot / relative)
+    candidates += [depot / "python-bin", CHROMIUM_SRC / "third_party/cpython3/host/bin"]
+    return candidates
+
+
+def ensure_python_alias(directory):
+    """保证 `python` 能解析到 directory 里的 python3，返回提供 `python` 的目录。
+
+    depot_tools 的包装脚本（gclient、gsutil.py、ensure_bootstrap…）执行的是 `python`，
+    而新自举目录里只有 `python3`，缺失时直接 `exec: python: not found`（exit 127）。
+    先在同一目录补软链；目录不可写（例如系统 python 目录）就退到工作区 .tools/bin。"""
+    if IS_WIN:
+        return directory
+    alias = directory / "python"
+    if os.path.lexists(alias):
+        return directory
+    try:
+        alias.symlink_to("python3")
+        return directory
+    except OSError:
+        pass
+    shim = WORKSPACE_ROOT / ".tools/bin"
+    link = shim / "python"
+    try:
+        shim.mkdir(parents=True, exist_ok=True)
+        if not os.path.lexists(link):
+            link.symlink_to(directory / "python3")
+        return shim
+    except OSError as error:
+        log(f"警告: 无法提供 python 命令（{error}）；depot_tools 的 gclient 等脚本可能起不来")
+        return None
+
+
 def ensure_real_python3(depot):
-    """把真解释器挂到 PATH 最前面。
+    """把真解释器挂到 PATH 最前面，并保证 `python` 可用。
 
     macOS 的 /usr/bin/python3 只是个 xcrun 桩：它按 SDKROOT 反查真解释器。Chromium 给
     rust 构建脚本注入的 SDKROOT 指向 out/sdk/xcode_links/<sdk>（build/config/mac/mac_sdk.gni），
     xcodebuild 不认这个路径，于是所有 #!/usr/bin/env python3 的脚本（如
     build/toolchain/apple/linker_driver.py）都以 exit 72 起不来：
         xcode-select: Failed to locate 'python3', requesting installation of ...
-    depot_tools 自举出的 python-bin/python3 是实打实的解释器，放在 PATH 最前面即可。"""
+    depot_tools 自举出的解释器是实打实的，放在 PATH 最前面即可。"""
     if IS_WIN:
         return
     current = os.environ.get("PATH", "").split(os.pathsep)
-    for directory in (depot / "python-bin", CHROMIUM_SRC / "third_party/cpython3/host/bin"):
-        if not (directory / "python3").is_file() or str(directory) in current:
+    for directory in python3_candidates(depot):
+        if not (directory / "python3").is_file():
             continue
-        os.environ["PATH"] = str(directory) + os.pathsep + os.environ.get("PATH", "")
-        log(f"python3: {directory}（绕开系统 xcrun 桩）")
+        provider = ensure_python_alias(directory)
+        for entry in (str(directory), str(provider) if provider else ""):
+            if entry and entry not in current:
+                os.environ["PATH"] = entry + os.pathsep + os.environ.get("PATH", "")
+                current.append(entry)
+        log(f"python3: {directory}（{'绕开系统 xcrun 桩' if HOST_OS == 'mac' else 'depot_tools 自举解释器'}）")
         return
 
 
 def tool_environment(cfg):
     depot = resolve_depot_tools_dir(cfg)
-    os.environ["PATH"] = str(depot) + os.pathsep + os.environ.get("PATH", "")
+    entries = os.environ.get("PATH", "").split(os.pathsep)
+    if str(depot) not in entries:  # 可重复调用（sync/hooks/工具链各自会调一次）
+        os.environ["PATH"] = str(depot) + os.pathsep + os.environ.get("PATH", "")
     os.environ["DEPOT_TOOLS_UPDATE"] = "0"
     os.environ["DEPOT_TOOLS_METRICS"] = "0"
     if IS_WIN:
@@ -149,33 +307,85 @@ def tool_environment(cfg):
     return depot
 
 
+def exclude_paths(repo, paths, description):
+    """把生成物写进 <repo>/.git/info/exclude，避免被 require_clean 当成"本地改动"。
+
+    只影响本仓库的状态显示：不写 .gitignore（会变成需要提交的改动），也不碰全局 Git 配置。"""
+    if DRY_RUN:
+        log(f"(dry-run) 将{description}加入 {repo} 的本地 Git exclude")
+        return
+    relative = run(["git", "rev-parse", "--git-path", "info/exclude"], repo, capture=True)
+    exclude = Path(relative)
+    if not exclude.is_absolute():
+        exclude = repo / exclude
+    text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    lines = text.splitlines()
+    changed = False
+    for path in paths:
+        line = "/" + str(path)
+        if line not in lines:
+            text = text.rstrip() + "\n" + line + "\n"
+            lines.append(line)
+            changed = True
+    if not changed:
+        return
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text(text, encoding="utf-8")
+    log(f"已把{description}加入 {exclude}")
+
+
 def require_clean(path):
     if DRY_RUN:
         return
     dirty = run(["git", "status", "--porcelain", "--ignore-submodules=all"], path, capture=True)
-    if dirty:
-        err(f"{path} 有本地改动，已停止；请先提交或 stash（包括未跟踪文件）后重试。")
+    if not dirty:
+        return
+    entries = dirty.splitlines()
+    listing = "\n".join(f"  {entry}" for entry in entries[:10])
+    if len(entries) > 10:
+        listing += f"\n  …另有 {len(entries) - 10} 项"
+    err(f"{path} 有本地改动，已停止；请先提交或 stash（包括未跟踪文件）后重试:\n{listing}")
 
 
 def setup_depot_tools(cfg):
     depot = resolve_depot_tools_dir(cfg)
     if (depot / ".git").exists():
+        # depot_tools 自举会生成未跟踪的 python-bin / bootstrap-*_bin / python3_bin_reldir.txt；
+        # 它们是工具自己的产物，不该让 require_clean 判定成"本地改动"而永久挡住更新。
+        exclude_paths(depot, DEPOT_GENERATED, "depot_tools 自举产物")
         require_clean(depot)
-        run(["git", "fetch", "origin", "HEAD"], depot)
+        run(["git", "fetch", "--progress", "origin", "HEAD"], depot, retry=True)
         run(["git", "checkout", "--detach", "FETCH_HEAD"], depot)
     elif depot.exists() and any(depot.iterdir()):
         err(f"{depot} 已存在且不是 Git 仓库")
     else:
-        run(["git", "clone", cget(cfg, "depot_tools_src", default=URL_DEPOT_TOOLS), depot])
+        run(["git", "clone", "--progress", cget(cfg, "depot_tools_src", default=URL_DEPOT_TOOLS), depot],
+            retry=True)
     tool_environment(cfg)
     # Run on every refresh: a marker from the previous revision does not prove
     # that the Python/CIPD packages match the newly fetched bootstrap manifest.
+    # 新版 depot_tools 去掉了 bootstrap_python3，改由 ensure_bootstrap 同步 CIPD/Python。
     if IS_WIN:
         run([depot / "bootstrap/win_tools.bat"], depot)
-    else:
+    elif (depot / "bootstrap_python3").is_file():
         run(["bash", "-c", 'source "$1" && bootstrap_python3', "bootstrap",
              depot / "bootstrap_python3"], depot)
+    elif (depot / "ensure_bootstrap").is_file():
+        run(["bash", depot / "ensure_bootstrap"], depot)
+    else:
+        log("警告: depot_tools 里既没有 bootstrap_python3 也没有 ensure_bootstrap，跳过解释器自举")
+    # 自举可能刚刚建好解释器目录：重新解析一次 PATH，否则 gclient 的 exec python 会落空。
+    tool_environment(cfg)
     run([depot / ("gclient.bat" if IS_WIN else "gclient"), "--version"], WORKSPACE_ROOT)
+
+
+def local_tag(src, ref):
+    """本地已有该 tag 且对象完整时无需再次联网（Chromium tag 不会变化）。"""
+    try:
+        run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], src, capture=True)
+    except subprocess.CalledProcessError:
+        return False
+    return True
 
 
 def fetch_chromium(cfg, version, shallow):
@@ -194,9 +404,15 @@ def fetch_chromium(cfg, version, shallow):
     if not shallow and (src / ".git").exists():
         if run(["git", "rev-parse", "--is-shallow-repository"], src, capture=True) == "true":
             flags = ["--unshallow"]
-    # Fetch the exact tag into FETCH_HEAD; checkout never falls back to old HEAD.
-    run(["git", "fetch", *flags, url, f"refs/tags/{version}:refs/tags/{version}"], src)
-    run(["git", "checkout", "--detach", "FETCH_HEAD"], src)
+    tag = f"refs/tags/{version}"
+    # Fetch the exact tag into the local tag ref; checkout never falls back to old HEAD.
+    # A tag already present locally means the objects are complete, so a re-run stays
+    # offline; --unshallow still has to reach the network.
+    if DRY_RUN or flags == ["--unshallow"] or not local_tag(src, tag):
+        run(["git", "fetch", "--progress", *flags, url, f"{tag}:{tag}"], src, retry=True)
+    else:
+        log(f"本地已有 {tag}，跳过重复下载")
+    run(["git", "checkout", "--detach", tag], src)
     return url
 
 
@@ -210,7 +426,7 @@ def fetch_project(name, url, ref):
     else:
         run(["git", "init", dest])
         run(["git", "remote", "add", "origin", url], dest)
-    run(["git", "fetch", url, ref], dest)
+    run(["git", "fetch", "--progress", url, ref], dest, retry=True)
     run(["git", "checkout", "--detach", "FETCH_HEAD"], dest)
 
 
@@ -248,6 +464,79 @@ def write_gclient(url, android, target_os=None):
         path.write_text(text, encoding="utf-8")
 
 
+DEPS_ENTRY = re.compile(r"^\s*'([^']+)':\s*'([^']+)',?\s*$", re.M)
+
+
+def deps_entries():
+    """读 gclient 记录的 DEPS 清单，返回 [(相对路径, url, revision)]；没有清单返回 None。"""
+    path = WORKSPACE_ROOT / ".gclient_entries"
+    if not path.is_file():
+        return None
+    entries = []
+    for relative, url in DEPS_ENTRY.findall(path.read_text(encoding="utf-8", errors="replace")):
+        entries.append((relative, *url.rsplit("@", 1)) if "@" in url else (relative, url, ""))
+    return entries
+
+
+def unsynced_deps():
+    """已建 git 仓库但没有提交的依赖：gclient 中断后的残骸。返回 None 表示从未同步过。
+
+    只检查自带 .git 的独立仓库（167 个约 0.15s）；gs:// 与 CIPD 条目缺了不影响内核构建。"""
+    entries = deps_entries()
+    if entries is None:
+        return None
+    broken = []
+    for relative, url, _ in entries:
+        path = WORKSPACE_ROOT / relative
+        if not (path / ".git").exists():
+            continue
+        probe = subprocess.run(["git", "--no-optional-locks", "-C", str(path), "rev-parse",
+                                "--verify", "--quiet", "HEAD"], capture_output=True)
+        if probe.returncode:
+            broken.append((relative, url))
+    return broken
+
+
+def repair_deps():
+    """补拉 gclient 留在空状态的 DEPS 仓库，返回补拉成功的相对路径列表。
+
+    gclient sync 遇到网络抖动时会把某些仓库留在「只 init + 配好 origin」的状态，却仍报告
+    100% 完成；之后 GN 只会报 `Unable to load "//third_party/.../BUILD.gn"`，看不出原因。
+    这里按清单里钉住的 revision 逐个补拉（与 gclient 一致用 --depth=1 浅拉取）并检出。"""
+    if DRY_RUN:
+        return []
+    broken = unsynced_deps()
+    if broken is None:
+        err(f"找不到 {WORKSPACE_ROOT / '.gclient_entries'}：gclient sync 从未成功过，"
+            "请先执行 bash fetch.sh chromium")
+    if not broken:
+        return []
+    entries = {relative: (url, revision) for relative, url, revision in deps_entries()}
+    log(f"{len(broken)} 个 DEPS 仓库未同步完成（空仓库），逐个补拉")
+    repaired, failed = [], []
+    for relative, url in broken:
+        path = WORKSPACE_ROOT / relative
+        url, revision = entries.get(relative, (url, ""))
+        if not revision:
+            failed.append(relative)
+            continue
+        # 中断留下的 tmp_pack_* 永远不会被 git 使用，清掉避免白占空间。
+        for stale in (path / ".git/objects/pack").glob("tmp_pack_*"):
+            stale.unlink(missing_ok=True)
+        log(f"补拉 {relative} @ {revision[:12]}")
+        try:
+            run(["git", "-C", str(path), "fetch", "--depth=1", "--no-tags", "--progress", url, revision],
+                retry=True)
+            run(["git", "-C", str(path), "checkout", "--detach", "FETCH_HEAD"])
+        except subprocess.CalledProcessError as error:
+            failed.append(f"{relative}（退出码 {error.returncode}）")
+            continue
+        repaired.append(relative)
+    if failed:
+        err("以下 DEPS 仓库补拉失败:\n  " + "\n  ".join(failed) + "\n请稍后重跑: bash fetch.sh deps")
+    return repaired
+
+
 def sync_deps(cfg, version, android, shallow, nohooks, jobs, target_os=None):
     depot = tool_environment(cfg)
     gclient = depot / ("gclient.bat" if IS_WIN else "gclient")
@@ -266,7 +555,12 @@ def sync_deps(cfg, version, android, shallow, nohooks, jobs, target_os=None):
         cmd += ["--no-history", "--shallow"]
     if nohooks:
         cmd.append("--nohooks")
-    run(cmd, WORKSPACE_ROOT)
+    # gclient 自己会并发拉上百个 googlesource 仓库，是最容易撞 429 的一步；
+    # 失败后可从断点续传（已完成的仓库不会重下），因此按瞬时故障重试。
+    run(cmd, WORKSPACE_ROOT, retry=True)
+    repaired = repair_deps()
+    if repaired:
+        log(f"已补拉 {len(repaired)} 个 DEPS 仓库: " + ", ".join(repaired))
 
 
 def chromium_version():
@@ -290,6 +584,10 @@ def build_parser():
     p.add_argument("--install-host-deps", action="store_true", help="显式安装宿主依赖；Linux 可能需要 sudo，Windows 需官方 VS 安装器")
     p.add_argument("--vs-installer", type=Path, help="Windows 官方 Visual Studio bootstrapper 路径（用于 host-deps）")
     p.add_argument("--jobs", type=int, default=8)
+    p.add_argument("--retries", type=int, default=DEFAULT_RETRIES,
+                   help=f"瞬时网络错误（含 googlesource 429 限流）的重试次数，默认 {DEFAULT_RETRIES}，0 关闭")
+    p.add_argument("--retry-delay", type=float, default=DEFAULT_RETRY_DELAY,
+                   help=f"首次重试前等待秒数，之后指数退避，默认 {DEFAULT_RETRY_DELAY:g}")
     p.add_argument("--proxy", default=None)
     p.add_argument("--nohooks", "--no-hooks", action="store_true")
     history = p.add_mutually_exclusive_group()
@@ -302,7 +600,7 @@ def build_parser():
 
 
 def main(argv=None):
-    global DRY_RUN
+    global DRY_RUN, RETRIES, RETRY_DELAY
     parser = build_parser()
     args = parser.parse_args(argv)
     DRY_RUN = args.dry_run
@@ -362,6 +660,9 @@ def main(argv=None):
         parser.error("请用 --ver 或 .env chromium_ver 指定 Chromium 四段版本号")
     if args.jobs < 1:
         parser.error("--jobs 必须大于 0")
+    if args.retries < 0 or args.retry_delay < 0:
+        parser.error("--retries 与 --retry-delay 不能为负数")
+    RETRIES, RETRY_DELAY = args.retries, args.retry_delay
     if args.save and not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", args.ver):
         parser.error("--save 需要显式 --ver X.Y.Z.W")
     repositories = {}
@@ -389,7 +690,7 @@ def main(argv=None):
         sync_deps(cfg, version, android, args.shallow, args.nohooks, args.jobs, args.os)
     if "hooks" in targets and not targets & {"android-sdk", "jdk"}:
         depot = tool_environment(cfg)
-        run([depot / ("gclient.bat" if IS_WIN else "gclient"), "runhooks"], WORKSPACE_ROOT)
+        run([depot / ("gclient.bat" if IS_WIN else "gclient"), "runhooks"], WORKSPACE_ROOT, retry=True)
     for name, (url, ref) in repositories.items():
         fetch_project(name, url, ref)
     for name in ("metal", "dotnet", "jdk", "android-sdk"):

@@ -2,7 +2,7 @@
 # =============================================================================
 #  nomad Android 浏览器（APK）编译 / 打包
 #
-#  分工: kernel 编 native（并出 arupa-kernel.aar），本层只管把 nomadbrowser.android
+#  分工: kernel 编 native（并出 arupa-kernel.aar），本层只管把 nomad_android
 #  用 Gradle 编成 APK。两边靠 app/libs/kernel/<abi>/arupa-kernel.aar 衔接 —— AAR 的
 #  sha256 写在 tools/ci/runtime-manifest.json，Gradle 在**配置期**就校验，版本/ABI
 #  对不上会在起步阶段炸，所以这里提前把话说清，省得翻几十屏堆栈。

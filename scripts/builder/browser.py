@@ -5,7 +5,7 @@
 #  编译目录: out/browser-<os>-<arch>-<ver>-<static|dynamic>
 #      · build   主输出 → 该目录本身（dotnet build -o）
 #      · package 载荷   → 该目录下的 payload/
-#      · 各工程自己的 obj/bin 仍留在 nomadbrowser.pc 里（不动，避免影响仓内既有约定）
+#      · 各工程自己的 obj/bin 仍留在 nomad_desktop 里（不动，避免影响仓内既有约定）
 #  交付目录: dist/browser-<os>-<arch>-<ver>-<n>
 #
 #  前置: 内核交付包必须先存在并通过门禁（python3 scripts/build.py kernel package）。
@@ -556,7 +556,7 @@ def warn_running_browser():
 
 
 def do_build(c: Ctx):
-    apply_developer_dir(c.cfg, "pc_developer_dir", "developer_dir")
+    apply_developer_dir(c.cfg, "nomad_developer_dir", "developer_dir")
     sln, main_proj = project_paths(c)
     cfg = cget(c.cfg, "pc_config", "PC_CONFIG", default="Release")
     env_api = os.environ.get("NOMAD_API_ENV", "Production")
@@ -594,7 +594,7 @@ def do_build(c: Ctx):
 
 
 def do_package(c: Ctx):
-    apply_developer_dir(c.cfg, "pc_developer_dir", "developer_dir")
+    apply_developer_dir(c.cfg, "nomad_developer_dir", "developer_dir")
     sln, main_proj = project_paths(c)
     cfg = cget(c.cfg, "pc_config", "PC_CONFIG", default="Release")
     env_api = os.environ.get("NOMAD_API_ENV", "Production")

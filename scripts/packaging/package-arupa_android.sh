@@ -24,7 +24,7 @@
 #   -n, --num N         交付序号（默认：已有 dist/arupa-{os}-{ver}-static-* 最大 n + 1）
 #       --dist-dir DIR  交付根（默认 <repo>/dist）
 #       --pak FILE      主 pak 来源；APP = 取 App 仓
-#                       （../nomadbrowser.android/app/src/main/assets/arupa_kernel.pak）
+#                       （../nomad_android/app/src/main/assets/arupa_kernel.pak）
 #                       默认：out/content_shell.pak，否则 out 根体积最大的 *.pak
 #   -p, --package DIR    附加交付内容源目录（默认 <repo>/package/package_android，整份并入交付包）
 #       --no-package     不加 package/（只出内核件）
@@ -182,7 +182,7 @@ fi
 resolve_pak() {
   local out="$1" f
   if [[ "${PAK_SRC}" == "APP" ]]; then
-    PAK_SRC="${ROOT_DIR}/../nomadbrowser.android/app/src/main/assets/arupa_kernel.pak"
+    PAK_SRC="${ROOT_DIR}/../nomad_android/app/src/main/assets/arupa_kernel.pak"
     [[ -f "${PAK_SRC}" ]] || err "--pak APP 找不到: ${PAK_SRC}"
     return
   fi

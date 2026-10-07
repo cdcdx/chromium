@@ -61,7 +61,7 @@ class ToolchainsTest(unittest.TestCase):
                 toolchains.setup_metal(cfg)
 
     def test_dotnet_install_honors_global_json_and_local_directory(self):
-        repo = self.root / 'nomadbrowser.pc'
+        repo = self.root / 'nomad_desktop'
         repo.mkdir()
         (repo / 'global.json').write_text(json.dumps({'sdk': {'version': '10.0.101'}}))
         with patch('shutil.which', return_value=None), patch('urllib.request.urlopen', return_value=io.BytesIO(b'# fixture')), patch.object(fetch, 'run') as run:

@@ -8,7 +8,7 @@
 
 | 原有问题 | 当前实现 |
 |---|---|
-| 根 build 仍以 `kernel/browser/android` 调度旧 nomad 项目，与独立 Arupa 脚本并存 | 根入口统一调度两个 Arupa 内核和两个 nomadbrowser 项目；内核打包实现在 `scripts/packaging/` |
+| 根 build 仍以 `kernel/browser/android` 调度旧 nomad 项目，与独立 Arupa 脚本并存 | 根入口统一调度两个 Arupa 内核（`arupa_desktop` / `arupa_android`）和两个 Nomad 浏览器（`nomad_desktop` / `nomad_android`）；内核打包实现在 `scripts/packaging/` |
 | fetch 默认未同步 DEPS，更新失败仍可能保留旧 HEAD 继续运行 | 默认同步源码、DEPS、hooks；命令失败立即退出，不报告成功 |
 | 内核、PC、Android 源码和版本混用 | 四个独立仓库分别配置 URL、tag/branch/commit |
 | Linux / Windows 缺少 ARM64 配置，桌面打包未接受 x86 | 每个系统一份 GN 配置，由 arch/link 生成参数；Windows / Linux 打包接受 x86 |
@@ -67,13 +67,21 @@ Windows 使用 `.\fetch.ps1 log` / `.\fetch.ps1 branch`。从其他目录使用�
 | `src`（目标名 `chromium`） | `chromium_src` | `chromium_ver` |
 | `arupa_desktop` | `arupa_desktop_src` | `arupa_desktop_ver` |
 | `arupa_android` | `arupa_android_src` | `arupa_android_ver` |
-| `nomadbrowser.pc` | `nomad_desktop_src` | `nomad_desktop_ver` |
-| `nomadbrowser.android` | `nomad_android_src` | `nomad_android_ver` |
+| `nomad_desktop` | `nomad_desktop_src` | `nomad_desktop_ver` |
+| `nomad_android` | `nomad_android_src` | `nomad_android_ver` |
 
 Chromium 版本使用四段 tag。业务仓库版本接受 tag、branch 或 commit SHA；要可重现，请使用 tag 或完整 SHA。
 同名 tag/branch 应显式写 `refs/tags/...` 或 `refs/heads/...`。
 脚本按 FETCH_HEAD 分离检出；业务仓库保留历史，Chromium 默认浅拉取。
-已有工作区有本地改动时停止，不 reset、不覆盖、不自动 stash。已有非 Git 目录不会被覆盖。
+已有工作区有本地改动时停止，不 reset、不覆盖、不自动 stash；报错会列出具体是哪些文件。
+已有非 Git 目录不会被覆盖。
+depot_tools 自举会生成未跟踪的 `python-bin/`、`bootstrap-*_bin/`、`python3_bin_reldir.txt`，
+它们是工具自己的产物，脚本会把它们写进 `depot_tools/.git/info/exclude`，不会被误判成"本地改动"
+（`src` 的模块挂载和构建入口用同样的机制处理）。
+新版 depot_tools 把解释器放在 `bootstrap-*_bin/python3/bin`（目录名记在 `python3_bin_reldir.txt`），
+里面只有 `python3`，而 `gclient`/`gsutil.py`/`ensure_bootstrap` 执行的却是 `python`；
+脚本会按该清单解析解释器、必要时在同一目录补一个 `python` 软链（目录不可写时退到工作区 `.tools/bin`），
+并按 depot_tools 的实际版本选择 `bootstrap_python3` 或 `ensure_bootstrap` 自举 CIPD/Python。
 Git 认证使用本机 credential helper / SSH 配置。
 
 ```bash
@@ -86,7 +94,7 @@ bash fetch.sh --os android --ver 154.0.8037.21
 
 # 单独更新一个业务仓库；地址也可通过 --arupa-desktop-src 指定。
 bash fetch.sh arupa_desktop --arupa-desktop-ver refs/tags/v1.0.0
-bash fetch.sh nomadbrowser.android --nomad-android-ver refs/heads/release
+bash fetch.sh nomad_android --nomad-android-ver refs/heads/release
 
 # 仅更新 Chromium 与工具/依赖，不要求四个业务仓库的配置。
 bash fetch.sh update --ver 154.0.8037.21 --save
@@ -102,8 +110,22 @@ Windows 使用相同参数，例如 ` .\fetch.ps1 --ver 154.0.8037.21`。
 `android` 目标是 `update --os android` 的便捷写法；`arupa_android` 目标只拉取该内核仓库。
 `--full-history` 关闭 Chromium 浅拉取，并在已有浅仓库上执行 unshallow。
 `--save` 只在全部请求步骤成功后保存显式 `--ver` 到 `.env`。
+
+Chromium googlesource 对匿名共享配额有短时限流，命中时返回 `429 / RESOURCE_EXHAUSTED`
+（日志中表现为 `The requested URL returned error: 429`）。脚本只对这类瞬时网络错误重试，
+不会重试参数错误、引用不存在等确定性失败：`git fetch` / `git clone`（depot_tools、Chromium、
+业务仓库）会按指数退避重试，默认 `--retries 5`、首次等待 `--retry-delay 10` 秒，之后翻倍并加随机抖动；
+`--retries 0` 关闭重试，重试用完仍失败时会给出可操作提示（稍后重跑、`.env` 设置 `chromium_mirror=1`
+改用 GitHub 镜像、或用 `https_proxy` 更换出口 IP）。重试期间 git 的进度和错误输出照常实时显示。
+本地已有目标 tag 且对象完整时跳过 Chromium 的联网 fetch，因此限流后重跑不会重复下载已完成版本；
+确实需要重新拉取时先执行 `git -C src tag -d <ver>`。
 `.gclient` 保留已有 custom_vars/custom_deps，合并 `--os` 指定的目标系统、宿主系统，以及 x86/x64/arm64 target_cpu；重复执行不会添加重复项。
 依赖同步显式传入当前 Chromium commit，避免 managed=False 时版本漂移。
+依赖同步是最容易撞限流的一步（gclient 并发拉上百个 googlesource 仓库），因此 `gclient sync` 与
+`runhooks` 同样按瞬时网络错误重试；这两个命令把输出打在 stdout，所以重试判断同时看 stdout 与 stderr。
+gclient 在 fetch 被打断时会把某些仓库留在「只 init + 配好 origin」的空状态，**却仍报告 100% 完成**；
+`fetch deps` 在 sync 后按 `.gclient_entries` 复查这类空仓库，用清单里钉住的 revision 逐个
+`git fetch --depth=1` 补拉并检出（顺带清理残留的 `tmp_pack_*`）；依赖都健康时这一步约 0.15 秒。
 `--nohooks` 会跳过 Chromium hooks，之后需执行 `fetch hooks`。
 
 ## 编译与打包
@@ -148,6 +170,13 @@ bash fetch.sh host-deps --os linux --arch x86
 bash fetch.sh sysroots --os linux --arch arm64
 ```
 
+Linux 宿主依赖失败时不会只丢一个 `install-build-deps.py` 的退出码：上游把 `apt-get --just-print install`
+的真实报错吞掉了（它打印 `e.stdout`，而 `check_output` 把输出放在 `e.output`），脚本会用上游打印的包列表
+重跑一次只读复核，输出报错/依赖冲突节选，并按原因给出可直接执行的建议（`sudo apt-get -f install` 修复
+未满足依赖或半安装的包、`apt-get update`/换源解决 `Unable to locate package`、`dpkg --add-architecture i386`、
+apt/dpkg 锁占用等）。`--lib32` 只在需要 32 位目标时加入；`--arch all` 因包含 x86 而需要它，若宿主不提供
+i386 依赖可用 `--arch x64` / `--arch arm64` 先跳过。
+
 ```powershell
 # 使用符合当前 Chromium 要求的微软官方 VS bootstrapper，保留安装界面。
 .\fetch.ps1 host-deps --os win --arch all --vs-installer C:\Downloads\vs_Community.exe
@@ -172,16 +201,16 @@ VS/SDK 版本解析使用当前 Chromium 的 `build/vs_toolchain.py`，不在外
 
 | 入口 | 项目 | 目标系统 | CPU |
 |---|---|---|---|
-| `build.ps1` | `arupa_desktop` / `nomadbrowser.pc` | win | x86 / x64 / arm64 |
-| `build.sh` | `arupa_desktop` / `nomadbrowser.pc` | macos（别名 mac） | x64 / arm64 |
-| `build.sh` | `arupa_desktop` / `nomadbrowser.pc` | linux | x86 / x64 / arm64 |
-| `build.sh` | `arupa_android` / `nomadbrowser.android` | android | x64 / arm64 |
+| `build.ps1` | `arupa_desktop` / `nomad_desktop` | win | x86 / x64 / arm64 |
+| `build.sh` | `arupa_desktop` / `nomad_desktop` | macos（别名 mac） | x64 / arm64 |
+| `build.sh` | `arupa_desktop` / `nomad_desktop` | linux | x86 / x64 / arm64 |
+| `build.sh` | `arupa_android` / `nomad_android` | android | x64 / arm64 |
 
 桌面目标在相应系统宿主构建，同系统内可选择不同 CPU。Android 在 Linux 宿主构建。
 `arupa_desktop` 省略 `--os` / `--arch` 时默认当前系统、当前芯片；
 `arupa_android` 默认 `--os android --arch all`，同时编译 x64 和 arm64；可显式 `--arch` 只编译一种。
 内核 Ninja 的 `--jobs/-j` 默认自动计算：取 CPU 逻辑核心数与内存允许任务数中的较小值，最低为 1。
-内存按每个编译任务 2 GiB 估算，并预留至少 2 GiB 或总物理内存的 20%（取较大值）；
+内存按每个编译任务 2 GiB 估算，并预留至少 1.5 GiB 或总物理内存的 20%（取较大值）；
 例如 16 核/16 GiB 默认 6 个任务，16 核/32 GiB 默认 12 个任务。Linux 同时遵守进程 CPU affinity。
 无法获取内存时保守使用 1 个任务；可用 `--jobs 8` 手动覆盖。该估算不是硬性内存限制，
 不计其他进程当前占用或容器内存配额；内存紧张或容器内构建时请手动调低。
@@ -260,6 +289,11 @@ bash build.sh arupa_desktop --os win --arch all --dry-run
 已删除 `--plugin-runtime` 参数及专用运行时检查、复制逻辑，不再向 `kernel/plugin-runtime` 或
 `kernel/<arch>/plugin-runtime` 注入文件。附件目录内若有 `plugin-runtime/`，仅作为普通附件复制到交付根目录。
 
+`gn gen` 前会按 `.gclient_entries` 检查 DEPS 子仓库是否同步完成（只检查自带 `.git` 的独立仓库，
+167 个约 0.15 秒）：gclient sync 被限流中断后留下的空仓库会让 GN 只报
+`Unable to load "//third_party/skia/gn/shared_sources.gni"`，看不到"依赖没同步完"这个真实原因；
+预检查会直接列出未同步的依赖及其应有版本，并给出 `bash fetch.sh deps --ver <版本>`（该命令会按清单自动补拉）。
+
 构建目录为 `src/out/arupa-<os>-<arch>-<version>-static`，dynamic 目录省略 `-static`。
 版本默认读取 `src/chrome/VERSION`，显式 `--ver` 必须与它一致。
 桌面交付目录：`dist/arupa-<os>-<arch>-<version>-static-<n>/`。
@@ -293,16 +327,16 @@ WebUI 构建前使用 npm 自带的 semver 校验 `package.json` 的 `engines.no
 默认 Release；`--variant debug` 可切换。默认构建 WebUI，`--no-web` 复用已有资源，资源缺失会报错。
 
 ```bash
-bash build.sh nomadbrowser.pc all --os macos --arch arm64 --ver 154.0.8037.21 --zip
-bash build.sh nomadbrowser.pc all --os linux --arch x64 --ver 154.0.8037.21 --delivery /path/to/kernel-delivery
-bash build.sh nomadbrowser.android all --arch all --ver 154.0.8037.21 --zip
+bash build.sh nomad_desktop all --os macos --arch arm64 --ver 154.0.8037.21 --zip
+bash build.sh nomad_desktop all --os linux --arch x64 --ver 154.0.8037.21 --delivery /path/to/kernel-delivery
+bash build.sh nomad_android all --arch all --ver 154.0.8037.21 --zip
 # 只打包此前成功生成且未经修改的浏览器产物。
-bash build.sh nomadbrowser.pc package --os macos --arch arm64 --ver 154.0.8037.21 --zip
+bash build.sh nomad_desktop package --os macos --arch arm64 --ver 154.0.8037.21 --zip
 ```
 
 ```powershell
-.\build.ps1 nomadbrowser.pc all --arch x64 --ver 154.0.8037.21 --zip
-.\build.ps1 nomadbrowser.pc all --arch arm64 --ver 154.0.8037.21 --delivery D:\deliveries\arupa-win-arm64
+.\build.ps1 nomad_desktop all --arch x64 --ver 154.0.8037.21 --zip
+.\build.ps1 nomad_desktop all --arch arm64 --ver 154.0.8037.21 --delivery D:\deliveries\arupa-win-arm64
 ```
 
 PC 默认工程分别为 `NomadBrowser.Avalonia`、`NomadBrowser.Avalonia.Mac`、`NomadBrowser.Avalonia.Linux` 下同名 csproj；

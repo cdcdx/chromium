@@ -685,10 +685,10 @@ def framework_parts(c: Ctx) -> dict[str, bytes]:
     #    → 任意 loadUrl 即 FATAL。见第 2 步（唯一来源）。
     pak = common.ANDROID_REPO / "app" / "src" / "main" / "assets" / "arupa_kernel.pak"
     take("arupa_kernel.pak", pak.read_bytes() if pak.is_file() else None,
-         "nomadbrowser.android/app/src/main/assets/" if pak.is_file() else "")
+         "nomad_android/app/src/main/assets/" if pak.is_file() else "")
     aar = app_kernel_aar(c)
     if aar is not None:
-        rel = f"nomadbrowser.android/app/libs/kernel/{c.arch}/arupa-kernel.aar"
+        rel = f"nomad_android/app/libs/kernel/{c.arch}/arupa-kernel.aar"
         take("libarupapluginhost.so",
              _read_aar_entry(aar, f"jni/{jni}/libarupapluginhost.so"), rel)
         take("proguard.txt", _read_aar_entry(aar, "proguard.txt"), rel)

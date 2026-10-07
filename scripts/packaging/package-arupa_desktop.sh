@@ -31,6 +31,8 @@
 #       --pak FILE      主 pak 来源，默认 out/content_shell.pak，
 #                       没有时取 out 根体积最大的 *.pak
 #       --include-dir DIR       默认 <repo>/arupa_desktop/public（里面的 *.h 拷进 include/）
+#       --verify-script FILE    交付 ABI 校验脚本（默认 <repo>/arupa_desktop/tools/verify_transfer_delivery.py）；
+#                               会被拷进交付根 tools/ 并执行，非零退出即判定交付不合格
 #       --package-dir DIR       把该目录下的一级文件/文件夹整份拷进交付根
 #                               （默认 <repo>/package/package_desktop，常见: docs/ dotnet/）
 #       --no-package    不拷 package 目录
@@ -49,7 +51,7 @@
 #   OUT/snapshot_blob.bin / v8_context_snapshot* → kernel/同名（至少一个，必需）
 #   OUT/libEGL.* / libGLESv2.* / libvk_swiftshader.* / libvulkan.*  → kernel/（有则带）
 #   OUT/angledata/ hyphen-data/ resources/          → kernel/同名目录（可选）
-#   OUT/locales/{en-US,zh-CN}.pak                 → kernel/locales/（旧构建可无；有则两者必需）
+#   OUT/arupa_locales/{en-US,zh-CN}.pak           → kernel/locales/（旧构建可无；有则两者必需）
 #   OUT/vk_swiftshader_icd.json                  → kernel/（有则带）
 #   OUT/devtools_resources.pak 或 OUT/gen/content/browser/devtools/devtools_resources.pak → kernel/（必需）
 #   OUT/Libraries/libtest_trace_processor.dylib  → kernel/Libraries/（mac，有则带）
@@ -84,6 +86,7 @@ NUM=""
 DIST_DIR="${ROOT_DIR}/dist"
 PAK_SRC=""
 INC_DIR=""
+VERIFY_SCRIPT=""
 PKG_DIR=""
 DOCS_DIR=""
 PROBE_DIR=""
@@ -102,6 +105,7 @@ while [[ $# -gt 0 ]]; do
     --dist-dir)        DIST_DIR="${2:?--dist-dir 需要参数}"; shift 2 ;;
     --pak)             PAK_SRC="${2:?--pak 需要参数}"; shift 2 ;;
     --include-dir)     INC_DIR="${2:?--include-dir 需要参数}"; shift 2 ;;
+    --verify-script)   VERIFY_SCRIPT="${2:?--verify-script 需要参数}"; shift 2 ;;
     --package-dir)     PKG_DIR="${2:?--package-dir 需要参数}"; shift 2 ;;
     --no-package)      NO_PACKAGE=1; shift ;;
     --docs)            DOCS_DIR="${2:?--docs 需要参数}"; shift 2 ;;
@@ -192,6 +196,7 @@ fi
 
 # ---------------------------------------------------------------- 公共附件
 if [[ -z "${INC_DIR}" ]]; then INC_DIR="${ROOT_DIR}/arupa_desktop/public"; fi
+if [[ -z "${VERIFY_SCRIPT}" ]]; then VERIFY_SCRIPT="${ROOT_DIR}/arupa_desktop/tools/verify_transfer_delivery.py"; fi
 
 # package 附加件（docs/ dotnet/ …）：一级文件/文件夹整份搬进交付根，与 kernel.py copy_assets 同口径
 if [[ -z "${PKG_DIR}" ]]; then PKG_DIR="${ROOT_DIR}/package/package_desktop"; fi
@@ -381,12 +386,15 @@ package_arch() {
   # Older content-shell deliveries embed English strings in the main pak.
   # Nomad supports Simplified Chinese and English. Copy an explicit allowlist
   # so stale outputs from previous multilingual builds cannot enter deliveries.
-  if [[ -d "${out}/locales" ]]; then
+  # 构建期目录是 arupa_locales/（不能叫 locales/：Chromium 的 //chrome:packed_resources
+  # 也生成 locales/<locale>.pak，GN 的重复输出检查是全局的），交付里仍是 kernel/locales/。
+  local locale_dir="${out}/arupa_locales"
+  if [[ -d "${locale_dir}" ]]; then
     mkdir -p "${dest}/locales"
     local locale
     for locale in en-US zh-CN; do
-      [[ -s "${out}/locales/${locale}.pak" ]] || err "缺少或为空: locales/${locale}.pak；请先构建 arupa_locales（中英文均为必需）"
-      want "${out}/locales/${locale}.pak" "${dest}/locales" "arupa_locales"
+      [[ -s "${locale_dir}/${locale}.pak" ]] || err "缺少或为空: arupa_locales/${locale}.pak；请先构建 arupa_locales（中英文均为必需）"
+      want "${locale_dir}/${locale}.pak" "${dest}/locales" "arupa_locales"
     done
   else
     log "  locales/: 旧构建未生成独立语言包，使用主 pak 的英文资源"
@@ -573,8 +581,10 @@ for cpu in "${ARCHS[@]}"; do
   log "交付 id: ${DELIVERY_ID}  （ver=${VER} n=${NUM} os=${OS} arch=${cpu}）"
 
   package_arch "${cpu}" "${OUT}" "${DIST}"
+  [[ -f "${VERIFY_SCRIPT}" ]] \
+    || err "缺少交付 ABI 校验脚本: ${VERIFY_SCRIPT}（可用 --verify-script 指定）"
   mkdir -p "${DIST}/tools"
-  cp "${ROOT_DIR}/arupa_desktop/tools/verify_transfer_delivery.py" "${DIST}/tools/"
+  cp "${VERIFY_SCRIPT}" "${DIST}/tools/"
   python3 "${DIST}/tools/verify_transfer_delivery.py" \
     --library "${DIST}/kernel/$(lib_name "${OS}")" --platform "${OS}" \
     --report "${DIST}/transfer-abi.json" || err "网盘 V5 必需 ABI 缺失；请重新编译配套内核"

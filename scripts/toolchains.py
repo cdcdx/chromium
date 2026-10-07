@@ -80,7 +80,7 @@ def download_installer(url, destination):
 
 
 def setup_dotnet(cfg):
-    repo = F.WORKSPACE_ROOT / 'nomadbrowser.pc'
+    repo = F.WORKSPACE_ROOT / 'nomad_desktop'
     pin = repo / 'global.json'
     version = F.cget(cfg, 'dotnet_version')
     if not version and pin.is_file():

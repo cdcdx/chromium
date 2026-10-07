@@ -133,11 +133,17 @@ def digest(path):
     return h.hexdigest()
 
 
+def has_ditto():
+    """macOS 专用：ditto 才能保住扩展属性（托管 DLL 的签名）与资源分支。"""
+    return F.HOST_OS == 'mac' and shutil.which('ditto') is not None
+
+
 def copy_payload_tree(source, destination, target_os):
     # On macOS, signatures of managed DLLs live in extended attributes.
     # Python shutil on Apple's Python does not preserve them; ditto also
-    # preserves bundle symlinks and resource forks.
-    if target_os == 'mac':
+    # preserves bundle symlinks and resource forks. 缺少 ditto 时退回
+    # shutil，避免在非 macOS 宿主上直接失败。
+    if target_os == 'mac' and has_ditto():
         F.run(['ditto', source, destination])
     else:
         shutil.copytree(source, destination, dirs_exist_ok=True, symlinks=True)
@@ -162,7 +168,7 @@ def delivery(root, args, target_os, arch, version):
     return path
 
 
-def pc_project(repo, target_os, explicit):
+def desktop_project(repo, target_os, explicit):
     if explicit:
         path = explicit.expanduser().resolve()
     else:
@@ -170,13 +176,14 @@ def pc_project(repo, target_os, explicit):
                   'linux': 'NomadBrowser.Avalonia.Linux'}[target_os]
         path = repo / folder / (folder + '.csproj')
     if not path.is_file():
-        F.err(f'缺少浏览器项目 {path}；请先 fetch nomadbrowser.pc，或使用 --pc-project 指定实际工程')
+        F.err(f'缺少浏览器项目 {path}；请先 fetch nomad_desktop，或使用 --pc-project 指定实际工程')
     return path
 
 
-def pc_build(root, args, target_os, arch, version, output):
-    repo = root / 'nomadbrowser.pc'
-    project = pc_project(repo, target_os, args.pc_project)
+def desktop_build(root, args, target_os, arch, version, output):
+    repo = root / 'nomad_desktop'
+    # 命令行标志是 --pc-project，对应 argparse 属性 args.pc_project。
+    project = desktop_project(repo, target_os, args.pc_project)
     nuget_config = (args.nuget_config or Path(__file__).resolve().parent.parent / 'build/nuget.config').expanduser().resolve()
     if not nuget_config.is_file():
         F.err(f'NuGet 配置不存在: {nuget_config}')
@@ -205,7 +212,7 @@ def pc_build(root, args, target_os, arch, version, output):
             props.append(f'-p:ArupaKernelAssembly={stable}')
     if target_os == 'mac':
         props += ['-p:BuildMac=true', f'-p:MacRuntimeIdentifier={rid}']
-        developer_dir = F.cget(F.load_config(), 'pc_developer_dir')
+        developer_dir = F.cget(F.load_config(), 'nomad_developer_dir')
         if developer_dir:
             os.environ['DEVELOPER_DIR'] = developer_dir
     dotnet = prepare_dotnet(args, repo, project)
@@ -303,10 +310,10 @@ def validate_apk(path, arch):
 
 
 def android_build(root, args, arch, output):
-    repo = root / 'nomadbrowser.android'
+    repo = root / 'nomad_android'
     wrapper = repo / 'gradlew'
     if not wrapper.is_file():
-        F.err(f'缺少 {wrapper}；请先 fetch nomadbrowser.android')
+        F.err(f'缺少 {wrapper}；请先 fetch nomad_android')
     prepare_android_sdk(args, repo)
     aar = repo / f'app/libs/kernel/{arch}/arupa-kernel.aar'
     if not aar.is_file():
@@ -390,8 +397,12 @@ def package(args, output, identity):
     if final.exists() or Path(str(final) + '.zip').exists():
         F.err(f'交付包已存在: {final}')
     lock = destination / (final.name + '.lock')
-    with lock.open('x'):
-        pass
+    try:
+        with lock.open('x'):
+            pass
+    except FileExistsError:
+        F.err(f'交付序号正在被占用（可能是上次打包中断的残留）：{lock}；'
+              '确认没有并发打包后删除该文件再重试')
     stage = None
     try:
         stage = Path(tempfile.mkdtemp(prefix='.browser-package-', dir=destination))
@@ -414,7 +425,7 @@ def package(args, output, identity):
         if args.zip:
             archive_path = Path(str(final) + '.zip')
             try:
-                if identity['os'] == 'mac':
+                if identity['os'] == 'mac' and has_ditto():
                     F.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', final, archive_path])
                 else:
                     write_portable_zip(final, archive_path, destination)
@@ -434,13 +445,13 @@ def package(args, output, identity):
         except OSError as cleanup_error:
             F.log(f'警告: staging 清理未完成（{cleanup_error}）；可手工处理 {stage}')
         try:
-            # 删除受限环境（沙箱删除闸门直接终止进程，连 except 都接不住）下 unlink
-            # 等于自杀 —— 先改名旁置（零删除），unlink 只作兜底。
-            trash = lock.parent / (lock.name + '.trash-' + os.urandom(4).hex())
-            lock.rename(trash)
+            # 先尝试直接删除，避免在 dist/ 里留下 .lock.trash-* 垃圾；
+            # 删除受限环境（沙箱删除闸门）下 unlink 可能失败，再退回改名旁置。
+            lock.unlink()
         except OSError:
             try:
-                lock.unlink()
+                trash = lock.parent / (lock.name + '.trash-' + os.urandom(4).hex())
+                lock.rename(trash)
             except OSError as lock_error:
                 F.log(f'警告: lock 文件未能删除（{lock_error}）: {lock}')
     F.log(f'浏览器交付包: {final}')
@@ -464,7 +475,7 @@ def run(root, args, project, target_os, arches, version, actions):
         F.err('浏览器使用 .NET/Gradle；不支持 gen。GN 配置请用于 arupa_desktop/arupa_android')
     if args.args:
         F.err('--args 仅用于 Arupa 内核；浏览器通过交付件消费内核')
-    if project == 'nomadbrowser.android' and args.delivery:
+    if project == 'nomad_android' and args.delivery:
         F.err('Android 请将内核交付接入 app/libs/kernel/<arch> 并更新 runtime-manifest.json；--delivery 用于 PC')
     for arch in arches:
         identity = {'project': project, 'os': target_os, 'arch': arch, 'version': version, 'variant': args.variant}
@@ -474,8 +485,8 @@ def run(root, args, project, target_os, arches, version, actions):
                 output.parent.mkdir(parents=True, exist_ok=True)
                 # A failed rebuild must not permit packaging yesterday's output.
                 (output / 'build-manifest.json').unlink(missing_ok=True)
-            if project == 'nomadbrowser.pc':
-                pc_build(root, args, target_os, arch, version, output)
+            if project == 'nomad_desktop':
+                desktop_build(root, args, target_os, arch, version, output)
             else:
                 android_build(root, args, arch, output)
             if not F.DRY_RUN:

@@ -7,6 +7,7 @@ import platform
 
 GIB = 1024 ** 3
 MEMORY_PER_JOB = 2 * GIB
+RESERVE_MINIMUM = 1.5 * GIB
 
 
 def physical_memory():
@@ -51,12 +52,14 @@ def jobs_for_resources(cpus, memory):
     # This is a heuristic, not a per-process memory limit.
     if not memory or memory <= 0:
         return 1
-    reserve = max(1.5 * GIB, (memory + 4) // 5)
+    reserve = max(RESERVE_MINIMUM, (memory + 4) // 5)
     return max(1, min(max(1, cpus), (memory - reserve) // MEMORY_PER_JOB))
 
 
 def automatic_jobs():
     cpus, memory = cpu_capacity(), physical_memory()
     jobs = jobs_for_resources(cpus, memory)
-    reason = f'CPU 逻辑核心={cpus}，内存={memory / GIB:.1f} GiB，每任务预算 1.5 GiB，预留至少 2 GiB/20%' if memory else f'CPU 逻辑核心={cpus}，无法读取内存，保守使用 1 个任务'
+    reason = (f'CPU 逻辑核心={cpus}，内存={memory / GIB:.1f} GiB，'
+              f'每任务预算 {MEMORY_PER_JOB / GIB:.0f} GiB，预留至少 {RESERVE_MINIMUM / GIB:.1f} GiB 或总内存 20%'
+              ) if memory else f'CPU 逻辑核心={cpus}，无法读取内存，保守使用 1 个任务'
     return jobs, reason

@@ -34,6 +34,8 @@ class WorkspaceTest(unittest.TestCase):
         for project in ('arupa_desktop', 'arupa_android'):
             (self.root / project).mkdir()
             (self.root / project / 'BUILD.gn').write_text('')
+        # DEPS 已同步的空清单：verify_deps 只据此判断独立仓库是否为空。
+        (self.root / '.gclient_entries').write_text('')
         for module, name, value in ((fetch, 'WORKSPACE_ROOT', self.root), (fetch, 'CHROMIUM_SRC', self.src),
                                     (build, 'ROOT', self.root), (build, 'SRC', self.src), (fetch, 'DRY_RUN', False)):
             obj = patch.object(module, name, value)
@@ -43,14 +45,14 @@ class WorkspaceTest(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
-    def quiet(self, func, *args):
+    def quiet(self, func, *args, **kwargs):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            return func(*args)
+            return func(*args, **kwargs)
 
     def test_windows_build_refreshes_facade_even_with_existing_dll(self):
         import nomad
         from types import SimpleNamespace
-        repo = self.root / 'nomadbrowser.pc'
+        repo = self.root / 'nomad_desktop'
         project = repo / 'NomadBrowser.Avalonia/NomadBrowser.Avalonia.csproj'
         project.parent.mkdir(parents=True)
         project.write_text('<Project />')
@@ -68,7 +70,7 @@ class WorkspaceTest(unittest.TestCase):
                                variant='release', no_web=True)
         with patch.object(fetch, 'DRY_RUN', True), patch.object(nomad, 'delivery', return_value=kernel), \
              patch.object(nomad, 'prepare_dotnet', return_value='dotnet'), patch.object(fetch, 'run') as run:
-            self.quiet(nomad.pc_build, self.root, args, 'win', 'x64', VERSION, self.root / 'output')
+            self.quiet(nomad.desktop_build, self.root, args, 'win', 'x64', VERSION, self.root / 'output')
             builds = [call.args[0] for call in run.call_args_list if call.args[0][1] == 'build']
             self.assertEqual(len(builds), 1)
             self.assertEqual(builds[0][2], facade)
@@ -269,6 +271,216 @@ class WorkspaceTest(unittest.TestCase):
                 self.quiet(fetch.fetch_chromium, {'chromium_src': str(remote)}, VERSION, True)
             self.assertEqual((checkout / 'version.txt').read_text(), 'local')
 
+    def flaky_run(self, body, attempts, *, retry=True, error=None, **kwargs):
+        """执行一段按次数记录尝试的 Python 片段，返回 (尝试次数, sleep 次数)。"""
+        counter = self.root / 'attempts'
+        counter.unlink(missing_ok=True)
+        code = ('import pathlib, sys\n'
+                'counter = pathlib.Path(sys.argv[1])\n'
+                'attempt = int(counter.read_text()) + 1 if counter.exists() else 1\n'
+                'counter.write_text(str(attempt))\n'
+                + body)
+        command = [sys.executable, '-c', code, str(counter)]
+        with patch.object(fetch, 'RETRIES', attempts), patch.object(fetch, 'RETRY_DELAY', 0), \
+             patch.object(fetch, 'time') as clock:
+            if error is None:
+                self.quiet(fetch.run, command, self.root, False, retry, **kwargs)
+            else:
+                with self.assertRaisesRegex(*error):
+                    self.quiet(fetch.run, command, self.root, False, retry, **kwargs)
+            return counter.read_text(), clock.sleep.call_count
+
+    def test_dirty_checkout_lists_the_offending_entries(self):
+        repo = self.root / 'repo'
+        repo.mkdir()
+        subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+        (repo / 'local-change.txt').write_text('x')
+        with self.assertRaisesRegex(RuntimeError, 'local-change.txt'):
+            self.quiet(fetch.require_clean, repo)
+
+    def test_depot_bootstrap_artifacts_are_excluded_from_the_clean_check(self):
+        # depot_tools 自举生成的未跟踪文件不该被判定成"本地改动"。
+        repo = self.root / 'depot'
+        repo.mkdir()
+        subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+        (repo / 'python3_bin_reldir.txt').write_text('bootstrap-2@3.11.8.chromium.35_bin/python3/bin\n')
+        (repo / 'bootstrap-2@3.11.8.chromium.35_bin').mkdir()
+        with self.assertRaises(RuntimeError):
+            self.quiet(fetch.require_clean, repo)
+        self.quiet(fetch.exclude_paths, repo, fetch.DEPOT_GENERATED, 'depot_tools 自举产物')
+        self.quiet(fetch.require_clean, repo)
+        exclude = (repo / '.git/info/exclude').read_text()
+        self.assertIn('/python3_bin_reldir.txt', exclude)
+        self.assertIn('/bootstrap-*_bin', exclude)
+
+    def test_python3_resolution_follows_the_bootstrap_manifest(self):
+        depot = self.root / 'depot_tools'
+        interpreter = depot / 'bootstrap-2@3.11.8.chromium.35_bin/python3/bin'
+        interpreter.mkdir(parents=True)
+        (interpreter / 'python3').write_text('#!/bin/sh\n')
+        (depot / 'python3_bin_reldir.txt').write_text('bootstrap-2@3.11.8.chromium.35_bin/python3/bin\n')
+        self.assertEqual(fetch.python3_candidates(depot)[0], interpreter)
+        # gclient/gsutil/ensure_bootstrap 执行的是 python（自举目录里只有 python3）。
+        self.assertEqual(fetch.ensure_python_alias(interpreter), interpreter)
+        self.assertEqual(os.readlink(interpreter / 'python'), 'python3')
+        with patch.dict(os.environ, {'PATH': '/usr/bin'}):
+            self.quiet(fetch.ensure_real_python3, depot)
+            self.assertEqual(os.environ['PATH'].split(os.pathsep)[0], str(interpreter))
+
+    def test_depot_tools_bootstrap_uses_the_script_that_exists(self):
+        depot = self.root / 'depot_tools'
+        (depot / '.git').mkdir(parents=True)
+        (depot / 'ensure_bootstrap').write_text('#!/bin/bash\n')
+        with patch.object(fetch, 'exclude_paths') as exclude, patch.object(fetch, 'require_clean'), \
+             patch.object(fetch, 'tool_environment'), patch.object(fetch, 'run') as run:
+            self.quiet(fetch.setup_depot_tools, {})
+        exclude.assert_called_once_with(depot, fetch.DEPOT_GENERATED, 'depot_tools 自举产物')
+        commands = [list(map(str, call.args[0])) for call in run.call_args_list]
+        self.assertIn(['bash', str(depot / 'ensure_bootstrap')], commands)
+        self.assertNotIn('bootstrap_python3', ' '.join(' '.join(c) for c in commands))
+        (depot / 'bootstrap_python3').write_text('#!/bin/bash\n')
+        with patch.object(fetch, 'exclude_paths'), patch.object(fetch, 'require_clean'), \
+             patch.object(fetch, 'tool_environment'), patch.object(fetch, 'run') as run:
+            self.quiet(fetch.setup_depot_tools, {})
+        commands = [' '.join(map(str, call.args[0])) for call in run.call_args_list]
+        self.assertTrue(any('bootstrap_python3' in command for command in commands))
+
+    def test_per_call_retry_override_is_honoured(self):
+        # 大仓补拉用更多次数：RETRIES=1 时仍按 retries=3 尝试 4 次。
+        body = 'print("fatal: early EOF", file=sys.stderr)\nsys.exit(128)\n'
+        failure = (subprocess.CalledProcessError, '')
+        self.assertEqual(self.flaky_run(body, 1, retries=3, error=failure), ('4', 3))
+
+    def test_transient_rate_limit_is_retried_then_succeeds(self):
+        body = ('if attempt < 3:\n'
+                '    print("remote: RESOURCE_EXHAUSTED: Short term server-time rate limit exceeded", file=sys.stderr)\n'
+                '    print("fatal: unable to access: The requested URL returned error: 429", file=sys.stderr)\n'
+                '    sys.exit(128)\n')
+        self.assertEqual(self.flaky_run(body, 3), ('3', 2))
+
+    def test_rate_limit_exhaustion_points_at_mirror_and_proxy(self):
+        body = ('print("remote: RESOURCE_EXHAUSTED: Short term server-time rate limit exceeded", file=sys.stderr)\n'
+                'print("fatal: unable to access: The requested URL returned error: 429", file=sys.stderr)\n'
+                'sys.exit(128)\n')
+        error = (RuntimeError, 'chromium_mirror=1.*https_proxy')
+        self.assertEqual(self.flaky_run(body, 2, error=error), ('3', 2))
+
+    def test_transient_failure_reported_on_stdout_is_also_retried(self):
+        # gclient 把 git 的 429 打到 stdout —— 只看 stderr 会漏判。
+        body = ('if attempt < 2:\n'
+                '    print("fatal: unable to access: The requested URL returned error: 429")\n'
+                '    sys.exit(1)\n')
+        self.assertEqual(self.flaky_run(body, 3), ('2', 1))
+
+    def test_long_silent_command_reports_a_heartbeat(self):
+        # gclient/vpython 会把子进程输出缓存到结束才打印：静默几分钟时必须让用户知道还活着。
+        silent = [sys.executable, '-c', 'import time; time.sleep(0.6)']
+        output = io.StringIO()
+        with patch.object(fetch, 'HEARTBEAT_SECONDS', 0.05), contextlib.redirect_stdout(output), \
+             contextlib.redirect_stderr(io.StringIO()):
+            fetch.run(silent, self.root, False, True)
+        self.assertIn('仍在运行', output.getvalue())
+
+    def test_permanent_git_error_is_not_retried(self):
+        body = 'print("fatal: reference is not a tree: deadbeef", file=sys.stderr)\nsys.exit(128)\n'
+        failure = subprocess.CalledProcessError
+        self.assertEqual(self.flaky_run(body, fetch.DEFAULT_RETRIES, error=(failure, '')), ('1', 0))
+        self.assertEqual(self.flaky_run(body, fetch.DEFAULT_RETRIES, retry=False, error=(failure, '')), ('1', 0))
+
+    def test_existing_local_tag_skips_network_fetch(self):
+        remote = self.root / 'remote'
+        def git(*args, cwd=remote):
+            return subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+        remote.mkdir()
+        git('init')
+        git('config', 'user.name', 'Test')
+        git('config', 'user.email', 'test@example.invalid')
+        (remote / 'version.txt').write_text('first')
+        git('add', '.')
+        git('commit', '-m', 'first')
+        git('tag', VERSION)
+        checkout = self.root / 'checkout'
+        with patch.object(fetch, 'CHROMIUM_SRC', checkout):
+            self.quiet(fetch.fetch_chromium, {'chromium_src': str(remote)}, VERSION, True)
+            calls = []
+            def fake(cmd, cwd=None, capture=False, retry=False):
+                calls.append([str(item) for item in cmd])
+                return ''
+            with patch.object(fetch, 'run', side_effect=fake):
+                self.quiet(fetch.fetch_chromium, {'chromium_src': str(remote)}, VERSION, True)
+        self.assertFalse([cmd for cmd in calls if 'fetch' in cmd])
+        self.assertEqual(calls[-1][1:3], ['checkout', '--detach'])
+
+    def test_unsynced_deps_warn_but_do_not_block_the_build(self):
+        # 有些空仓库是 ANGLE/Dawn 的测试数据，跟本次目标无关，不该挡住编译。
+        (self.root / '.gclient_entries').write_text(
+            "  'src/third_party/skia': 'https://skia.googlesource.com/skia.git@a9c42c9f',\n")
+        (self.src / 'third_party/skia/.git').mkdir(parents=True)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            build.verify_deps(VERSION)
+        message = output.getvalue()
+        self.assertIn('third_party/skia', message)
+        self.assertIn('skia.googlesource.com', message)
+        self.assertIn(f'fetch.sh deps --ver {VERSION}', message)
+
+    def test_gn_load_failure_names_the_unsynced_dependency(self):
+        (self.root / '.gclient_entries').write_text(
+            "  'src/third_party/skia': 'https://skia.googlesource.com/skia.git@a9c42c9f',\n")
+        output = (f'ERROR at //skia/BUILD.gn:16:1: Unable to load '
+                  f'"{self.src}/third_party/skia/gn/shared_sources.gni".\n'
+                  'import("//third_party/skia/gn/shared_sources.gni")\n')
+        hint = build.gn_failure_hint(output, VERSION)
+        self.assertIn('src/third_party/skia', hint)
+        self.assertIn('a9c42c9f', hint)
+        self.assertIn(f'fetch.sh deps --ver {VERSION}', hint)
+        # 与 DEPS 无关的 GN 错误不能改写成"依赖没同步"，必须原样抛给用户。
+        self.assertIsNone(build.gn_failure_hint('ERROR at //foo/BUILD.gn:1:1: syntax error', VERSION))
+        self.assertIsNone(build.gn_failure_hint('', VERSION))
+
+    def test_deps_check_ignores_non_git_and_requires_sync_record(self):
+        (self.root / '.gclient_entries').write_text("  'src/third_party/test_fonts/test_fonts': 'gs://chromium-fonts/abc',\n")
+        self.quiet(build.verify_deps, VERSION)
+        (self.root / '.gclient_entries').unlink()
+        with self.assertRaisesRegex(RuntimeError, 'fetch.sh deps'):
+            self.quiet(build.verify_deps, VERSION)
+
+    def test_repair_deps_fetches_repos_left_empty_by_gclient(self):
+        remote = self.root / 'dep-remote'
+        remote.mkdir()
+        def git(*args, cwd=remote):
+            return subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+        git('init')
+        git('config', 'user.name', 'Test')
+        git('config', 'user.email', 'test@example.invalid')
+        (remote / 'a.txt').write_text('content')
+        git('add', '.')
+        git('commit', '-m', 'one')
+        git('tag', 'v1')
+        sha = git('rev-parse', 'HEAD')
+        (self.root / '.gclient_entries').write_text(f"  'src/third_party/broken': '{remote}@refs/tags/v1',\n")
+        dep = self.src / 'third_party/broken'
+        dep.mkdir(parents=True)
+        subprocess.run(['git', 'init', '-q', str(dep)], check=True)
+        pack = dep / '.git/objects/pack'
+        pack.mkdir(parents=True, exist_ok=True)
+        (pack / 'tmp_pack_stale').write_bytes(b'partial download')
+        self.assertEqual(self.quiet(fetch.repair_deps), ['src/third_party/broken'])
+        self.assertEqual((dep / 'a.txt').read_text(), 'content')
+        self.assertEqual(git('-C', str(dep), 'rev-parse', 'HEAD', cwd=self.root), sha)
+        self.assertEqual(list(pack.glob('tmp_pack_*')), [])
+
+    def test_repair_deps_requires_the_gclient_manifest(self):
+        (self.root / '.gclient_entries').unlink()
+        with self.assertRaisesRegex(RuntimeError, 'gclient sync'):
+            self.quiet(fetch.repair_deps)
+
+    def test_invalid_retry_options_fail_before_network(self):
+        for extra in (['--retries', '-1'], ['--retry-delay', '-1']):
+            with self.subTest(extra=extra), patch.object(fetch, 'run', side_effect=AssertionError('network')):
+                with self.assertRaises(SystemExit):
+                    self.quiet(fetch.main, ['depot_tools', *extra, '--ver', VERSION])
+
     def package_fixture(self):
         scripts = self.root / 'scripts/packaging'
         scripts.mkdir(parents=True)
@@ -437,11 +649,11 @@ class WorkspaceTest(unittest.TestCase):
     def test_project_ref_and_path_are_not_shared(self):
         calls = []
         with patch.object(fetch, 'fetch_project', side_effect=lambda *args: calls.append(args)):
-            self.quiet(fetch.main, ['arupa_desktop', 'nomadbrowser.android',
+            self.quiet(fetch.main, ['arupa_desktop', 'nomad_android',
                                    '--arupa-desktop-src', 'desktop-url', '--arupa-desktop-ver', 'v2',
                                    '--nomad-android-src', 'android-url', '--nomad-android-ver', 'refs/heads/release'])
         self.assertEqual(calls, [('arupa_desktop', 'desktop-url', 'v2'),
-                                 ('nomadbrowser.android', 'android-url', 'refs/heads/release')])
+                                 ('nomad_android', 'android-url', 'refs/heads/release')])
 
     def test_shared_gn_templates_cover_architecture_and_link_matrix(self):
         for target_os, arches in build.MATRIX.items():
@@ -469,6 +681,23 @@ class WorkspaceTest(unittest.TestCase):
         outside.write_text('target_os = "mac"')
         with self.assertRaises(RuntimeError):
             build.args_template('mac', outside)
+
+    def test_gn_load_failure_on_stdout_is_translated_with_the_dependency(self):
+        (self.root / '.gclient_entries').write_text(
+            "  'src/third_party/skia': 'https://skia.googlesource.com/skia.git@a9c42c9f',\n")
+        for name in ('buildtools/mac/gn', 'third_party/ninja/ninja'):
+            tool = self.src / name
+            tool.parent.mkdir(parents=True, exist_ok=True)
+            tool.touch()
+        # GN 把错误写在 stdout：只读 stderr 会退化成裸的 "Command ... returned non-zero exit status 1"。
+        failure = subprocess.CalledProcessError(
+            1, ['gn'], output=f'Unable to load "{self.src}/third_party/skia/gn/shared_sources.gni"', stderr='')
+        with patch.object(fetch, 'HOST_OS', 'mac'), patch.object(build, 'prepare_project'), \
+             patch.object(build, 'prepare_mac_toolchain'), patch.object(build.native_tools, 'kernel_check'), \
+             patch.object(fetch, 'run', side_effect=failure):
+            with self.assertRaisesRegex(RuntimeError, 'src/third_party/skia') as caught:
+                self.quiet(build.main, ['desktop', 'gen', '--os', 'mac', '--arch', 'x64'])
+        self.assertIn(f'fetch.sh deps --ver {VERSION}', str(caught.exception))
 
     def test_gn_overrides_remain_before_dependent_expressions(self):
         path = self.root / 'build/mac/args.gn'

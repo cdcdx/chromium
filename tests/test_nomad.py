@@ -29,7 +29,7 @@ class NomadTest(unittest.TestCase):
             setting = patch.object(module, name, value)
             setting.start()
             self.addCleanup(setting.stop)
-        self.args = build.build_parser().parse_args(['nomadbrowser.pc', '--ver', VERSION, '--no-web'])
+        self.args = build.build_parser().parse_args(['nomad_desktop', '--ver', VERSION, '--no-web'])
         self.args.dist_dir = self.root / 'dist'
 
     def quiet(self, fn, *args):
@@ -38,7 +38,7 @@ class NomadTest(unittest.TestCase):
 
     def pc_fixture(self, target_os):
         folder = {'win': 'NomadBrowser.Avalonia', 'linux': 'NomadBrowser.Avalonia.Linux', 'mac': 'NomadBrowser.Avalonia.Mac'}[target_os]
-        repo = self.root / 'nomadbrowser.pc'
+        repo = self.root / 'nomad_desktop'
         for name in (folder, 'NomadBrowser.Updater', 'NomadBrowser.Windows.Updater'):
             project = repo / name / (name + '.csproj')
             project.parent.mkdir(parents=True, exist_ok=True)
@@ -51,7 +51,7 @@ class NomadTest(unittest.TestCase):
         self.args.delivery = delivery
 
     def android_fixture(self):
-        repo = self.root / 'nomadbrowser.android'
+        repo = self.root / 'nomad_android'
         repo.mkdir()
         (repo / 'gradlew').touch()
         for arch, abi in (('arm64', 'arm64-v8a'), ('x64', 'x86_64')):
@@ -63,13 +63,13 @@ class NomadTest(unittest.TestCase):
 
     def test_cli_routes_browser_matrix_without_gn(self):
         for target_os, arches in build.MATRIX.items():
-            project = 'nomadbrowser.android' if target_os == 'android' else 'nomadbrowser.pc'
+            project = 'nomad_android' if target_os == 'android' else 'nomad_desktop'
             with patch.object(nomad, 'run') as run:
                 self.quiet(build.main, [project, '--os', target_os, '--arch', 'all', '--ver', VERSION, '--dry-run'])
                 self.assertEqual(run.call_args.args[4], arches)
                 self.assertEqual(run.call_args.args[6], {'build', 'package'})
         with patch.object(nomad, 'run') as run:
-            self.quiet(build.main, ['nomadbrowser.pc', '--os', 'macos', '--ver', VERSION, '--arch', 'x64', '--dry-run'])
+            self.quiet(build.main, ['nomad_desktop', '--os', 'macos', '--ver', VERSION, '--arch', 'x64', '--dry-run'])
             self.assertEqual(run.call_args.args[3], 'mac')
 
     def test_pc_publish_uses_requested_rid_and_platform(self):
@@ -78,7 +78,7 @@ class NomadTest(unittest.TestCase):
             self.pc_fixture(target_os)
             for arch in build.MATRIX[target_os]:
                 with patch.object(fetch, 'run') as run:
-                    self.quiet(nomad.pc_build, self.root, self.args, target_os, arch, VERSION, self.root / 'out/result')
+                    self.quiet(nomad.desktop_build, self.root, self.args, target_os, arch, VERSION, self.root / 'out/result')
                 commands = [list(map(str, call.args[0])) for call in run.call_args_list]
                 main = next(cmd for cmd in commands if 'publish' in cmd)
                 self.assertIn(f'{"osx" if target_os == "mac" else target_os}-{arch}', main)
@@ -97,7 +97,7 @@ class NomadTest(unittest.TestCase):
         self.args.nuget_config.write_text('<configuration/>')
         fetch.DRY_RUN = True
         with patch.object(fetch, 'run') as run:
-            self.quiet(nomad.pc_build, self.root, self.args, 'win', 'x64', VERSION, self.root / 'out')
+            self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION, self.root / 'out')
         commands = [list(map(str, call.args[0])) for call in run.call_args_list]
         self.assertEqual(len(commands), 4)
         for command in commands:
@@ -105,7 +105,7 @@ class NomadTest(unittest.TestCase):
         self.args.nuget_config.unlink()
         with patch.object(fetch, 'run') as run:
             with self.assertRaisesRegex(RuntimeError, 'NuGet 配置不存在'):
-                nomad.pc_build(self.root, self.args, 'win', 'x64', VERSION, self.root / 'out')
+                nomad.desktop_build(self.root, self.args, 'win', 'x64', VERSION, self.root / 'out')
             run.assert_not_called()
 
     def test_android_both_abis_build_and_package_separately(self):
@@ -118,7 +118,7 @@ class NomadTest(unittest.TestCase):
             with zipfile.ZipFile(apk, 'w') as archive:
                 archive.writestr(f'lib/{abi}/libarupakernel.so', b'fixture')
         with patch.object(fetch, 'run', side_effect=fake_gradle), patch.object(nomad, 'prepare_android_sdk'):
-            self.quiet(nomad.run, self.root, self.args, 'nomadbrowser.android', 'android',
+            self.quiet(nomad.run, self.root, self.args, 'nomad_android', 'android',
                        ('arm64', 'x64'), VERSION, {'build', 'package'})
         deliveries = sorted(self.args.dist_dir.iterdir())
         self.assertEqual(len(deliveries), 2)
@@ -134,7 +134,7 @@ class NomadTest(unittest.TestCase):
              patch.object(nomad, 'prepare_web_tools') as web, \
              patch.object(fetch, 'run', side_effect=RuntimeError('missing hyphen-data')) as run:
             with self.assertRaisesRegex(RuntimeError, 'missing hyphen-data'):
-                nomad.pc_build(self.root, self.args, 'mac', 'x64', VERSION, self.root / 'output')
+                nomad.desktop_build(self.root, self.args, 'mac', 'x64', VERSION, self.root / 'output')
         web.assert_not_called()
         self.assertEqual(run.call_count, 1)
         command = run.call_args.args[0]
@@ -164,7 +164,7 @@ class NomadTest(unittest.TestCase):
 
     def test_dotnet_requires_sdk_and_checks_project_global_json(self):
         self.args.dotnet = '/custom/dotnet'
-        repo = self.root / 'nomadbrowser.pc'
+        repo = self.root / 'nomad_desktop'
         with patch.dict(os.environ, os.environ.copy()), patch.object(nomad.shutil, 'which', return_value='/custom/dotnet'), patch.object(nomad.subprocess, 'run') as run:
             run.return_value = subprocess.CompletedProcess([], 0, '10.0.100\n', '')
             self.assertEqual(self.quiet(nomad.prepare_dotnet, self.args, repo), '/custom/dotnet')
@@ -203,7 +203,7 @@ class NomadTest(unittest.TestCase):
 
     def test_dotnet_rejects_old_sdk_before_web_build(self):
         self.pc_fixture('mac')
-        repo = self.root / 'nomadbrowser.pc'
+        repo = self.root / 'nomad_desktop'
         project = repo / 'NomadBrowser.Avalonia.Mac/NomadBrowser.Avalonia.Mac.csproj'
         project.write_text('<Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>')
         self.args.no_web = False
@@ -211,7 +211,7 @@ class NomadTest(unittest.TestCase):
              patch.object(nomad.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '6.0.301', '')), \
              patch.object(fetch, 'run') as run:
             with self.assertRaisesRegex(RuntimeError, 'net10.0'):
-                nomad.pc_build(self.root, self.args, 'mac', 'x64', VERSION, self.root / 'out')
+                nomad.desktop_build(self.root, self.args, 'mac', 'x64', VERSION, self.root / 'out')
             run.assert_not_called()
 
     def test_web_selects_compatible_nvm_node_and_matching_npm(self):
@@ -258,12 +258,12 @@ class NomadTest(unittest.TestCase):
             self.quiet(nomad.prepare_android_sdk, self.args, self.root)
 
     def test_failed_rebuild_invalidates_old_manifest(self):
-        output = self.root / f'out/nomadbrowser.android-android-arm64-{VERSION}-release'
+        output = self.root / f'out/nomad_android-android-arm64-{VERSION}-release'
         output.mkdir(parents=True)
         (output / 'build-manifest.json').write_text('{}')
         with patch.object(nomad, 'android_build', side_effect=RuntimeError('build failed')):
             with self.assertRaises(RuntimeError):
-                nomad.run(self.root, self.args, 'nomadbrowser.android', 'android', ('arm64',), VERSION, {'build', 'package'})
+                nomad.run(self.root, self.args, 'nomad_android', 'android', ('arm64',), VERSION, {'build', 'package'})
         self.assertFalse((output / 'build-manifest.json').exists())
         self.assertFalse(self.args.dist_dir.exists())
 

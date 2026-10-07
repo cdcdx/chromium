@@ -30,6 +30,69 @@ def linux_command(target_os, arches, check=False):
     return command
 
 
+APT_NOISE = (
+    'is already the newest version', 'set to manually installed', 'Reading package lists',
+    'Building dependency tree', 'Reading state information', 'NOTE: This is only a simulation',
+    'The following additional packages will be installed', 'The following packages will be upgraded',
+)
+
+
+def apt_error_excerpt(message, limit=25):
+    """只保留 apt 的报错/依赖冲突行；完整输出里绝大多数是 "already the newest version"。"""
+    kept = [line.rstrip() for line in message.splitlines()
+            if line.strip() and not any(token in line for token in APT_NOISE)]
+    if len(kept) > limit:
+        kept = kept[:limit] + [f'…（另有 {len(kept) - limit} 行，可手动运行 apt-get --just-print install 查看完整输出）']
+    return '\n'.join(kept) if kept else message.strip()
+
+
+def apt_advice(message, arches):
+    """把 apt 的真实报错翻译成可以直接执行的修复步骤。"""
+    advice = []
+    if re.search(r'Unmet dependencies|--fix-broken', message, re.I):
+        # 半安装（dpkg 状态非 ii，如 iU）或残留冲突会让任何 apt-get install 失败。
+        advice.append('系统存在未满足的依赖（常见于半安装的包）：先执行 sudo apt-get -f install 修复，成功后再重跑本命令')
+    unknown = sorted(set(re.findall(r'Unable to locate package ([\w.:+-]+)', message)))
+    if unknown:
+        advice.append('当前 apt 索引里查不到这些包: ' + ' '.join(unknown) + '；先 sudo apt-get update，仍缺失则检查/更换软件源')
+    if re.search(r'no installation candidate', message, re.I):
+        advice.append('包存在但没有可安装的候选版本：确认已启用对应仓库（如 universe/updates/backports）并 sudo apt-get update')
+    if re.search(r'Could not open lock|frontend lock|lock file', message, re.I):
+        advice.append('apt/dpkg 被其它进程占用或权限不足：等它结束后重试（例如 unattended-upgrades 正在运行）')
+    if not re.search(r'Unmet dependencies|--fix-broken', message, re.I) and re.search(r'i386', message, re.I):
+        advice.append('缺少 32 位 i386 支持：sudo dpkg --add-architecture i386 && sudo apt-get update')
+        if 'x86' in arches:
+            advice.append('若不需要 x86（32 位）目标，可用 --arch x64 / --arch arm64 跳过 --lib32 依赖')
+    if not advice:
+        advice.append('按上面 apt 输出修复缺包/仓库问题后重跑本命令')
+    return advice
+
+
+def apt_diagnosis(target_os, arches, output):
+    """还原 install-build-deps.py 吞掉的 apt 报错。
+
+    上游在 install_packages() 里只打印 e.stdout，而 check_output 把失败的输出放在
+    e.output，所以 `apt-get --just-print install ...` 的真实原因从不显示，只剩
+    "You will have to install the above packages yourself"。这里用脚本自己打印的包列表
+    重跑一次只读的 --just-print，把原因和建议补回来。"""
+    match = re.search(r'Packages required:\n((?:  \S+\n)+)', output or '')
+    if not match:
+        return ['未从 install-build-deps.py 输出中解析到包列表，请手动运行查看原因：',
+                '  ' + ' '.join(str(item) for item in linux_command(target_os, arches))]
+    packages = match.group(1).split()
+    try:
+        result = subprocess.run(['apt-get', '--just-print', 'install', *packages],
+                                capture_output=True, text=True,
+                                env={**os.environ, 'LANGUAGE': 'en', 'LANG': 'C'})
+    except OSError as error:
+        return [f'无法复核 apt-get: {error}']
+    if not result.returncode:
+        return ['apt-get --just-print 复核通过：失败可能与 sudo 权限、apt/dpkg 锁或临时网络有关，请稍后重试']
+    message = (result.stderr + result.stdout).strip()
+    return [f'apt-get --just-print install 复查失败（exit {result.returncode}），真实报错节选：',
+            apt_error_excerpt(message), *apt_advice(message, arches)]
+
+
 def windows_components(arches):
     components = ['Microsoft.VisualStudio.Workload.NativeDesktop', 'Microsoft.VisualStudio.Component.VC.ATLMFC']
     if 'arm64' in arches:
@@ -139,7 +202,13 @@ def setup_host(target_os, arches, installer=None):
         F.err(f'{target_os} 宿主依赖只能在 {required_host} 安装')
     if required_host == 'linux':
         # Upstream chooses distro-specific packages and owns sudo/interactive prompts.
-        F.run(linux_command(target_os, arches), F.CHROMIUM_SRC)
+        # stderr 一边转发一边留档：失败时用其中的包列表复核 apt，补回被上游吞掉的真实原因。
+        command = [str(item) for item in linux_command(target_os, arches)]
+        try:
+            F.run(command, F.CHROMIUM_SRC, tee=True)
+        except subprocess.CalledProcessError as error:
+            F.err(f'Linux 宿主依赖安装失败（install-build-deps.py 退出码 {error.returncode}）。\n'
+                  + '\n'.join(apt_diagnosis(target_os, arches, error.stderr or '')))
     elif required_host == 'mac':
         import toolchains
         toolchains.setup_metal(F.load_config())
@@ -151,10 +220,9 @@ def setup_host(target_os, arches, installer=None):
                 command += ['--add', component]
             # An official VS bootstrapper opens its UI for destination/license/SDK selection.
             F.run(command)
-        elif F.DRY_RUN:
-            F.log('(dry-run) 检查已安装的 VS/SDK；安装时用 --vs-installer 指定微软官方 VS bootstrapper')
-        if not F.DRY_RUN:
-            windows_check(arches)
+        else:
+            F.log('未指定 VS 安装器，仅检查已安装的 VS/SDK；可用 --vs-installer 指定微软官方 bootstrapper')
+        windows_check(arches)
 
 
 def setup_sysroots(arches):

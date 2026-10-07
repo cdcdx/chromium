@@ -34,3 +34,6 @@ src/chrome/browser/arupa_android
 src/chrome/browser/arupa_desktop
 .env
 .env.bak.*
+
+depot_tools/
+src/

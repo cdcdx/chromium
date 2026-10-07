@@ -57,6 +57,52 @@ class NativeToolsTest(unittest.TestCase):
         self.assertNotIn('--quick-check', N.linux_command('linux', ('x64',), False))
         self.assertNotIn('--no-prompt', N.linux_command('linux', ('x64',), False))
 
+    def test_linux_host_deps_failure_reveals_the_swallowed_apt_error(self):
+        # 上游只打印 e.stdout（check_output 放在 e.output），真实报错从不显示。
+        upstream = ('install-build-deps.py [INFO]: Packages required:\n'
+                    '  autoconf\n  libasound2:i386\n'
+                    'install-build-deps.py [ERROR]: You will have to install the above packages yourself.\n')
+        apt = subprocess.CompletedProcess([], 100, '',
+                                          "E: Unmet dependencies. Try 'apt --fix-broken install' with no packages.\n")
+        failure = subprocess.CalledProcessError(100, ['python3', 'install-build-deps.py'], stderr=upstream)
+        with patch.object(fetch, 'HOST_OS', 'linux'), patch.object(fetch, 'run', side_effect=failure) as run, \
+             patch('subprocess.run', return_value=apt) as recheck:
+            with self.assertRaisesRegex(RuntimeError, r'apt-get -f install') as caught:
+                self.quiet(N.setup_host, 'linux', ('x86', 'x64', 'arm64'))
+        message = str(caught.exception)
+        self.assertIn('退出码 100', message)
+        self.assertIn('Unmet dependencies', message)
+        self.assertTrue(run.call_args.kwargs['tee'])
+        self.assertEqual(recheck.call_args.args[0][:4], ['apt-get', '--just-print', 'install', 'autoconf'])
+
+    def test_apt_advice_names_missing_packages_and_arch_escape_hatch(self):
+        apt = subprocess.CompletedProcess([], 100, '', 'E: Unable to locate package lib32z1:i386\n')
+        with patch('subprocess.run', return_value=apt):
+            lines = N.apt_diagnosis('linux', ('x86', 'x64'), 'Packages required:\n  lib32z1:i386\n')
+        message = '\n'.join(lines)
+        self.assertIn('lib32z1:i386', message)
+        self.assertIn('apt-get update', message)
+        self.assertIn('--arch x64', message)
+
+    def test_apt_excerpt_keeps_conflicts_and_drops_noise(self):
+        message = '\n'.join(['Reading package lists...', 'libfoo is already the newest version (1.0).',
+                             'clash-verge set to manually installed.',
+                             'The following packages have unmet dependencies:',
+                             ' libxt-dev : Depends: libsm-dev but it is not going to be installed',
+                             *[f'noise {index} is already the newest version' for index in range(40)]])
+        excerpt = N.apt_error_excerpt(message)
+        self.assertNotIn('already the newest version', excerpt)
+        self.assertIn('unmet dependencies', excerpt)
+        self.assertIn('libsm-dev', excerpt)
+        self.assertLessEqual(len(excerpt.splitlines()), 26)
+
+    def test_apt_diagnosis_falls_back_to_manual_command(self):
+        lines = N.apt_diagnosis('linux', ('x64',), 'no package list here')
+        self.assertIn('install-build-deps.py', '\n'.join(lines))
+        with patch('subprocess.run', return_value=subprocess.CompletedProcess([], 0, '', '')):
+            passing = N.apt_diagnosis('linux', ('x64',), 'Packages required:\n  autoconf\n')
+        self.assertIn('复核通过', '\n'.join(passing))
+
     def test_sysroots_install_only_requested_architectures(self):
         with patch.object(fetch, 'HOST_OS', 'linux'), patch.object(fetch, 'run') as run:
             N.setup_sysroots(('x86', 'arm64'))
