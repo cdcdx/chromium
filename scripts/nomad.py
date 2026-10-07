@@ -196,6 +196,41 @@ def desktop_project(repo, target_os, explicit):
     return path
 
 
+LINUX_KERNELHOST_PROJ = ('Posix', 'NomadBrowser.Linux.KernelHost', 'NomadBrowser.Linux.KernelHost.csproj')
+LINUX_KERNELHOST_EXE = 'NomadBrowser.Linux.KernelHost'
+
+
+def publish_linux_kernelhost(repo, kernel_dir, dotnet, cfg, rid, props):
+    """把 OOP 内核宿主发布进 Linux 便携包的 arupa-desktop/（即 UI 侧的 ArupaDir）。
+
+    为什么 Linux 也要独立宿主：Windows 必须走原生宿主（内核静态链进主镜像）—— Chromium 的
+    Windows 沙箱在 CreateProcess(CREATE_SUSPENDED) 与 ResumeThread 之间做跨进程地址交接，
+    那一刻只有主 EXE 镜像被映射；macOS/Linux 的沙箱不做地址交接（策略编译成字符串交子进程自
+    sandbox_init），库式嵌入/OOP 本身就是安全形态，所以 Linux 与 Mac 同走 OOP，交付里必须带宿主。
+
+    为什么装进 arupa-desktop/ 而不是别处（两条硬约束各钉一个）：
+      · 宿主自己：NomadBrowser.Avalonia.Linux/Program.cs::ResolveKernelHostPath 按
+        <ArupaDir>/NomadBrowser.Linux.KernelHost 探，而 ArupaDir 就是便携包的 arupa-desktop/；
+      · chromium：按**主可执行文件所在目录**找 icudtl.dat 与 *.pak，宿主必须与内核件同目录。
+
+    自包含策略与主程序保持一致（主程序用 --self-contained true）：宿主要是不自包含，就得依赖
+    机器上另装 .NET 10 运行时，与"便携包"语义冲突。
+    """
+    project = repo.joinpath(*LINUX_KERNELHOST_PROJ)
+    if not project.is_file():
+        F.err(f'缺少 Linux 内核宿主工程 {project} —— 交付里不会有 {LINUX_KERNELHOST_EXE}，'
+              'OOP 形态起不来内核（UI 侧会报找不到宿主）')
+    # -f net10.0：与主程序同样的理由（多 TFM 工程 publish 不带 -f 会 NETSDK1047）。
+    F.run([dotnet, 'publish', project, '-c', cfg, '-r', rid, '-f', 'net10.0',
+           '--self-contained', 'true', '-o', kernel_dir, *props], repo)
+    exe = kernel_dir / LINUX_KERNELHOST_EXE
+    if not exe.is_file():
+        F.err(f'{LINUX_KERNELHOST_EXE} 没有发布出来（{kernel_dir}）—— 无扩展名的 apphost 缺失，'
+              '启动时 OOP 形态起不来内核')
+    exe.chmod(0o755)        # zip/tar 往返会丢可执行位，显式补一次
+    F.log(f'内核宿主: arupa-desktop/{LINUX_KERNELHOST_EXE}（{exe.stat().st_size / 1048576:.1f} MB）')
+
+
 def desktop_build(root, args, target_os, arch, version, output):
     repo = root / 'nomad_desktop'
     # 命令行标志是 --pc-project，对应 argparse 属性 args.pc_project。
@@ -284,6 +319,10 @@ def desktop_build(root, args, target_os, arch, version, output):
             if not executable.is_file():
                 F.err(f'发布缺少浏览器可执行文件: {executable}')
             shutil.copytree(kernel / 'kernel', payload / 'arupa-desktop', dirs_exist_ok=True, symlinks=True)
+            if target_os == 'linux':
+                # 放在 copytree 之后：交付根的 kernel/ 是内核产出方的目录，不往里写，
+                # 只写我们自己的交付暂存目录（理由见 publish_linux_kernelhost）。
+                publish_linux_kernelhost(repo, payload / 'arupa-desktop', dotnet, cfg, rid, props)
             resources = [repo / 'dist' / name / 'Resources' for name in (cfg, 'Debug', 'Release')]
             resource = next((p for p in resources if (p / 'index.html').is_file()), None)
             if resource:
@@ -311,7 +350,8 @@ def desktop_build(root, args, target_os, arch, version, output):
                 leftover = 0
             if leftover > 40:
                 try:
-                    os.rename(stage, stage.parent / (stage.name + '.trash-' + os.urandom(4).hex()))
+                    # 改名搁置：受限环境的删除保护会拦批量删除，改名不动内容最省事。
+                    os.rename(stage, stage.parent / f'{stage.name}.trash-{os.urandom(4).hex()}')
                 except OSError:
                     shutil.rmtree(stage, ignore_errors=True)
             else:
@@ -368,8 +408,7 @@ def android_build(root, args, arch, output):
 def save_output(payload, output):
     # Only replace previously generated output after a successful build.
     if output.exists():
-        # 受限环境（守护/安全策略）会拦截大批量删除；改名为 .trash-* 搁置，
-        # 不丢数据，也不阻塞构建。成功产出新 output 后可手动清理 .trash-*。
+        # 受限环境（守护/安全策略）会拦截大批量删除；改名为 .trash-* 搁置，不丢数据，也不阻塞构建。
         trash = output.parent / (output.name + '.trash-' + os.urandom(4).hex())
         try:
             os.rename(output, trash)
@@ -460,8 +499,7 @@ def package(args, output, identity):
                 archive_path.unlink(missing_ok=True)
                 raise
     finally:
-        # 收尾清理是 best-effort：无论打包成败，清理失败都不应掩盖真实结果
-        # （受限环境会拦截批量删除/单文件 unlink；改名旁置即可，别在这里抛）。
+        # 收尾清理是 best-effort：无论打包成败，清理失败都不应掩盖真实结果（受限环境会拦截批量删除/单文件 unlink；改名旁置即可，别在这里抛）。
         try:
             if stage and stage.exists():
                 trash = stage.parent / (stage.name + '.trash-' + os.urandom(4).hex())

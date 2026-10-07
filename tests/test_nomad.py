@@ -314,6 +314,58 @@ class NomadTest(unittest.TestCase):
         self.assertFalse((output / 'build-manifest.json').exists())
         self.assertFalse(self.args.dist_dir.exists())
 
+    def test_rebuild_replaces_existing_output_by_rename_not_delete(self):
+        # 产物目录已存在时只允许"改名搁置"：曾误用不存在的 os.delete，导致每次重建都崩。
+        output = self.root / 'out/output'
+        output.mkdir(parents=True)
+        (output / 'stale.txt').write_text('old')
+        payload = self.root / 'payload'
+        payload.mkdir()
+        (payload / 'NomadBrowser').write_text('new')
+        self.quiet(nomad.save_output, payload, output)
+        self.assertEqual((output / 'NomadBrowser').read_text(), 'new')
+        trashed = list(output.parent.glob('output.trash-*'))
+        self.assertEqual(len(trashed), 1)
+        self.assertEqual((trashed[0] / 'stale.txt').read_text(), 'old')
+
+    def test_linux_kernel_host_is_published_into_arupa_desktop(self):
+        # OOP 宿主必须落在 arupa-desktop/（UI 侧按 <ArupaDir>/<exe> 探，chromium 还要同目录找 .pak）。
+        repo = self.root / 'nomad_desktop'
+        project = repo.joinpath(*nomad.LINUX_KERNELHOST_PROJ)
+        project.parent.mkdir(parents=True)
+        project.touch()
+        kernel_dir = self.root / 'payload/arupa-desktop'
+        kernel_dir.mkdir(parents=True)
+        commands = []
+
+        def fake_run(cmd, cwd=None, **kwargs):
+            commands.append([str(item) for item in cmd])
+            (kernel_dir / nomad.LINUX_KERNELHOST_EXE).write_text('apphost')
+
+        with patch.object(fetch, 'run', side_effect=fake_run):
+            self.quiet(nomad.publish_linux_kernelhost, repo, kernel_dir, 'dotnet', 'Release',
+                       'linux-x64', ['-p:Platform=x64'])
+        publish = commands[0]
+        self.assertEqual(publish[:3], ['dotnet', 'publish', str(project)])
+        self.assertIn('linux-x64', publish)
+        self.assertIn('--self-contained', publish)
+        self.assertIn('-p:Platform=x64', publish)
+        self.assertEqual(publish[publish.index('-o') + 1], str(kernel_dir))
+        exe = kernel_dir / nomad.LINUX_KERNELHOST_EXE
+        self.assertTrue(os.access(exe, os.X_OK))
+
+    def test_linux_kernel_host_project_and_apphost_are_required(self):
+        with self.assertRaisesRegex(RuntimeError, 'KernelHost'):
+            self.quiet(nomad.publish_linux_kernelhost, self.root / 'nomad_desktop',
+                       self.root / 'kernel', 'dotnet', 'Release', 'linux-x64', [])
+        repo = self.root / 'nomad_desktop'
+        project = repo.joinpath(*nomad.LINUX_KERNELHOST_PROJ)
+        project.parent.mkdir(parents=True)
+        project.touch()
+        with patch.object(fetch, 'run'), self.assertRaisesRegex(RuntimeError, '没有发布出来'):
+            self.quiet(nomad.publish_linux_kernelhost, repo, self.root / 'kernel', 'dotnet',
+                       'Release', 'linux-x64', [])
+
     def test_zip_preserves_symlinks_and_duplicate_delivery_is_rejected(self):
         output = self.root / 'browser-output'
         output.mkdir()
