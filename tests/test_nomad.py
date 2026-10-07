@@ -125,6 +125,9 @@ class NomadTest(unittest.TestCase):
         self.assertEqual([path.name for path in deliveries],
                          [f'nomad-android-arm64-{VERSION}-release-1',
                           f'nomad-android-x64-{VERSION}-release-1'])
+        # 构建目录与交付目录同名（不含序号）
+        for arch in ('arm64', 'x64'):
+            self.assertTrue((self.root / f'out/nomad-android-{arch}-{VERSION}-release').is_dir())
         for path in deliveries:
             manifest = json.loads((path / 'build-manifest.json').read_text())
             nomad.validate_apk(path / 'app.apk', manifest['identity']['arch'])
@@ -302,7 +305,7 @@ class NomadTest(unittest.TestCase):
             self.quiet(nomad.prepare_android_sdk, self.args, self.root)
 
     def test_failed_rebuild_invalidates_old_manifest(self):
-        output = self.root / f'out/nomad_android-android-arm64-{VERSION}-release'
+        output = self.root / f'out/nomad-android-arm64-{VERSION}-release'
         output.mkdir(parents=True)
         (output / 'build-manifest.json').write_text('{}')
         with patch.object(nomad, 'android_build', side_effect=RuntimeError('build failed')):

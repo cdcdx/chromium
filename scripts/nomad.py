@@ -392,18 +392,18 @@ def seal(output, identity):
     (output / 'build-manifest.json').write_text(json.dumps({'identity': identity, 'files': files}, indent=2) + '\n')
 
 
-def delivery_prefix(identity):
-    """交付目录前缀（序号由 package 追加）：nomad-<os>-<arch>-<ver>-<release|debug>-。
+def delivery_base(identity):
+    """构建目录与交付目录的公共名字：nomad-<os>-<arch>-<version>-<release|debug>。
 
-    与构建目录 out/<project>-<os>-... 不同：交付名统一用产品名 nomad，
-    桌面与 Android 靠 os 字段区分。"""
+    统一用产品名 nomad（不再带 nomad_desktop / nomad_android 的项目名），桌面与 Android
+    靠 os 字段区分，release/debug 靠 variant 区分；交付目录名再追加 -<序号>。"""
     return (f"nomad-{identity['os']}-{identity['arch']}-"
-            f"{identity['version']}-{identity['variant']}-")
+            f"{identity['version']}-{identity['variant']}")
 
 
 def package(args, output, identity):
     if F.DRY_RUN:
-        F.log(f'(dry-run) 校验并打包 {output} -> {args.dist_dir}/{delivery_prefix(identity)}<n>')
+        F.log(f'(dry-run) 校验并打包 {output} -> {args.dist_dir}/{delivery_base(identity)}-<n>')
         return
     stamp = output / 'build-manifest.json'
     if not stamp.is_file():
@@ -417,7 +417,7 @@ def package(args, output, identity):
         F.err(f'构建产物在 build 后发生变化，请重新 build: {output}')
     destination = args.dist_dir.resolve()
     destination.mkdir(parents=True, exist_ok=True)
-    prefix = delivery_prefix(identity)
+    prefix = delivery_base(identity) + '-'
     pattern = re.compile(re.escape(prefix) + r'(\d+)$')
     number = args.num or max([int(m[1]) for p in destination.iterdir() if (m := pattern.fullmatch(p.name))] + [0]) + 1
     final = destination / f'{prefix}{number}'
@@ -506,7 +506,8 @@ def run(root, args, project, target_os, arches, version, actions):
         F.err('Android 请将内核交付接入 app/libs/kernel/<arch> 并更新 runtime-manifest.json；--delivery 用于 PC')
     for arch in arches:
         identity = {'project': project, 'os': target_os, 'arch': arch, 'version': version, 'variant': args.variant}
-        output = root / 'out' / f'{project}-{target_os}-{arch}-{version}-{args.variant}'
+        # 构建目录与交付目录同名（交付再追加 -<序号>），便于按同一个名字定位产物。
+        output = root / 'out' / delivery_base(identity)
         if 'build' in actions:
             if not F.DRY_RUN:
                 output.parent.mkdir(parents=True, exist_ok=True)
