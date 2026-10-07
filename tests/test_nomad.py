@@ -121,7 +121,10 @@ class NomadTest(unittest.TestCase):
             self.quiet(nomad.run, self.root, self.args, 'nomad_android', 'android',
                        ('arm64', 'x64'), VERSION, {'build', 'package'})
         deliveries = sorted(self.args.dist_dir.iterdir())
-        self.assertEqual(len(deliveries), 2)
+        # 交付目录名：nomad-<os>-<arch>-<ver>-<release|debug>-<n>
+        self.assertEqual([path.name for path in deliveries],
+                         [f'nomad-android-arm64-{VERSION}-release-1',
+                          f'nomad-android-x64-{VERSION}-release-1'])
         for path in deliveries:
             manifest = json.loads((path / 'build-manifest.json').read_text())
             nomad.validate_apk(path / 'app.apk', manifest['identity']['arch'])
@@ -273,14 +276,15 @@ class NomadTest(unittest.TestCase):
         (output / 'binary').write_text('fixture')
         if os.name != 'nt':
             (output / 'link').symlink_to('binary')
-        identity = {'os': 'mac', 'arch': 'arm64'}
+        identity = {'os': 'mac', 'arch': 'arm64', 'version': VERSION, 'variant': 'release'}
         nomad.seal(output, identity)
         self.args.zip = True
         self.args.num = 1
+        delivery = f'nomad-mac-arm64-{VERSION}-release-1'
         self.quiet(nomad.package, self.args, output, identity)
-        with zipfile.ZipFile(self.args.dist_dir / 'browser-output-1.zip') as archive:
+        with zipfile.ZipFile(self.args.dist_dir / f'{delivery}.zip') as archive:
             if os.name != 'nt':
-                info = archive.getinfo('browser-output-1/link')
+                info = archive.getinfo(f'{delivery}/link')
                 self.assertEqual(info.external_attr >> 16 & 0o170000, 0o120000)
         with self.assertRaises(RuntimeError):
             nomad.package(self.args, output, identity)

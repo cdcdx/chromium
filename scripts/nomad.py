@@ -374,9 +374,18 @@ def seal(output, identity):
     (output / 'build-manifest.json').write_text(json.dumps({'identity': identity, 'files': files}, indent=2) + '\n')
 
 
+def delivery_prefix(identity):
+    """交付目录前缀（序号由 package 追加）：nomad-<os>-<arch>-<ver>-<release|debug>-。
+
+    与构建目录 out/<project>-<os>-... 不同：交付名统一用产品名 nomad，
+    桌面与 Android 靠 os 字段区分。"""
+    return (f"nomad-{identity['os']}-{identity['arch']}-"
+            f"{identity['version']}-{identity['variant']}-")
+
+
 def package(args, output, identity):
     if F.DRY_RUN:
-        F.log(f'(dry-run) 校验并打包 {output} -> {args.dist_dir}')
+        F.log(f'(dry-run) 校验并打包 {output} -> {args.dist_dir}/{delivery_prefix(identity)}<n>')
         return
     stamp = output / 'build-manifest.json'
     if not stamp.is_file():
@@ -390,7 +399,7 @@ def package(args, output, identity):
         F.err(f'构建产物在 build 后发生变化，请重新 build: {output}')
     destination = args.dist_dir.resolve()
     destination.mkdir(parents=True, exist_ok=True)
-    prefix = output.name + '-'
+    prefix = delivery_prefix(identity)
     pattern = re.compile(re.escape(prefix) + r'(\d+)$')
     number = args.num or max([int(m[1]) for p in destination.iterdir() if (m := pattern.fullmatch(p.name))] + [0]) + 1
     final = destination / f'{prefix}{number}'

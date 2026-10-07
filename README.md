@@ -356,7 +356,8 @@ JDK 可通过 `JAVA_HOME`（或 `.env` 的 `java_home`）指定。单独 package
 再校验 APK 仅包含所选 ABI；签名使用浏览器项目自身配置，不生成或替换签名密钥。
 
 浏览器构建产物位于 `out/<project>-<os>-<arch>-<version>-<variant>/`；
-交付位于 `dist/<project>-<os>-<arch>-<version>-<variant>-<n>/`，包含构建清单及 SHA256SUMS。
+交付位于 `dist/nomad-<os>-<arch>-<version>-<variant>-<n>/`（variant 为 release/debug，序号按该前缀各自递增），
+包含构建清单及 SHA256SUMS。
 `--arch all` 每个架构独立构建、独立打包。`--zip` 保留 macOS bundle 的符号链接。
 构建失败会使旧成功清单失效；单独 package 会核对配置和文件哈希，避免将旧产物或修改后的产物误打包。
 
