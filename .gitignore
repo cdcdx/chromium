@@ -35,5 +35,9 @@ src/chrome/browser/arupa_desktop
 .env
 .env.bak.*
 
+# dotnet
+bin/
+obj/
+
 depot_tools/
 src/

@@ -24,6 +24,7 @@ from .common import (PC_REPO, DIST_ROOT, Ctx, apply_developer_dir, cget, err, lo
                      out, run, warn, human_size, next_delivery_no,
                      purge_previous_deliveries, record_delivery)
 from . import common
+import kernel_facade
 
 RIDS = {
     "win": {"x64": "win-x64", "x86": "win-x86", "arm64": "win-arm64"},
@@ -97,7 +98,7 @@ def ensure_kernel_facade(c: Ctx, delivery: Path):
     if c.os == "mac":
         return
     d = delivery / "dotnet"
-    proj = d / "ArupaKernel.csproj"
+    proj = kernel_facade.project(d)
     if not d.is_dir():
         # 不静默: 这份交付连门面源码都没有（内核仓 package/dotnet 缺失 / 出包时没拷进来），
         # 后面 PC 编译只会甩一句"缺少配套的内核门面: <delivery>\dotnet\ArupaKernel.dll"，
@@ -107,41 +108,43 @@ def ensure_kernel_facade(c: Ctx, delivery: Path):
         return
     if not proj.exists():
         return
-    # 门面有效性: 必须是完整程序集。~4KB 的是 ref/reference-only 程序集（只有签名没有实现），
-    # 引用它宿主会满屏 CS0246 "未能找到 Arupa/ArupaWebView/ArupaKernel"。
-    # (2026-10-04: static-5/6 交付出包时顶层 dotnet/ArupaKernel.dll 就是 ref 程序集，
-    #  且交付目录会被外部进程按打包时快照恢复，手修会被还原 —— 所以每次构建现场自愈。)
-    MIN_FACADE_BYTES = 50_000
+    # 门面有效性: 必须是**由旁边这份源码编出来**的完整程序集。~4KB 的是 ref/reference-only
+    # 程序集（只有签名没有实现），引用它宿主会满屏 CS0246 "未能找到 Arupa/ArupaWebView/
+    # ArupaKernel"；而"够大但比源码旧"的那种会被静默沿用 —— 正是 2026-10-08 那次事故的形态。
+    # 判据是源码内容摘要（scripts/kernel_facade），不是文件大小、更不是 mtime。
+    top = d / kernel_facade.ASSEMBLY_NAME
 
-    def facade_ok(p: Path) -> bool:
-        return p.exists() and p.stat().st_size >= MIN_FACADE_BYTES
-
-    top = d / "ArupaKernel.dll"
-    if facade_ok(top):
+    def sync_stable(path):
         # 稳定副本始终与顶层同步，构建中引用一律走稳定副本（delivery_props），
         # 这样构建中途交付目录被外部进程还原也不会打断编译。
         STABLE_FACADE.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(top, STABLE_FACADE)
+        shutil.copyfile(path, STABLE_FACADE)
+
+    if kernel_facade.is_current(d):
+        sync_stable(top)
         return
-    if not facade_ok(STABLE_FACADE):
-        log(f"交付门面缺失或只有 ref 程序集({top.stat().st_size}B)，且无稳定副本 —— 现场编译: {proj}")
-        if common.DRY_RUN:
-            log(f"(dry-run) dotnet build {proj} -c Release -p:Platform=x64")
-            return
-        run([dotnet(), "build", str(proj), "-c", "Release", "-p:Platform=x64"], cwd=PC_REPO)
-        built = d / "bin" / "x64" / "Release" / "net10.0" / "ArupaKernel.dll"
-        if not facade_ok(built):
-            built = d / "bin" / "Release" / "net10.0" / "ArupaKernel.dll"
-        if facade_ok(built):
-            log(f"现场编译完成 —— 部署门面: {built} -> {top} 和 {STABLE_FACADE}")
-            top.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(built, top)
-            STABLE_FACADE.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(built, STABLE_FACADE)
+    if not kernel_facade.facade_ok(top) and kernel_facade.facade_ok(STABLE_FACADE):
+        log(f"交付顶层门面无效 —— 沿用稳定副本: {STABLE_FACADE}")
+        return
+    log(f"交付门面缺失或与源码不符 —— 现场编译: {proj}")
+    if common.DRY_RUN:
+        log(f"(dry-run) dotnet build {proj} -c Release -p:Platform=x64")
+        return
+    result = kernel_facade.ensure(
+        d, dotnet(), cfg="Release", arch="x64",
+        runner=lambda command, cwd: common.run(command, cwd, check=False),
+        cwd=PC_REPO, drop_on_failure=False)
+    if result.state == "rebuilt":
+        log(f"现场编译完成 —— 部署门面: {result.path} -> {top} 和 {STABLE_FACADE}")
+        sync_stable(result.path)
+    elif not kernel_facade.facade_ok(top):
+        if kernel_facade.facade_ok(STABLE_FACADE):
+            log(f"沿用稳定副本: {STABLE_FACADE}")
         else:
-            err(f"现场编译后仍没有可用的 ArupaKernel.dll（顶层与 bin 产物都缺失或过小）: {d}")
+            err(f"现场编译后仍没有可用的 {kernel_facade.ASSEMBLY_NAME}"
+                f"（顶层与 bin 产物都缺失或过小）: {d}")
     else:
-        log(f"交付顶层门面无效({top.stat().st_size}B) —— 沿用稳定副本: {STABLE_FACADE}")
+        warn(f"交付门面与源码不符且未能重建（{result.text}）—— 沿用顶层门面: {top}")
 
 
 def resolve_delivery(c: Ctx) -> Path:

@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 
 import deliveries
 import fetch as F
+import kernel_facade
 import toolchains
 
 
@@ -361,6 +362,15 @@ def prune_foreign_native_runtimes(payload, rid):
 MIN_FACADE_BYTES = 50_000          # ~4KB 的是 ref/reference-only 程序集（只有签名没有实现）
 
 
+def _run_facade_command(command, cwd):
+    """门面重建的命令执行器：失败返回 False，不在这里终止流程（由调用方决定）。"""
+    try:
+        F.run(command, cwd)
+    except Exception:                                # noqa: BLE001
+        return False
+    return True
+
+
 def refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props):
     """按交付自带的门面源码现场重建 dotnet/ArupaKernel.dll，返回它（或 None）。
 
@@ -368,20 +378,20 @@ def refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props):
       · 比它旁边的源码旧 —— 内核仓改了 package/desktop/dotnet/*.cs 却没重编就出包；
       · 被出包/外部进程还原成 ref 程序集（~4KB，只有签名）。
 
-    🔴 **绝不能给一次 -o <门面工程自己的目录>**：OutputPath 落在工程目录里时，SDK 的
-       DefaultItemExcludes 会把该目录下的 .cs 全部排除，只编译生成的 AssemblyInfo
-       → 编出 4KB 空程序集，而退出码仍是 0（静默）。产物落到工程 bin/ 下再拷回顶层。
-       写法与 scripts/builder/browser.py 的 ensure_kernel_facade 同一口径。
+    判"要不要重建"交给 scripts/kernel_facade：按**源码内容摘要**（侧车
+    .facade-source.sha256），不按 mtime —— 交付是 cp -R 搬的，mtime 恒等于打包
+    时刻，"mtime 比源码新"在交付里必然成立，按它判断等于永远不重建。
+    构建命令也由它给（🔴 绝不能 `-o <门面工程自己的目录>`：SDK 的
+    DefaultItemExcludes 会把 .cs 全排除，编出 4KB 空程序集且退出码为 0）。
     """
     d = kernel / 'dotnet'
-    proj = d / 'ArupaKernel.csproj'
-    top = d / 'ArupaKernel.dll'
+    top = d / kernel_facade.ASSEMBLY_NAME
     # PC 仓内的稳定副本与交付顶层必须同一份：Directory.Build.targets 的回落告警就是这么要求的
     # （「否则两处会各指一份门面」）。口径同 scripts/builder/browser.py 的 ensure_kernel_facade。
-    stable = repo / 'build' / 'kernel-facade' / 'ArupaKernel.dll'
+    stable = repo / 'build' / 'kernel-facade' / kernel_facade.ASSEMBLY_NAME
 
     def sync_stable(path):
-        if not path or not path.is_file() or path.stat().st_size < MIN_FACADE_BYTES:
+        if not path or not kernel_facade.facade_ok(path):
             return
         try:
             stable.parent.mkdir(parents=True, exist_ok=True)
@@ -389,34 +399,25 @@ def refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props):
         except OSError as error:
             F.log(f'稳定副本同步失败（不影响本次构建）: {stable}: {error}')
 
-    if not proj.is_file():
-        F.log(f'交付里没有门面源码工程（{proj}）—— 沿用交付自带门面')
+    result = kernel_facade.ensure(
+        d, dotnet, cfg=cfg, arch=arch, extra_props=restore_props,
+        runner=_run_facade_command, cwd=repo, dry_run=F.DRY_RUN,
+        # PC 编译要的就是这份门面：重建失败也不能把它删掉（真编不了会由
+        # VerifyArupaKernelAssembly / 编译错误暴露，比"文件凭空消失"好定位）。
+        drop_on_failure=False)
+    if result.state == 'current':
+        F.log(f'交付门面与源码一致（{top.stat().st_size}B）: {top}')
+    elif result.state == 'rebuilt':
+        F.log(f'交付门面重建完成: {result.path}（{top.stat().st_size}B）'
+              + (f' —— {result.detail}' if result.detail else ''))
+    else:
+        F.log(f'交付门面未重建（{result.text}）—— 沿用交付自带门面')
+    if result.path is not None:
+        sync_stable(result.path)
+    elif top.is_file():
         sync_stable(top)
-        return top if top.is_file() else None
-    sources = [p for p in d.glob('*.cs') if p.is_file()] + [proj]
-    if top.is_file() and top.stat().st_size >= MIN_FACADE_BYTES \
-            and top.stat().st_mtime >= max(p.stat().st_mtime for p in sources):
-        F.log(f'交付门面已是最新（{top.stat().st_size}B）: {top}')
-        sync_stable(top)
-        return top
-    if F.DRY_RUN:
-        F.log(f'(dry-run) 现场重建交付门面: dotnet build {proj} -c {cfg} -p:Platform={arch}')
-        return top
-    F.log(f'交付门面缺失/过旧/是 ref 程序集 —— 现场重建: {proj}')
-    F.run([dotnet, 'build', str(proj), '-c', cfg, f'-p:Platform={arch}', *restore_props], repo)
-    built = d / 'bin' / arch / cfg / 'net10.0' / 'ArupaKernel.dll'
-    if not built.is_file():
-        built = d / 'bin' / cfg / 'net10.0' / 'ArupaKernel.dll'
-    if not built.is_file() or built.stat().st_size < MIN_FACADE_BYTES:
-        F.err(f'门面现场重建后仍没有可用的 ArupaKernel.dll（顶层与 bin 产物都缺失或过小）: {d}；'
-              '检查交付件 dotnet/ 里的门面源码/工程是否完整')
-    shutil.copyfile(built, top)
-    docs = built.with_suffix('.xml')
-    if docs.is_file():
-        shutil.copyfile(docs, d / 'ArupaKernel.xml')
-    F.log(f'交付门面重建完成: {built} -> {top}（{top.stat().st_size}B）')
-    sync_stable(top)
-    return top
+    return top if top.is_file() else None
+
 
 
 def desktop_build(root, args, target_os, arch, version, output):
@@ -440,8 +441,9 @@ def desktop_build(root, args, target_os, arch, version, output):
     dotnet = prepare_dotnet(args, repo, project)
     # 顺序要紧：先把交付自带的门面按源码现场重建，再决定 props 引用哪一份门面。
     # 反过来的话，引用的还是那份「旧/空」门面 —— 表现就是一堆 CS0117/CS1061/CS0246。
-    facade = refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props) \
-        if target_os != 'mac' else None
+    # mac 也走这一步：KernelHost 编的是交付里的门面**源码**，但交付里那份 DLL 同样
+    # 必须与源码一致（Windows 宿主按 HintPath 直接引它，出包后没人再管就烂在包里）。
+    facade = refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props)
     props = [f'-p:ArupaDeliveryRoot={kernel}', f'-p:ArupaSdkDir={kernel}',
              f'-p:Platform={arch}', '-p:UseSharedCompilation=false', *restore_props]
     if target_os != 'mac' and not (facade and facade.is_file() and facade.stat().st_size >= MIN_FACADE_BYTES):

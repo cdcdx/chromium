@@ -49,32 +49,44 @@ class WorkspaceTest(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return func(*args, **kwargs)
 
-    def test_windows_build_refreshes_facade_even_with_existing_dll(self):
+    def test_stale_facade_dll_is_rebuilt_from_the_delivery_sources(self):
+        """门面 DLL 与它旁边的源码不符时必须重建。
+
+        只看"文件够大就算有效"（或按 mtime）会静默沿用旧门面：交付是 cp -R 搬的，
+        mtime 恒等于打包时刻，而 DLL 可能停在改了 .cs 却没重编的那一版 —— 引它的
+        Windows 宿主就会撞 CS0117/CS1061（2026-10-08 static-4）。
+        """
         import nomad
-        from types import SimpleNamespace
-        repo = self.root / 'nomad_desktop'
-        project = repo / 'NomadBrowser.Avalonia/NomadBrowser.Avalonia.csproj'
-        project.parent.mkdir(parents=True)
-        project.write_text('<Project />')
-        for name in ('NomadBrowser.Updater', 'NomadBrowser.Windows.Updater'):
-            folder = repo / name
-            folder.mkdir()
-            (folder / (name + '.csproj')).write_text('<Project />')
         kernel = self.root / 'delivery'
         sdk = kernel / 'dotnet'
         sdk.mkdir(parents=True)
-        facade = sdk / 'ArupaKernel.csproj'
-        facade.write_text('<Project />')
-        (sdk / 'ArupaKernel.dll').write_bytes(b'old SDK without OpenDevTools')
-        args = SimpleNamespace(pc_project=None, nuget_config=self.root / 'build/nuget.config',
-                               variant='release', no_web=True)
-        with patch.object(fetch, 'DRY_RUN', True), patch.object(nomad, 'delivery', return_value=kernel), \
-             patch.object(nomad, 'prepare_dotnet', return_value='dotnet'), patch.object(fetch, 'run') as run:
-            self.quiet(nomad.desktop_build, self.root, args, 'win', 'x64', VERSION, self.root / 'output')
+        csproj = sdk / 'ArupaKernel.csproj'
+        csproj.write_text('<Project />')
+        (sdk / 'Interop.cs').write_text('// interop')
+        dll = sdk / 'ArupaKernel.dll'
+        dll.write_bytes(b'old SDK without OpenDevTools'.ljust(60_000, b'o'))
+
+        def build(command, cwd=None, **_):
+            out = sdk / 'bin' / 'x64' / 'Release' / 'net10.0'
+            out.mkdir(parents=True, exist_ok=True)
+            (out / 'ArupaKernel.dll').write_bytes(b'fresh'.ljust(60_000, b'f'))
+            (out / 'ArupaKernel.xml').write_text('<doc />')
+            return ''
+
+        restore = '-p:RestoreConfigFile=/tmp/private feed.config'
+        with patch.object(fetch, 'DRY_RUN', False), patch.object(fetch, 'run', side_effect=build) as run:
+            path = self.quiet(nomad.refresh_kernel_facade, 'dotnet', kernel, self.root,
+                              'Release', 'x64', [restore])
+            self.assertEqual(dll, path)
+            self.assertTrue(path.read_bytes().startswith(b'fresh'))
             builds = [call.args[0] for call in run.call_args_list if call.args[0][1] == 'build']
-            self.assertEqual(len(builds), 1)
-            self.assertEqual(builds[0][2], facade)
-            self.assertEqual(builds[0][builds[0].index('-o') + 1], sdk)
+            self.assertEqual(1, len(builds))
+            self.assertEqual(str(csproj), builds[0][2])
+            self.assertIn(restore, builds[0])     # 自定义 NuGet 配置也要传到门面这条命令上
+            self.assertNotIn('-o', builds[0])     # -o 到工程目录会编出 4KB 空程序集（退出码仍为 0）
+            self.quiet(nomad.refresh_kernel_facade, 'dotnet', kernel, self.root, 'Release', 'x64', [restore])
+            builds = [call.args[0] for call in run.call_args_list if call.args[0][1] == 'build']
+            self.assertEqual(1, len(builds), '源码未变时不该重复重建')
 
     @unittest.skipUnless(sys.platform == 'darwin', 'macOS extended attributes')
     def test_mac_payload_copy_preserves_signature_attributes_and_symlinks(self):

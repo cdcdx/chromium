@@ -89,6 +89,12 @@ class NomadTest(unittest.TestCase):
                         self.assertIn(f'-p:RestoreConfigFile={expected}', command)
 
     def test_custom_nuget_config_reaches_facade_and_all_publish_commands(self):
+        """自定义 NuGet 配置必须传到每一条 publish 命令上。
+
+        门面重建那条命令不在这里数：dry-run 只记日志、不发构建命令，它由
+        tests/test_scripts.py::test_stale_facade_dll_is_rebuilt_from_the_delivery_sources
+        直接断言（含 restore props 透传）。
+        """
         self.pc_fixture('win')
         facade = self.args.delivery / 'dotnet/ArupaKernel.csproj'
         facade.parent.mkdir()
@@ -99,7 +105,8 @@ class NomadTest(unittest.TestCase):
         with patch.object(fetch, 'run') as run:
             self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION, self.root / 'out')
         commands = [list(map(str, call.args[0])) for call in run.call_args_list]
-        self.assertEqual(len(commands), 4)
+        self.assertEqual(len(commands), 3)
+        self.assertTrue(all('publish' in command for command in commands))
         for command in commands:
             self.assertIn(f'-p:RestoreConfigFile={self.args.nuget_config.resolve()}', command)
         self.args.nuget_config.unlink()

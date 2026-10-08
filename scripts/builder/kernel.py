@@ -22,13 +22,15 @@ import time
 import zipfile
 from pathlib import Path
 
+from . import common
 from .common import (SRC, KERNEL_REPO, PC_REPO, DIST_ROOT, TOOLS_DIR, Ctx, build_cmd, cget,
                      err, gn_gen, git, log, out, probe_steps, purge_previous_deliveries,
                      run, warn, write_args_gn, write_sha256sums, zip_dir, extra_gn_args,
                      ensure_depot_tools, next_delivery_no, record_delivery, human_size,
                      run_build, ensure_android_native_deps, MULTI_ARCH,
                      ANDROID_MULTI_ARCHS, SCRIPTS_DIR, WORKSPACE_ROOT)
-from . import common
+import kernel_facade
+import toolchains
 
 MODULE_RELDIR = "chrome/browser/arupa_desktop"
 KERNEL_TARGET = f"{MODULE_RELDIR}:arupa_kernel"
@@ -586,6 +588,30 @@ def copy_assets(c: Ctx, stage: Path, kernel_dir: Path):
     """平台无关件取内核仓 package/ + public/（与编进 dylib 的那份同源）。"""
     _copy_stage_assets(c, stage)
     _copy_kernel_assets(c, kernel_dir)
+
+
+def refresh_delivery_facade(c: Ctx, stage: Path):
+    """交付根 dotnet/ 的门面产物，必须与它自带的源码一致。
+
+    dotnet/ 是内核仓 package/package_desktop/dotnet 整份 cp 过来的，其中
+    ArupaKernel.dll/.xml 是**产物**。出包只做复制的话，交付会带着一份"源码新、
+    DLL 旧"的门面，还被写进 SHA256SUMS.txt；Windows 宿主按 HintPath 直接引它，
+    编译期就撞 CS0117/CS1061（2026-10-08 static-4 实证）。
+
+    这里在写清单之前把它编出来（判据是源码摘要，见 scripts/kernel_facade）；
+    编不出来就把过期产物删掉 —— 交付只带源码时 PC 侧会现场自愈，比发一份与
+    源码不符的 DLL 安全。
+    """
+    dotnet_dir = stage / "dotnet"
+    if not kernel_facade.project(dotnet_dir).is_file():
+        return
+    result = kernel_facade.ensure(
+        dotnet_dir, toolchains.dotnet_executable(c.cfg),
+        cfg="Release", arch=c.arch,
+        extra_props=("-p:UseSharedCompilation=false",),
+        runner=lambda command, cwd: common.run(command, cwd, check=False),
+        cwd=KERNEL_REPO, dry_run=common.DRY_RUN)
+    (log if result.state in ("current", "rebuilt") else warn)(f"内核门面: {result.text}")
 
 
 # ── Android 交付件：AAR 组装 ──────────────────────────────────────────────────
@@ -1281,6 +1307,7 @@ def do_package(c: Ctx):
     copy_gen_paks(c, kernel_dir)        # gen/ 下的运行时资源（pak）—— 缺了渲染进程会崩
     write_delivery_markers(c, kernel_dir, n)   # PC 宿主硬校验项
     copy_assets(c, stage, kernel_dir)
+    refresh_delivery_facade(c, stage)   # 门面产物必须与自带源码一致；写清单前重建
     if c.os == "android":
         # AAR 组装 + 无法自编的框架层件（要赶在 write_manifest 前，好让清单收录）
         ref = stage_android_delivery(c, kernel_dir)
