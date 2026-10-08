@@ -329,7 +329,7 @@ package_arch() {
   fi
 
   # 主 pak
-  want "${out}/arupa_plugin_host" "${dest}" "ninja 目标 chrome/browser/arupa_desktop:arupa_plugin_host"
+  want "${out}/arupa_plugin_host" "${dest}" "ninja 目标 chrome/browser/arupa_desktop/plugin/host:arupa_plugin_host"
   want "${PAK_SRC}" "${dest}" ""
   want "${out}/devtools_resources.pak" "${dest}" "ninja 目标 chrome/browser/arupa_desktop:arupa_devtools_resources"
 

@@ -81,7 +81,7 @@ def build_targets(project, target_os, arch, out):
     targets = [base + ":arupa_kernel", "//content/shell:pak",
                "//third_party/hyphenation-patterns:bundle_hyphen_data"]
     if target_os in ("win", "mac", "linux"):
-        targets += [base + ":render", base + ":arupa_plugin_host"]
+        targets += [base + ":render", base + "/plugin/host:arupa_plugin_host"]
     return targets
 
 
@@ -249,7 +249,7 @@ def prepare_project(project):
                   #   脚本都是形态感知的, 会自动跟着切, 不需要改别处。
                   '  if (is_win) { deps += [ "//chrome/browser/arupa_desktop:arupa_desktop" ] }',
                   '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:render" ] }',
-                  '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:arupa_plugin_host" ] }']
+                  '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop/plugin/host:arupa_plugin_host" ] }']
     else:
         lines += ['  deps = [ "//chrome/browser/arupa_android/aar:arupa_kernel_aar", "//content/shell:pak" ]']
     write_if_changed(graph, "\n".join(lines + ['}', '']))
