@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 
+import deliveries
 import fetch as F
 import native_tools
 from linux_shared_library import prepare_v8_tls
@@ -45,6 +46,7 @@ def build_parser():
     p.add_argument("--jobs", "-j", type=int, default=None, help="并发任务数；Ninja 默认按 CPU/内存自动计算；显式指定可覆盖")
     p.add_argument("--zip", action="store_true", help="打包时额外生成 zip")
     p.add_argument("--num", type=int, default=None, help="交付序号（默认自动递增）")
+    p.add_argument("--keep", type=int, default=2, help="package保留的交付份数，默认 2（含本次），0 = 保留全部、只清残留")
     p.add_argument("--dist-dir", type=Path, default=ROOT / "dist")
     p.add_argument("--dry-run", action="store_true", help="仅打印计划；允许在任意宿主预览平台矩阵")
     return p
@@ -223,6 +225,16 @@ def prepare_project(project):
     write_if_changed(graph, "\n".join(lines + ['}', '']))
 
 
+def kernel_delivery_prefix(target_os, cpu, version):
+    """内核交付目录前缀，与 scripts/packaging/package-arupa_*.sh 的命名保持一致。
+
+    桌面：`arupa-<os>-<arch>-<ver>-static-<n>`；Android：`arupa-android-<ver>-static-<n>`
+    （一个交付里含两个 ABI，序号在所有架构间共用）。package 后按此前缀裁剪旧交付。"""
+    if target_os == "android":
+        return f"arupa-android-{version}-static-"
+    return f"arupa-{target_os}-{cpu}-{version}-static-"
+
+
 def package_command(args, target_os, arch, version):
     if target_os == "win":
         shell = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
@@ -269,6 +281,8 @@ def main(argv=None):
         p.error("Android、浏览器和交付打包仅支持 static；arupa_desktop dynamic 可执行 gen/build")
     if (args.jobs is not None and args.jobs < 1) or (args.num is not None and args.num < 1):
         p.error("--jobs / --num 必须大于 0")
+    if args.keep < 0:
+        p.error("--keep 不能为负数")
     if args.jobs is None:
         if "build" in actions and not is_browser:
             args.jobs, reason = automatic_jobs()
@@ -357,8 +371,20 @@ def main(argv=None):
     if "package" in actions:
         # Android's packager combines both ABIs in one delivery when arch=all.
         package_arches = (arch,) if target_os == "android" else arches
+        dist_dir = args.dist_dir.resolve()
         for cpu in package_arches:
+            prefix = kernel_delivery_prefix(target_os, cpu, version)
+            if args.dry_run:
+                F.log(f'(dry-run) 清理残留（*.trash-*/.publish-* 等）并保留最近 {args.keep} 份交付: '
+                      f'{dist_dir}/{prefix}<n>')
+            else:
+                # 打包前清掉中断/反复重建留下的整份旁置拷贝（每个近 800MB），顺带腾出磁盘。
+                deliveries.clean_stale_directories(dist_dir)
             F.run(package_command(args, target_os, cpu, version), ROOT)
+            if not args.dry_run:
+                # 只在本次打包成功后裁剪旧交付：失败时上一份仍留着可回退。
+                deliveries.prune(dist_dir, prefix, args.keep,
+                                 args.num or deliveries.newest_number(dist_dir, prefix))
     F.log("构建流程完成" if not args.dry_run else "构建计划完成（未执行）")
     return 0
 

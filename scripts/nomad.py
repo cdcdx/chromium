@@ -13,6 +13,7 @@ import time
 import zipfile
 import xml.etree.ElementTree as ET
 
+import deliveries
 import fetch as F
 import toolchains
 
@@ -569,8 +570,11 @@ def delivery_base(identity):
 
 
 def package(args, output, identity):
+    keep = max(0, args.keep)
     if F.DRY_RUN:
         F.log(f'(dry-run) 校验并打包 {output} -> {args.dist_dir}/{delivery_base(identity)}-<n>')
+        F.log('(dry-run) 清理残留（*.trash-*、.publish-*、.browser-package-*）'
+              + (f'；同身份交付保留最近 {keep} 份' if keep else '；保留全部交付'))
         return
     stamp = output / 'build-manifest.json'
     if not stamp.is_file():
@@ -584,6 +588,8 @@ def package(args, output, identity):
         F.err(f'构建产物在 build 后发生变化，请重新 build: {output}')
     destination = args.dist_dir.resolve()
     destination.mkdir(parents=True, exist_ok=True)
+    # 中断的打包与反复重建会在 out/、dist/ 堆下整份旁置拷贝；打包前清掉，也顺带腾出磁盘。
+    deliveries.clean_stale_directories(output.parent, destination)
     prefix = delivery_base(identity) + '-'
     pattern = re.compile(re.escape(prefix) + r'(\d+)$')
     number = args.num or max([int(m[1]) for p in destination.iterdir() if (m := pattern.fullmatch(p.name))] + [0]) + 1
@@ -626,6 +632,8 @@ def package(args, output, identity):
             except BaseException:
                 archive_path.unlink(missing_ok=True)
                 raise
+        # 只在本次打包成功后清理旧交付：失败时上一份仍留着可回退。
+        deliveries.prune(destination, prefix, keep, number)
     finally:
         # 收尾清理是 best-effort：无论打包成败，清理失败都不应掩盖真实结果（受限环境会拦截批量删除/单文件 unlink；改名旁置即可，别在这里抛）。
         try:

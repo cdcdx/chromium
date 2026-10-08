@@ -366,6 +366,48 @@ class NomadTest(unittest.TestCase):
             self.quiet(nomad.publish_linux_kernelhost, repo, self.root / 'kernel', 'dotnet',
                        'Release', 'linux-x64', [])
 
+    def test_package_prunes_superseded_deliveries_and_keeps_two(self):
+        identity = {'os': 'linux', 'arch': 'x64', 'version': VERSION, 'variant': 'release'}
+        output = self.root / f'out/nomad-linux-x64-{VERSION}-release'
+        output.mkdir(parents=True)
+        (output / 'NomadBrowser').write_text('fixture')
+        nomad.seal(output, identity)
+        for number in (1, 2, 3):
+            (self.args.dist_dir / f'nomad-linux-x64-{VERSION}-release-{number}').mkdir(parents=True)
+        others = [self.args.dist_dir / f'arupa-linux-x64-{VERSION}-static-1',
+                  self.args.dist_dir / f'nomad-linux-x64-{VERSION}-debug-1']
+        for path in others:
+            path.mkdir()
+        self.quiet(nomad.package, self.args, output, identity)
+        names = sorted(p.name for p in self.args.dist_dir.iterdir())
+        self.assertIn(f'nomad-linux-x64-{VERSION}-release-3', names)      # 保留最近一份旧交付
+        self.assertIn(f'nomad-linux-x64-{VERSION}-release-4', names)      # 本次打包
+        self.assertNotIn(f'nomad-linux-x64-{VERSION}-release-1', names)
+        self.assertNotIn(f'nomad-linux-x64-{VERSION}-release-2', names)
+        for path in others:
+            self.assertTrue(path.is_dir(), path)                          # 内核交付/其它 variant 不受影响
+
+    def test_package_cleans_stale_leftovers_and_keep_zero_keeps_history(self):
+        identity = {'os': 'linux', 'arch': 'x64', 'version': VERSION, 'variant': 'release'}
+        output = self.root / f'out/nomad-linux-x64-{VERSION}-release'
+        output.mkdir(parents=True)
+        (output / 'NomadBrowser').write_text('fixture')
+        nomad.seal(output, identity)
+        junk = [output.parent / f'nomad-linux-x64-{VERSION}-release.trash-abcdef01',
+                output.parent / '.publish-abc123',
+                self.args.dist_dir / '.browser-package-zzy.trash-0f0f0f0f']
+        for path in junk:
+            path.mkdir(parents=True)
+        history = self.args.dist_dir / f'nomad-linux-x64-{VERSION}-release-1'
+        history.mkdir()
+        self.args.keep = 0
+        self.quiet(nomad.package, self.args, output, identity)
+        for path in junk:
+            self.assertFalse(path.exists(), path)
+        self.assertTrue(history.is_dir())                                 # keep=0：只清残留，保留全部历史
+        self.assertTrue((self.args.dist_dir / f'nomad-linux-x64-{VERSION}-release-2').is_dir())
+        self.assertTrue(output.is_dir())                                  # 构建目录不是残留，不能被清
+
     def test_zip_preserves_symlinks_and_duplicate_delivery_is_rejected(self):
         output = self.root / 'browser-output'
         output.mkdir()

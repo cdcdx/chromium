@@ -567,6 +567,68 @@ class WorkspaceTest(unittest.TestCase):
             self.assertFalse((self.root / f'dist/arupa-mac-arm64-{VERSION}-static-1').exists())
             path.write_bytes(content)
 
+    def test_kernel_package_cleans_residue_and_prunes_old_deliveries(self):
+        self.package_fixture()
+        dist = self.root / 'dist'
+        prefix = f'arupa-linux-x64-{VERSION}-static-'
+        for number in (1, 2, 3):
+            (dist / f'{prefix}{number}').mkdir(parents=True)
+        residue = [dist / f'{prefix}1.trash-abcd1234', dist / '.arupa-package-zzz.trash-11223344']
+        for path in residue:
+            path.mkdir()
+        untouched = [dist / f'arupa-android-{VERSION}-static-1',       # 另一目标系统
+                     dist / f'arupa-linux-x64-{VERSION}-dynamic-1']    # 另一 link 形态
+        for path in untouched:
+            path.mkdir()
+
+        def fake_run(cmd, cwd=None, **kwargs):
+            # 真实打包脚本会产出下一号交付；这里只模拟这一结果。
+            (dist / f'{prefix}4').mkdir(exist_ok=True)
+
+        with patch.object(fetch, 'run', side_effect=fake_run):
+            self.quiet(build.main, ['desktop', 'package', '--os', 'linux', '--arch', 'x64',
+                                    '--ver', VERSION, '--dist-dir', str(dist)])
+        names = sorted(p.name for p in dist.iterdir())
+        self.assertIn(f'{prefix}3', names)            # 保留最近一份旧交付
+        self.assertIn(f'{prefix}4', names)            # 本次打包
+        self.assertNotIn(f'{prefix}1', names)
+        self.assertNotIn(f'{prefix}2', names)
+        for path in residue:
+            self.assertFalse(path.exists(), path)
+        for path in untouched:
+            self.assertTrue(path.is_dir(), path)
+
+    def test_kernel_package_keep_zero_keeps_history(self):
+        self.package_fixture()
+        dist = self.root / 'dist'
+        prefix = f'arupa-linux-x64-{VERSION}-static-'
+        for number in (1, 2):
+            (dist / f'{prefix}{number}').mkdir(parents=True)
+        with patch.object(fetch, 'run', side_effect=lambda cmd, cwd=None, **kwargs:
+                          (dist / f'{prefix}3').mkdir(exist_ok=True)):
+            self.quiet(build.main, ['desktop', 'package', '--os', 'linux', '--arch', 'x64',
+                                    '--ver', VERSION, '--dist-dir', str(dist), '--keep', '0'])
+        self.assertEqual(sorted(p.name for p in dist.iterdir()),
+                         sorted([f'{prefix}1', f'{prefix}2', f'{prefix}3']))
+
+    def test_kernel_package_dry_run_reports_cleanup_without_deleting(self):
+        self.package_fixture()
+        dist = self.root / 'dist'
+        prefix = f'arupa-linux-x64-{VERSION}-static-'
+        (dist / f'{prefix}1').mkdir(parents=True)
+        trash = dist / f'{prefix}1.trash-abcd1234'
+        trash.mkdir()
+        buffer = io.StringIO()
+        with patch.object(fetch, 'run') as run, contextlib.redirect_stdout(buffer), \
+             contextlib.redirect_stderr(io.StringIO()):
+            build.main(['desktop', 'package', '--os', 'linux', '--arch', 'x64',
+                        '--ver', VERSION, '--dist-dir', str(dist), '--dry-run'])
+        self.assertIn('清理残留', buffer.getvalue())
+        self.assertIn('保留最近 2 份交付', buffer.getvalue())
+        run.assert_called_once()
+        self.assertTrue((dist / f'{prefix}1').is_dir())
+        self.assertTrue(trash.is_dir())
+
     @unittest.skipUnless(sys.platform == 'darwin', 'macOS package integration')
     def test_desktop_package_and_arch_mismatch_cleanup(self):
         out = self.package_fixture()

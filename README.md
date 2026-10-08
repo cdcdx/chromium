@@ -300,6 +300,10 @@ bash build.sh arupa_desktop --os win --arch all --dry-run
 Android 交付目录：`dist/arupa-android-<version>-static-<n>/kernel/<arch>/`。
 包包含版本标记、SHA256SUMS、MANIFEST；`--zip` 额外生成 ZIP。
 `--num` 指定交付序号，`--dist-dir` 指定交付根。已有包不会被根 build 入口覆盖。
+`package` 打包前清理交付根里的残留（`*.trash-*`、`.arupa-package-*`、`.browser-package-*`、`.publish-*`），
+并在本次打包成功后按同身份（os/arch/版本/link）保留最近 `--keep` 份交付（默认 2，`0` 表示保留全部历史），
+与浏览器交付同一套规则（`scripts/deliveries.py`）。清理是 best-effort：删除在独立子进程里执行，
+被删除闸门/权限拒绝时只打印警告并给出可直接复制执行的 `rm -rf …`，不影响打包结果。
 Linux 当前项目 GN 未定义 render 目标，交付中缺少 arupa_render 会沿用原规则告警。
 
 ## 浏览器编译与打包
@@ -375,6 +379,13 @@ JDK 可通过 `JAVA_HOME`（或 `.env` 的 `java_home`）指定。单独 package
 包含构建清单及 SHA256SUMS。构建目录与交付目录同名（交付多一段序号），按同一个名字即可定位产物。
 `--arch all` 每个架构独立构建、独立打包。`--zip` 保留 macOS bundle 的符号链接。
 构建失败会使旧成功清单失效；单独 package 会核对配置和文件哈希，避免将旧产物或修改后的产物误打包。
+
+`package` 在打包前清理构建/打包旁置的残留（`out/*.trash-*`、`out/.publish-*`、`dist/.browser-package-*`，
+都是中断或反复重建留下的整份拷贝，每个近 800MB），并在**本次打包成功后**删除被取代的旧交付：
+同身份（os/arch/版本/variant）只保留最近 `--keep` 份（默认 2，多留一份可回退对比；`--keep 0` 保留全部历史、
+只清残留；`--num` 指定的序号始终保留）。同目录里的内核交付（`arupa-*`）与其它 variant 不受影响。
+清理是 best-effort：删除在独立子进程里执行，受限环境（删除闸门/权限）拒绝时只打印警告并给出可直接
+复制执行的 `rm -rf …`，不会影响打包结果。
 
 ## 源码修改备份
 
