@@ -1,4 +1,4 @@
-cd d:/workplace/arupa_kernel; 
+cd D:\workplace\chromium_new;
 $t=(Resolve-Path .\src\out).Path; Write-Output "target = $t"; 
 if (Test-Path .\src_out) { 
     Write-Output "existed: SymbolicLink:"; 

@@ -358,6 +358,67 @@ def prune_foreign_native_runtimes(payload, rid):
         F.log(f'原生库裁剪合计释放 {released / 1048576:.1f} MB（保留 runtimes/{keep}）')
 
 
+MIN_FACADE_BYTES = 50_000          # ~4KB 的是 ref/reference-only 程序集（只有签名没有实现）
+
+
+def refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props):
+    """按交付自带的门面源码现场重建 dotnet/ArupaKernel.dll，返回它（或 None）。
+
+    交付里的门面 DLL 有两个会咬人的状态，都会让宿主编译撞 CS0117/CS1061/CS0246：
+      · 比它旁边的源码旧 —— 内核仓改了 package/desktop/dotnet/*.cs 却没重编就出包；
+      · 被出包/外部进程还原成 ref 程序集（~4KB，只有签名）。
+
+    🔴 **绝不能给一次 -o <门面工程自己的目录>**：OutputPath 落在工程目录里时，SDK 的
+       DefaultItemExcludes 会把该目录下的 .cs 全部排除，只编译生成的 AssemblyInfo
+       → 编出 4KB 空程序集，而退出码仍是 0（静默）。产物落到工程 bin/ 下再拷回顶层。
+       写法与 scripts/builder/browser.py 的 ensure_kernel_facade 同一口径。
+    """
+    d = kernel / 'dotnet'
+    proj = d / 'ArupaKernel.csproj'
+    top = d / 'ArupaKernel.dll'
+    # PC 仓内的稳定副本与交付顶层必须同一份：Directory.Build.targets 的回落告警就是这么要求的
+    # （「否则两处会各指一份门面」）。口径同 scripts/builder/browser.py 的 ensure_kernel_facade。
+    stable = repo / 'build' / 'kernel-facade' / 'ArupaKernel.dll'
+
+    def sync_stable(path):
+        if not path or not path.is_file() or path.stat().st_size < MIN_FACADE_BYTES:
+            return
+        try:
+            stable.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, stable)
+        except OSError as error:
+            F.log(f'稳定副本同步失败（不影响本次构建）: {stable}: {error}')
+
+    if not proj.is_file():
+        F.log(f'交付里没有门面源码工程（{proj}）—— 沿用交付自带门面')
+        sync_stable(top)
+        return top if top.is_file() else None
+    sources = [p for p in d.glob('*.cs') if p.is_file()] + [proj]
+    if top.is_file() and top.stat().st_size >= MIN_FACADE_BYTES \
+            and top.stat().st_mtime >= max(p.stat().st_mtime for p in sources):
+        F.log(f'交付门面已是最新（{top.stat().st_size}B）: {top}')
+        sync_stable(top)
+        return top
+    if F.DRY_RUN:
+        F.log(f'(dry-run) 现场重建交付门面: dotnet build {proj} -c {cfg} -p:Platform={arch}')
+        return top
+    F.log(f'交付门面缺失/过旧/是 ref 程序集 —— 现场重建: {proj}')
+    F.run([dotnet, 'build', str(proj), '-c', cfg, f'-p:Platform={arch}', *restore_props], repo)
+    built = d / 'bin' / arch / cfg / 'net10.0' / 'ArupaKernel.dll'
+    if not built.is_file():
+        built = d / 'bin' / cfg / 'net10.0' / 'ArupaKernel.dll'
+    if not built.is_file() or built.stat().st_size < MIN_FACADE_BYTES:
+        F.err(f'门面现场重建后仍没有可用的 ArupaKernel.dll（顶层与 bin 产物都缺失或过小）: {d}；'
+              '检查交付件 dotnet/ 里的门面源码/工程是否完整')
+    shutil.copyfile(built, top)
+    docs = built.with_suffix('.xml')
+    if docs.is_file():
+        shutil.copyfile(docs, d / 'ArupaKernel.xml')
+    F.log(f'交付门面重建完成: {built} -> {top}（{top.stat().st_size}B）')
+    sync_stable(top)
+    return top
+
+
 def desktop_build(root, args, target_os, arch, version, output):
     repo = root / 'nomad_desktop'
     # 命令行标志是 --pc-project，对应 argparse 属性 args.pc_project。
@@ -376,24 +437,28 @@ def desktop_build(root, args, target_os, arch, version, output):
     if target_os == 'linux' and arch == 'x86':
         F.log('Linux x86 发布要求项目提供 linux-x86 运行时及原生依赖；官方 .NET SDK 无法保证支持')
     cfg = args.variant.capitalize()
+    dotnet = prepare_dotnet(args, repo, project)
+    # 顺序要紧：先把交付自带的门面按源码现场重建，再决定 props 引用哪一份门面。
+    # 反过来的话，引用的还是那份「旧/空」门面 —— 表现就是一堆 CS0117/CS1061/CS0246。
+    facade = refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props) \
+        if target_os != 'mac' else None
     props = [f'-p:ArupaDeliveryRoot={kernel}', f'-p:ArupaSdkDir={kernel}',
              f'-p:Platform={arch}', '-p:UseSharedCompilation=false', *restore_props]
-    if target_os != 'mac':
-        # 交付顶层门面可能是 ref 程序集（~4KB 只有签名，出包 bug / 出包后被外部进程还原），
-        # 引用它宿主会满屏 CS0246 "未能找到 Arupa/ArupaWebView/ArupaKernel"。
-        # 此时改用 PC 仓内的稳定副本（由 scripts/builder/browser.py ensure_kernel_facade 维护）。
-        facade = kernel / 'dotnet' / 'ArupaKernel.dll'
+    if target_os != 'mac' and not (facade and facade.is_file() and facade.stat().st_size >= MIN_FACADE_BYTES):
+        # 现场重建都拿不到完整门面（交付件缺门面源码/工程）：改用 PC 仓内的稳定副本
+        # （由 scripts/builder/browser.py ensure_kernel_facade 维护），否则宿主满屏
+        # CS0246 "未能找到 Arupa/ArupaWebView/ArupaKernel"。
         stable = repo / 'build' / 'kernel-facade' / 'ArupaKernel.dll'
-        if (not facade.is_file() or facade.stat().st_size < 50_000) \
-                and stable.is_file() and stable.stat().st_size >= 50_000:
-            F.log(f'交付顶层门面无效({facade.stat().st_size}B, 疑似 ref 程序集) —— 引用回落稳定副本: {stable}')
+        if stable.is_file() and stable.stat().st_size >= MIN_FACADE_BYTES:
+            F.log(f'交付顶层门面不可用 —— 引用回落稳定副本: {stable}')
             props.append(f'-p:ArupaKernelAssembly={stable}')
+        else:
+            F.log('交付顶层门面不可用，PC 仓也没有稳定副本 —— 交由 MSBuild 自行回落')
     if target_os == 'mac':
         props += ['-p:BuildMac=true', f'-p:MacRuntimeIdentifier={rid}']
         developer_dir = F.cget(F.load_config(), 'nomad_developer_dir')
         if developer_dir:
             os.environ['DEVELOPER_DIR'] = developer_dir
-    dotnet = prepare_dotnet(args, repo, project)
     if target_os == 'mac':
         # Run the browser's authoritative delivery contract before WebUI/publish.
         F.run([dotnet, 'msbuild', project, '-t:ValidateArupaDelivery',
@@ -408,11 +473,9 @@ def desktop_build(root, args, target_os, arch, version, output):
         if not (web / 'node_modules/.package-lock.json').is_file():
             F.run(npm_install_command(npm, web), web, retry=True)
         F.run([npm, 'run', 'build'], web)
-    facade = kernel / 'dotnet/ArupaKernel.csproj'
-    # A bundled DLL may predate the source (and lack OpenDevTools). Rebuild
-    # incrementally into the exact directory consumed by the Windows host.
-    if target_os != 'mac' and facade.is_file():
-        F.run([dotnet, 'build', facade, '-c', cfg, f'-p:Platform={arch}', '-o', kernel / 'dotnet', *restore_props], repo)
+    # 门面已在上面的 refresh_kernel_facade 里按源码重建并归位到交付顶层
+    # （原来这里那次 `-o <交付>\dotnet` 的构建会把工程自己的源文件排除掉，
+    #   编出 4KB 空程序集且退出码为 0 —— 已移除）。
     stage = output.parent / ('.' + output.name + '.publish') if F.DRY_RUN else Path(tempfile.mkdtemp(prefix='.publish-', dir=output.parent))
     try:
         bundle_root = stage / 'bundles'
