@@ -251,6 +251,12 @@ for cpu in "${ARCHS[@]}"; do
     n_snap=$((n_snap+1))
   done
   [[ ${n_snap} -gt 0 ]] || err "out 里没有 snapshot_blob*.bin / v8_context_snapshot*.bin —— 内核起不来"
+  # arm64 内核 .so 编译期带 USE_V8_CONTEXT_SNAPSHOT=true，运行期 gin 按名字找 assets/
+  # v8_context_snapshot_64.bin；缺它 App 一打开就 [FATAL:gin/v8_initializer.cc]（2026-09-28 事故）。
+  if [[ "${cpu}" == "arm64" ]]; then
+    [[ -f "${dest}/v8_context_snapshot_64.bin" ]] \
+      || err "缺 ${dest}/v8_context_snapshot_64.bin（arm64 必需：构建时要带 ninja 目标 tools/v8_context_snapshot:generate_v8_context_snapshot）"
+  fi
   # gin 在安卓上按指针宽度找 assets/snapshot_blob_{32,64}.bin，产出名没有后缀 —— 两份都给
   if [[ -f "${dest}/snapshot_blob.bin" ]]; then
     case "${cpu}" in
