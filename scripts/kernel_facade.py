@@ -32,6 +32,10 @@ ASSEMBLY_NAME = "ArupaKernel.dll"
 DOCS_NAME = "ArupaKernel.xml"
 DIGEST_NAME = ".facade-source.sha256"
 SOURCE_PATTERNS = ("*.cs", "*.csproj")
+# 本模块在交付目录里就地 dotnet build，中间产物会落在 dotnet/bin、dotnet/obj；
+# 交付不该带它们 —— 那里躺着的旧门面 DLL 正是"拿错门面"的温床（宿主的 HintPath
+# 回落链 `dotnet\bin\x64\Release\net10.0\ArupaKernel.dll` 会扫到它）。产物归位后清掉。
+INTERMEDIATE_DIRS = ("bin", "obj")
 
 # dotnet 的 Platform 与内核侧 arch 的对应；AnyCPU 也不影响产物路径回落。
 PLATFORM_FOR_ARCH = {"x64": "x64", "arm64": "ARM64", "x86": "x86"}
@@ -124,6 +128,23 @@ def deploy(dotnet_dir, built) -> Path:
     return top
 
 
+def drop_intermediates(dotnet_dir) -> list:
+    """删掉交付里的构建中间产物（bin/obj），返回被删的目录名。
+
+    ensure() 是**在交付目录里**构建的（这样才能"用交付自带的源码编出门面"），
+    于是 bin/obj 会留在这里；交付只该有源码 + 门面产物 + 侧车摘要。
+    """
+    d = Path(dotnet_dir)
+    removed = []
+    for name in INTERMEDIATE_DIRS:
+        path = d / name
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            if not path.exists():
+                removed.append(name)
+    return removed
+
+
 def discard(dotnet_dir) -> list:
     """删掉与源码不符（或不可用）的门面产物，返回被删的文件名。
 
@@ -168,6 +189,8 @@ def ensure(dotnet_dir, dotnet_exe, cfg: str = "Release", arch: Optional[str] = N
     if not proj.is_file():
         return Result("no-project", detail=str(d))
     if is_current(d):
+        # 就地修复旧交付时，bin/obj 可能还在（本次没重建，也要清掉）
+        drop_intermediates(d)
         return Result("current", path=d / ASSEMBLY_NAME)
     present = facade_ok(d / ASSEMBLY_NAME)
     reason = "门面与源码不符" if present else "门面缺失或只有 ref 程序集"
@@ -189,16 +212,20 @@ def ensure(dotnet_dir, dotnet_exe, cfg: str = "Release", arch: Optional[str] = N
     if built is None:
         return _fail(d, drop_on_failure, f"{reason}；重建后没有可用的 {ASSEMBLY_NAME}")
     top = deploy(d, built)
+    dropped = drop_intermediates(d)
+    note = f"；已清理中间产物 {', '.join(dropped)}" if dropped else ""
     # 就地修复已出包的交付时，它随包带的清单会立刻失真（记的还是修复前的产物）。
     # 出包流程里写清单发生在本函数之后，所以正常不会命中这里。
     if (d.parent / "SHA256SUMS.txt").is_file():
         return Result("rebuilt", path=top,
-                      detail="该交付的 SHA256SUMS.txt 仍记录修复前的产物，需要重出包刷新")
-    return Result("rebuilt", path=top)
+                      detail="该交付的 SHA256SUMS.txt 仍记录修复前的产物，需要重出包刷新" + note)
+    return Result("rebuilt", path=top, detail=note.lstrip("；"))
 
 
 def _fail(dotnet_dir, drop: bool, detail: str) -> Result:
     if drop:
         removed = discard(dotnet_dir)
         detail += "；已删除过期产物: " + (", ".join(removed) if removed else "（本来就没有）")
+    # 重建失败的 bin/obj 同样不该留在交付里
+    drop_intermediates(dotnet_dir)
     return Result("failed", detail=detail)

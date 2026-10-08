@@ -512,8 +512,11 @@ def _copy_stage_assets(c: Ctx, stage: Path):
     for sub in subs:
         src = pkg / sub
         if src.is_dir():
-            shutil.copytree(src, stage / sub, dirs_exist_ok=True)
-            log(f"  收录 {sub}/")
+            # dotnet/ 里含内核仓那边的构建中间产物 bin/obj（旧门面 DLL 就躺在里面，
+            # 交付带上它，宿主编译引用错一份就满屏 CS0117/CS1061），不进交付。
+            ignore = shutil.ignore_patterns("bin", "obj") if sub == "dotnet" else None
+            shutil.copytree(src, stage / sub, dirs_exist_ok=True, ignore=ignore)
+            log(f"  收录 {sub}/{'' if ignore is None else '（不含 bin/obj）'}")
         else:
             warn(f"内核仓缺 {src}（平台无关件），跳过")
     if c.os != "android":

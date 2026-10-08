@@ -62,7 +62,7 @@
 #   OUT\locales\{en-US,zh-CN}.pak → kernel\locales\（旧构建可无；有则两者必需）
 #   <repo>\arupa_desktop\public\*.h          → include\
 #   <repo>\package\package_desktop\{docs,dotnet,…}            → 交付根同名（有则带，跟 scripts\builder\kernel.py
-#                                               的 copy_assets 同一口径）
+#                                               的 copy_assets 同一口径；其中 dotnet\ 不带 bin\/obj\）
 #   <repo>\package\package_desktop\plugin-runtime\            → kernel\plugin-runtime\（运行期按「内核目录/
 #                                               plugin-runtime/nomad-plugin-runtime.js」取，不放交付根）
 #   <repo>\package\package_desktop\kernel\**                  → kernel\（内核侧附加件，内容并入）
@@ -395,7 +395,18 @@ function Copy-PackageDir {
         if (Test-Path -LiteralPath $dest) {
             throw "package 附加件与交付目录里已有的 $($e.Name) 撞名（$dest）—— 用 --package-dir 换个来源，或去掉 --docs / --probe"
         }
-        if ($e.PSIsContainer) {
+        if ($e.PSIsContainer -and $e.Name -eq 'dotnet') {
+            # 门面源码目录：bin\/obj\ 是内核仓那边的构建中间产物（旧门面 DLL 就躺在里面，
+            # 引用错一份就会满屏 CS0117/CS1061），不进交付。
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            robocopy $e.FullName $dest /E /XD bin obj /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+            if ($LASTEXITCODE -ge 8) { throw "package\dotnet 拷贝失败 (robocopy exit $LASTEXITCODE)" }
+            $bytes = (Get-ChildItem -LiteralPath $e.FullName -Recurse -File -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
+                Measure-Object -Property Length -Sum).Sum
+            if (-not $bytes) { $bytes = 0 }
+            Write-Step ("  {0}/  ← package\{0}  {1}（不含 bin\/obj\）" -f $e.Name, (Format-Size ([long]$bytes)))
+        } elseif ($e.PSIsContainer) {
             Copy-Item -LiteralPath $e.FullName -Destination $dest -Recurse -Force
             $bytes = (Get-ChildItem -LiteralPath $e.FullName -Recurse -File -Force -ErrorAction SilentlyContinue |
                 Measure-Object -Property Length -Sum).Sum

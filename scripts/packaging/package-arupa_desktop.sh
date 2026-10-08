@@ -57,7 +57,7 @@
 #   OUT/Libraries/libtest_trace_processor.dylib  → kernel/Libraries/（mac，有则带）
 #   <repo>/arupa_desktop/public/*.h              → include/…
 #   <repo>/package/package_desktop/{docs,dotnet,…}               → 交付根同名（有则带，跟 scripts/builder/kernel.py
-#                                                  的 copy_assets 同一口径）
+#                                                  的 copy_assets 同一口径；其中 dotnet/ 不带 bin/ obj/）
 #   <repo>/package/package_desktop/plugin-runtime/               → kernel/plugin-runtime/（运行期按「内核目录/
 #                                                  plugin-runtime/nomad-plugin-runtime.js」取，不放交付根）
 #   <repo>/package/package_desktop/kernel/**                     → kernel/（内核侧附加件，内容并入）
@@ -285,6 +285,15 @@ copy_package_dir() {
     # 撞名就停：静默覆盖（尤其 --docs/--probe 已经建了同名目录）会混出半新半旧的目录
     [[ ! -e "${dist}/${name}" ]] \
       || err "package 附加件与交付目录里已有的 ${name} 撞名（${dist}/${name}）—— 用 --package-dir 换个来源，或去掉 --docs/--probe"
+    # dotnet/：bin/ obj/ 是内核仓那边的构建中间产物（旧门面 DLL 就躺在里面，
+    # 引用错一份宿主就满屏 CS0117/CS1061），不进交付
+    if [[ -d "${e}" && "${name}" == "dotnet" ]]; then
+      cp -R "${e}" "${dist}/"
+      rm -rf "${dist}/dotnet/bin" "${dist}/dotnet/obj"
+      log "  ${name}/  ← package/${name}  $(du -sh "${dist}/dotnet" | cut -f1)（不含 bin/obj）"
+      n=$((n+1))
+      continue
+    fi
     if [[ -d "${e}" ]]; then
       cp -R "${e}" "${dist}/"
       log "  ${name}/  ← package/${name}  $(du -sh "${e}" | cut -f1)"
