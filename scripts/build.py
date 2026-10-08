@@ -16,6 +16,7 @@ import tempfile
 import deliveries
 import fetch as F
 import native_tools
+import publish
 from linux_shared_library import prepare_v8_tls
 from concurrency import automatic_jobs
 from apple_tools import prepare_mac_toolchain
@@ -30,7 +31,7 @@ ALIASES = {"desktop": "arupa_desktop", "android": "arupa_android"}
 def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("project", choices=("arupa_desktop", "arupa_android", "nomad_desktop", "nomad_android", "desktop", "android"))
-    p.add_argument("actions", nargs="*", help="gen / build / package / all（默认 all；浏览器仅 build + package）")
+    p.add_argument("actions", nargs="*", help="gen / build / package / publish / all（默认 all；浏览器仅 build + package；publish 仅内核）")
     p.add_argument("--os", type=normalize_os, choices=tuple(MATRIX), default="")
     p.add_argument("--args", type=Path, help="build 目录内的 GN 配置；默认 build/<os>/args.gn")
     p.add_argument("--arch", choices=("x86", "x64", "arm64", "all"), default="", help="默认：桌面为当前芯片，arupa_android 为 all，Android 浏览器为 arm64")
@@ -49,6 +50,11 @@ def build_parser():
     p.add_argument("--keep", type=int, default=2, help="package保留的交付份数，默认 2（含本次），0 = 保留全部、只清残留")
     p.add_argument("--dist-dir", type=Path, default=ROOT / "dist")
     p.add_argument("--dry-run", action="store_true", help="仅打印计划；允许在任意宿主预览平台矩阵")
+    p.add_argument("--url", default="", help="publish 发布站点源，如 http://192.168.77.104:8080；默认取 .env 的 publish_url")
+    p.add_argument("--token", default="", help="publish 上传令牌；默认取环境变量/.env 的 publish_upload_token")
+    p.add_argument("--allow-http", action="store_true", help="publish 对公网/域名也允许 http://（内网私有地址已默认放行）")
+    p.add_argument("--platform", default="", help="publish 元数据 platform；默认按交付包文件名推断（mac / win / linux / android）")
+    p.add_argument("--file", default="", help="publish 指定交付包：路径，或直接给交付序号 n；默认取最大的 zip")
     return p
 
 
@@ -302,11 +308,14 @@ def main(argv=None):
     except ValueError as exc:
         p.error(str(exc))
     actions = args.actions or ["all"]
-    if set(actions) - {"gen", "build", "package", "all"}:
-        p.error("动作只支持 gen / build / package / all；依赖下载请使用 fetch")
+    if set(actions) - {"gen", "build", "package", "publish", "all"}:
+        p.error("动作只支持 gen / build / package / publish / all；依赖下载请使用 fetch")
     actions = set(actions)
     if "all" in actions:
+        # publish 不并入 all：发版是显式动作，不该因为一条 all 把产物推出去。
         actions = {"build", "package"} if is_browser else {"gen", "build", "package"}
+    if "publish" in actions and is_browser:
+        p.error("publish 仅支持内核交付（arupa_desktop / arupa_android）")
     if args.link == "dynamic" and (is_browser or target_os == "android" or "package" in actions):
         p.error("Android、浏览器和交付打包仅支持 static；arupa_desktop dynamic 可执行 gen/build")
     if (args.jobs is not None and args.jobs < 1) or (args.num is not None and args.num < 1):
@@ -322,7 +331,8 @@ def main(argv=None):
     elif "build" in actions:
         F.log(f"使用指定并发任务数: {args.jobs}")
     required_host = host_for(target_os)
-    if not args.dry_run and F.HOST_OS != required_host:
+    # 只推送不构建时放宽宿主限制：交付包可能是在别的机器上打好的。
+    if not args.dry_run and F.HOST_OS != required_host and actions != {"publish"}:
         p.error(f"{target_os} 构建需要 {required_host} 宿主（当前 {F.HOST_OS}）")
     version = args.ver if is_browser and args.ver else F.chromium_version()
     if args.ver and args.ver != version:
@@ -416,6 +426,23 @@ def main(argv=None):
                 # 只在本次打包成功后裁剪旧交付：失败时上一份仍留着可回退。
                 deliveries.prune(dist_dir, prefix, args.keep,
                                  args.num or deliveries.newest_number(dist_dir, prefix))
+    if "publish" in actions:
+        dist_dir = args.dist_dir.resolve()
+        prefix = publish.delivery_prefix(target_os, arch, version, args.link)
+        requested = publish.selector(args.file, args.num)
+        if requested is None and "package" in actions and not args.dry_run:
+            # 同一次调用里刚打过包：优先推刚产出的那一份，而不是「碰巧最大的 zip」。
+            requested = deliveries.newest_number(dist_dir, prefix) or None
+        archive = publish.select_archive(dist_dir, prefix, requested)
+        identity = publish.parse_artifact(archive.name)
+        if args.ver and args.ver != identity.version:
+            F.err(f"--ver {args.ver} 与交付包 {archive.name} 的版本不一致")
+        publish.push(archive,
+                     url=args.url or F.cget(cfg, "publish_url"),
+                     token=args.token or F.cget(cfg, "publish_upload_token"),
+                     allow_http=args.allow_http,
+                     platform=args.platform,
+                     version=identity.version)
     F.log("构建流程完成" if not args.dry_run else "构建计划完成（未执行）")
     return 0
 

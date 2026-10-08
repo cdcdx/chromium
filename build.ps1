@@ -1,5 +1,6 @@
 ﻿# 编译 / 打包入口（Windows）—— 转发到 scripts/build.py
 # 用法: .\build.ps1 arupa_desktop all --arch x64
+# 推送交付包: .\build.ps1 desktop publish --url http://<host>:8080 --allow-http
 # 坑: PS 5.1 会把原生命令写进 stderr 的每一行（npm warn / dotnet warning / git hint ...）
 # 包装成 ErrorRecord；$ErrorActionPreference='Stop' 下它会**直接终止脚本** ——
 # 几小时的构建被一行 warning 掐断，且只看到"命令失败"看不到真正原因。

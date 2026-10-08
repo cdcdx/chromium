@@ -251,6 +251,7 @@ Android 的 `include_both_v8_snapshots` 由构建入口按架构强制设置，�
 
 
 动作：`gen` 生成构建图；`build` 编译（没有 build.ninja 时自动 gen）；`package` 打包已有产物；
+`publish` 把交付 ZIP 推到发布服务器（仅内核，且不并入 `all`——发版是显式动作）。
 内核的 `all` 按 gen → build → package 执行，也是省略动作时的默认行为；浏览器的 `all` 执行 build → package，不支持 gen。
 多个动作按该依赖顺序执行并去重。构建使用树内 GN/Ninja；桌面 `dynamic` 支持 gen/build，交付打包仅支持 static。
 GN 接入方式参见 [GN root target 文档](https://gn.googlesource.com/gn/+/HEAD/docs/reference.md#dotfile)；
@@ -305,6 +306,27 @@ Android 交付目录：`dist/arupa-android-<version>-static-<n>/kernel/<arch>/`�
 与浏览器交付同一套规则（`scripts/deliveries.py`）。清理是 best-effort：删除在独立子进程里执行，
 被删除闸门/权限拒绝时只打印警告并给出可直接复制执行的 `rm -rf …`，不影响打包结果。
 Linux 当前项目 GN 未定义 render 目标，交付中缺少 arupa_render 会沿用原规则告警。
+
+`publish` 把交付 ZIP 推到发布服务器，协议与 `scripts/push-http.mjs` 一致（Python 实现见 `scripts/publish.py`）：
+建会话 → 查服务端权威偏移 → 按 `Upload-Offset` 分块续传 → `/complete` 收尾校验。服务端 4xx（除 409）与
+`retryable=false` 立即失败；409/5xx 和连接中断按 0.5s 起指数退避重试 4 次。中断后重跑同一条命令即从服务端
+记录的偏移接着传，不重头再来。站点源取 `--url`，否则用 `.env` 的 `publish_url`；令牌取 `--token`，否则用
+环境变量或 `.env` 的 `publish_upload_token`（不再读 `--token-file`）。默认推 `dist/` 下体积最大的交付 ZIP，
+也可用 `--file` 指定路径，或直接给交付序号 `n`（等价 `--num n`）；同一次调用里刚 `package` 过时优先推刚产出的
+那一份。元数据里的 `platform` 默认取文件名里的系统名（`mac` / `win` / `linux` / `android`，服务端会拿它与文件名
+交叉校验；架构也从文件名解析），可用 `--platform` 覆盖。只执行 `publish` 时不校验宿主平台，便于推送别的机器
+上打好的包。
+
+`http://` 会把上传令牌明文放在链路上：回环与内网私有地址（`10/8`、`172.16/12`、`192.168/16`、`169.254/16`、
+`100.64/10`、IPv6 `fc00::/7`、`fe80::/10`）默认放行；公网 IP 与域名需要确认链路可信后显式加 `--allow-http`，
+否则建议改用 `https://`。
+
+```bash
+bash build.sh desktop publish                  # 推最大的交付 ZIP，站点源取 .env
+bash build.sh desktop publish --url http://192.168.77.104:8080
+bash build.sh desktop publish --file 7         # 指定交付序号
+bash build.sh desktop publish --dry-run        # 只看计划，不联网
+```
 
 ## 浏览器编译与打包
 

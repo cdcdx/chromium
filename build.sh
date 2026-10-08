@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 编译 / 打包入口（macOS / Linux）—— 转发到 scripts/build.py
 # 用法见: bash build.sh -h
+# 推送交付包: bash build.sh desktop publish --allow-http
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
