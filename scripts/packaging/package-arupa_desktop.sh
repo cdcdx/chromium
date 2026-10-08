@@ -60,6 +60,7 @@
 #                                                  的 copy_assets 同一口径）
 #   <repo>/package/package_desktop/plugin-runtime/               → kernel/plugin-runtime/（运行期按「内核目录/
 #                                                  plugin-runtime/nomad-plugin-runtime.js」取，不放交付根）
+#   <repo>/package/package_desktop/kernel/**                     → kernel/（内核侧附加件，内容并入）
 #   版本标记                                     → kernel/.arupa-version = ver
 #                                                  kernel/.arupa-delivery-id = ver+n
 #   mac 专属                                     → macKernel -> kernel（软链；PC 侧 Mac/ArupaDelivery.props
@@ -267,6 +268,20 @@ copy_package_dir() {
 
   for e in "${entries[@]}"; do
     name="$(basename "${e}")"
+    # 内核侧件：并入 <dist>/kernel/（plugin-runtime 归位到 kernel/plugin-runtime/，
+    # 运行期按「内核目录/plugin-runtime/nomad-plugin-runtime.js」取，与 .ps1 同口径）
+    if [[ -d "${e}" && ( "${name}" == "kernel" || "${name}" == "plugin-runtime" ) ]]; then
+      local sub="${dist}/kernel" rel="kernel/"
+      if [[ "${name}" == "plugin-runtime" ]]; then
+        sub="${dist}/kernel/plugin-runtime"
+        rel="kernel/plugin-runtime/"
+      fi
+      mkdir -p "${sub}"
+      cp -R "${e}/." "${sub}/"
+      log "  ${name}/  → ${rel}  $(du -sh "${e}" | cut -f1)"
+      n=$((n+1))
+      continue
+    fi
     # 撞名就停：静默覆盖（尤其 --docs/--probe 已经建了同名目录）会混出半新半旧的目录
     [[ ! -e "${dist}/${name}" ]] \
       || err "package 附加件与交付目录里已有的 ${name} 撞名（${dist}/${name}）—— 用 --package-dir 换个来源，或去掉 --docs/--probe"
@@ -452,9 +467,10 @@ package_arch() {
 
   copy_package_dir "${dist}"
 
-  # 交付根下的 plugin-runtime/ 归位到 kernel/：运行期按「内核目录/plugin-runtime/nomad-plugin-runtime.js」
-  # 取运行时（NomadBrowser 的 _kernel/plugin-runtime 路由、Mac bundle 的 $(ArupaPluginRuntimeDir)），
-  # scripts/builder/kernel.py 的 _copy_kernel_assets 同样是落在 kernel/plugin-runtime。
+  # 兜底：copy_package_dir 已把 plugin-runtime/ 直接落在 kernel/plugin-runtime/（运行期按
+  # 「内核目录/plugin-runtime/nomad-plugin-runtime.js」取：NomadBrowser 的 _kernel/plugin-runtime
+  # 路由、Mac bundle 的 $(ArupaPluginRuntimeDir)）。若交付根仍出现 plugin-runtime/（--docs/--probe
+  # 或旧调用方塞进来的），这里再归位一次。
   if [[ -d "${dist}/plugin-runtime" ]]; then
     mkdir -p "${dest}"
     rm -rf "${dest}/plugin-runtime"

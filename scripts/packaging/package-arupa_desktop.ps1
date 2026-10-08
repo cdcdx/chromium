@@ -11,7 +11,7 @@
 #            snapshot_blob.bin, v8_context_snapshot.bin, libEGL.dll, libGLESv2.dll,
 #            vk_swiftshader.dll, vulkan-1.dll, d3dcompiler_47.dll, dxcompiler.dll,
 #            msvcp140*.dll, vcruntime140*.dll, …, angledata\, hyphen-data\,
-#            resources\,
+#            resources\, plugin-runtime\,
 #            .arupa-version, .arupa-delivery-id}
 #     include\{arupa_kernel_capi.h, arupa_kernel_capi_nomad.h}
 #     docs\ dotnet\ …        ← <repo>\package\package_desktop 下的一级文件/文件夹整份搬过来（有则带）
@@ -63,6 +63,9 @@
 #   <repo>\arupa_desktop\public\*.h          → include\
 #   <repo>\package\package_desktop\{docs,dotnet,…}            → 交付根同名（有则带，跟 scripts\builder\kernel.py
 #                                               的 copy_assets 同一口径）
+#   <repo>\package\package_desktop\plugin-runtime\            → kernel\plugin-runtime\（运行期按「内核目录/
+#                                               plugin-runtime/nomad-plugin-runtime.js」取，不放交付根）
+#   <repo>\package\package_desktop\kernel\**                  → kernel\（内核侧附加件，内容并入）
 #   版本标记                                 → kernel\.arupa-version = ver
 #                                              kernel\.arupa-delivery-id = ver+n
 #
@@ -346,6 +349,13 @@ function Add-OptionalDir {
 # 把 <repo>\package\package_desktop 下的一级文件/文件夹整份搬进交付根（docs\ dotnet\ …）
 # 口径同 scripts\builder\kernel.py 的 copy_assets：平台无关件不塞进 kernel\，
 # 直接平铺在交付根，宿主按 dist\docs、dist\dotnet 取用。
+#
+# 两个「内核侧」例外 —— 一律落到 <dist>\kernel\ 下（运行期按「内核目录/…」取件）：
+#   package_desktop\plugin-runtime\  → <dist>\kernel\plugin-runtime\
+#     NomadBrowser 的 _kernel/plugin-runtime 路由、Mac bundle 的 $(ArupaPluginRuntimeDir)
+#     都按「内核目录/plugin-runtime/nomad-plugin-runtime.js」取；scripts\builder\kernel.py
+#     的 _copy_kernel_assets 与 .sh 版同口径。放交付根会取不到。
+#   package_desktop\kernel\**        → <dist>\kernel\（内容并入，不再多套一层 kernel\）
 function Copy-PackageDir {
     param([string]$DistPath)
     if (-not $PackageDir) { return }        # --no-package，或 package 目录不存在
@@ -358,8 +368,28 @@ function Copy-PackageDir {
         return
     }
 
+    $kernelDir = Join-Path $DistPath 'kernel'
     $n = 0
     foreach ($e in $entries) {
+        # 内核侧件：并入 <dist>\kernel\（plugin-runtime 归位到 kernel\plugin-runtime\）
+        if ($e.PSIsContainer -and ($e.Name -eq 'kernel' -or $e.Name -eq 'plugin-runtime')) {
+            $sub = $kernelDir
+            $rel = 'kernel\'
+            if ($e.Name -eq 'plugin-runtime') {
+                $sub = Join-Path $kernelDir 'plugin-runtime'
+                $rel = 'kernel\plugin-runtime\'
+            }
+            New-Item -ItemType Directory -Force -Path $sub | Out-Null
+            $files = @(Get-ChildItem -LiteralPath $e.FullName -Recurse -File -Force -ErrorAction SilentlyContinue)
+            if ($files.Count -gt 0) {
+                Copy-Item -Path (Join-Path $e.FullName '*') -Destination $sub -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            $bytes = ($files | Measure-Object -Property Length -Sum).Sum
+            if (-not $bytes) { $bytes = 0 }
+            Write-Step ("  {0}/  → {1}  {2}" -f $e.Name, $rel, (Format-Size ([long]$bytes)))
+            $n++
+            continue
+        }
         $dest = Join-Path $DistPath $e.Name
         # 撞名就停：静默覆盖（尤其 --docs / --probe 已经建了同名目录）会混出半新半旧的目录
         if (Test-Path -LiteralPath $dest) {
