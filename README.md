@@ -349,6 +349,14 @@ bash build.sh nomad_desktop package --os macos --arch arm64 --ver 154.0.8037.21 
 PC 默认工程分别为 `NomadBrowser.Avalonia`、`NomadBrowser.Avalonia.Mac`、`NomadBrowser.Avalonia.Linux` 下同名 csproj；
 可用 `--pc-project` 指定实际工程。Windows 同时发布两个更新器；Linux 沿用现有工程的 net10.0 配置，并生成 `run.sh`；
 macOS 要求工程的 `MacDistRoot` 下产出唯一 `.app`，且已包含 `Contents/Resources/arupa-mac` 内核。
+
+Linux 交付根另有桌面集成件：`nomadbrowser.desktop.in`、`install-desktop.sh`、`nomadbrowser.png`。
+`Exec` 按 freedesktop 规定必须是绝对路径，而便携包解压位置打包时未知，因此交付的是**模板**；
+解压后执行一次 `bash install-desktop.sh`（只写 `$XDG_DATA_HOME`，不需要 root）即把真实路径填入模板、
+装到 `applications/` 与 `icons/hicolor/`，并刷新 `update-desktop-database`。
+该条目同时提供 `MimeType=x-scheme-handler/http;https;…` 与 `StartupWMClass=NomadBrowser`，
+前者是应用能被设为默认浏览器的前提（`LinuxDefaultBrowserService` 按 `nomadbrowser.desktop` 这个 id 走 `xdg-settings`），
+后者决定窗口能否归到启动器图标下。未执行安装脚本时，应用仍可用 `run.sh` 直接启动，只是没有启动器条目。
 Linux x86 参数已接入，但微软提供的 Linux .NET 运行时不含 x86，项目必须自行提供对应运行时及原生依赖，
 普通官方 SDK 无法完成此目标；不能将参数支持视为已验证可交付。[官方运行时下载](https://dotnet.microsoft.com/en-us/download/dotnet/9.0)
 

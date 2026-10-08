@@ -231,6 +231,132 @@ def publish_linux_kernelhost(repo, kernel_dir, dotnet, cfg, rid, props):
     F.log(f'内核宿主: arupa-desktop/{LINUX_KERNELHOST_EXE}（{exe.stat().st_size / 1048576:.1f} MB）')
 
 
+# 桌面集成安装脚本。用 raw 字符串：脚本里 sed 的反斜杠必须原样落到文件里。
+LINUX_DESKTOP_INSTALLER = r"""#!/usr/bin/env bash
+# 把便携包注册到当前用户的桌面环境：不需要 root、不碰系统目录、不改默认浏览器。
+# 只写 $XDG_DATA_HOME（默认 ~/.local/share），可重复执行。
+set -euo pipefail
+
+APP_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
+DESKTOP_ID="nomadbrowser.desktop"
+APP_DEST="$DATA_DIR/applications"
+ICON_DEST="$DATA_DIR/icons/hicolor/256x256/apps"
+TEMPLATE="$APP_DIR/nomadbrowser.desktop.in"
+
+if [ ! -x "$APP_DIR/NomadBrowser" ]; then
+  echo "[ERROR] 找不到可执行文件 $APP_DIR/NomadBrowser；请先完整解压交付包。" >&2
+  exit 1
+fi
+if [ ! -f "$TEMPLATE" ]; then
+  echo "[ERROR] 找不到模板 $TEMPLATE" >&2
+  exit 1
+fi
+
+mkdir -p "$APP_DEST" "$ICON_DEST"
+
+# Exec 必须是绝对路径。路径可能含空格（模板里已用双引号包住）与 sed 特殊字符 & | \（转义掉）。
+EXEC_PATH="$APP_DIR/run.sh"
+ESCAPED="$(printf '%s' "$EXEC_PATH" | sed 's/[&|\\]/\\&/g')"
+sed "s|@EXEC@|$ESCAPED|" "$TEMPLATE" > "$APP_DEST/$DESKTOP_ID.tmp"
+mv -f "$APP_DEST/$DESKTOP_ID.tmp" "$APP_DEST/$DESKTOP_ID"
+cp -f "$APP_DIR/nomadbrowser.png" "$ICON_DEST/nomadbrowser.png"
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database "$APP_DEST" >/dev/null 2>&1 || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f -t "$DATA_DIR/icons/hicolor" >/dev/null 2>&1 || true
+fi
+
+echo "已注册桌面条目: $APP_DEST/$DESKTOP_ID"
+echo "启动器里应出现「逐风浏览器」；设为默认浏览器请在应用内或系统设置中操作。"
+"""
+
+
+def write_linux_desktop_integration(repo, payload):
+    """写 Linux 桌面集成件到便携包根：.desktop 模板 + 安装脚本 + 图标。
+
+    为什么是缺口而不是锦上添花：
+      · Core/Platform/Linux/LinuxDefaultBrowserService 按 .desktop 的 id 查询/设置默认浏览器
+        （默认 id 就是 nomadbrowser.desktop），其文件头声明「便携包的 .desktop 由打包层交付」
+        —— 而此前打包层并不产出它，"设为默认浏览器"在任何机器上都不可能成功；
+      · MimeType 里的 x-scheme-handler/* 决定应用能否被系统选为 http/https 处理器；
+      · StartupWMClass 决定窗口能否归到启动器图标下（否则任务栏会出现两个图标）。
+
+    为什么是「模板 + 安装脚本」而不是直接放可用的 .desktop：freedesktop 规定 Exec 必须是
+    绝对路径（不会相对 .desktop 所在目录解析），而便携包解压到哪在打包时无从得知 ——
+    只能由安装脚本在目标机上把真实路径填进模板。
+    """
+    template = payload / 'nomadbrowser.desktop.in'
+    template.write_text(
+        '[Desktop Entry]\n'
+        'Type=Application\n'
+        'Version=1.0\n'
+        'Name=逐风浏览器\n'
+        'Name[en]=Nomad Browser\n'
+        'GenericName=Web Browser\n'
+        'Comment=智能浏览器\n'
+        'Exec="@EXEC@" %u\n'
+        'TryExec=@EXEC@\n'
+        'Icon=nomadbrowser\n'
+        'Terminal=false\n'
+        'Categories=Network;WebBrowser;\n'
+        # 与 xdg-settings 那条路配套：有这些 MimeType 才可能被选为默认处理器。
+        'MimeType=x-scheme-handler/http;x-scheme-handler/https;'
+        'x-scheme-handler/about;x-scheme-handler/unknown;text/html;\n'
+        'StartupNotify=true\n'
+        # Avalonia 在 X11 下用入口程序集名作 WM_CLASS（本工程 AssemblyName=NomadBrowser）。
+        'StartupWMClass=NomadBrowser\n', encoding='utf-8')
+
+    icon = repo / 'NomadBrowser.Avalonia' / 'Assets' / 'logo.png'
+    if not icon.is_file():
+        F.err(f'缺少桌面图标源: {icon}')
+    shutil.copy2(icon, payload / 'nomadbrowser.png')
+
+    installer = payload / 'install-desktop.sh'
+    installer.write_text(LINUX_DESKTOP_INSTALLER, encoding='utf-8')
+    installer.chmod(0o755)
+    F.log('桌面集成: nomadbrowser.desktop.in + install-desktop.sh + nomadbrowser.png')
+
+
+def prune_foreign_native_runtimes(payload, rid):
+    """便携包里只保留 runtimes/<rid>/，删掉其他平台的原生库目录。
+
+    根因：Whisper.net.Runtime 用 build/*.targets 逐条 <None Include> 拷贝原生库，
+    绕过了 NuGet 对 runtimes/<rid>/native 的 RID 筛选 —— 于是**所有平台**的
+    .so/.dylib/.dll（含 macOS 与 Windows）都被塞进包。这些目录不在 .NET 的原生库
+    搜索路径里（只按当前 RID 解析，我们的 LinuxNativeLibraryResolver 也只指向内核目录），
+    运行时永远不会被加载，纯属体积浪费：x64 Linux 包实测 runtimes/ 共 111 MB，
+    其中只有 27 MB（linux-x64）有用。
+
+    必须在 save_output/seal 之前调用，让清单与 SHA256SUMS 覆盖裁剪后的真实文件集。
+    """
+    keep = rid                    # 只应在 Linux 分支调用，rid = linux-<arch>
+    if not keep.startswith('linux-'):
+        return
+    runtimes = payload / 'runtimes'
+    if not runtimes.is_dir():
+        return
+
+    released = 0
+    for child in sorted(runtimes.iterdir()):
+        if not child.is_dir() or child.name == keep:
+            continue
+        size = sum(item.stat().st_size for item in child.rglob('*') if item.is_file())
+        shutil.rmtree(child)
+        released += size
+        F.log(f'裁剪外来原生库: runtimes/{child.name}（{size / 1048576:.1f} MB）')
+
+    # 布局变化时宁可响亮失败，也不要发出一个没有本地 ASR 原生库的包。
+    required = runtimes / keep / 'libwhisper.so'
+    if not required.is_file():
+        F.err(f'裁剪后缺少 {required.relative_to(payload)}；'
+              '原生库布局已变，请更新 prune_foreign_native_runtimes 的保留规则')
+    if released:
+        F.log(f'原生库裁剪合计释放 {released / 1048576:.1f} MB（保留 runtimes/{keep}）')
+
+
 def desktop_build(root, args, target_os, arch, version, output):
     repo = root / 'nomad_desktop'
     # 命令行标志是 --pc-project，对应 argparse 属性 args.pc_project。
@@ -338,6 +464,8 @@ def desktop_build(root, args, target_os, arch, version, output):
                     'export LD_LIBRARY_PATH="$BROWSER_DIR/arupa-desktop${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\n'
                     'exec "$BROWSER_DIR/NomadBrowser" "$@"\n', encoding='utf-8')
                 launcher.chmod(0o755)
+                write_linux_desktop_integration(repo, payload)
+                prune_foreign_native_runtimes(payload, rid)
         save_output(payload, output)
     finally:
         if not F.DRY_RUN:
