@@ -70,6 +70,30 @@ namespace Arupa
         internal static extern int arupa_webview_adopt_pending(IntPtr kernel, long token,
             in WebViewConfig config, in WebViewCallbacks callbacks, in OsrSink osr, out IntPtr view);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_webview_discard_pending(long token);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void arupa_webview_lookup_proxy_for_url(IntPtr view,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string url, IntPtr callback, IntPtr user);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        internal delegate void ProxyLookupCbNative(IntPtr user, IntPtr result, int netError);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern IntPtr arupa_webview_list_frames(IntPtr view);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern IntPtr arupa_kernel_get_extension_storage_state(
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern IntPtr arupa_kernel_get_extension_partition_key(
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_webview_use_legacy_extension_partition(IntPtr view,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern IntPtr arupa_kernel_clear_extension_storage(
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_kernel_forget_extension_storage_migration(
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern void arupa_webview_request_close(IntPtr view, IntPtr callback, IntPtr user);
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]

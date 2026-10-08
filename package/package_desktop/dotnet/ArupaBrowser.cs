@@ -297,6 +297,9 @@ namespace Arupa
     public sealed class ArupaWebViewOptions
     {
         public string? PendingContentsToken { get; set; }
+        /// <summary>Migration-only view: select the old partition before any navigation or CDP attach.
+        /// Requires OffTheRecord=false and no PendingContentsToken.</summary>
+        public string? LegacyExtensionPartitionId { get; set; }
 
         public int Width { get; set; } = 1280;
         public int Height { get; set; } = 800;
@@ -416,6 +419,22 @@ namespace Arupa
 
         public ArupaWebView CreateWebView(ArupaWebViewOptions? opts = null)
             => new ArupaWebView(_handle, opts ?? new ArupaWebViewOptions());
+
+        /// <summary>Returns the native migration state JSON, including needs_merge and too_large.</summary>
+        public string GetExtensionStorageState(string extensionId)
+            => Interop.TakeOwned(Interop.arupa_kernel_get_extension_storage_state(extensionId))
+                ?? throw new InvalidOperationException("Extension storage state is unavailable.");
+        /// <summary>Local partition path. Compare with a view's PartitionKey on this machine only.</summary>
+        public string GetExtensionPartitionKey(string extensionId)
+            => Interop.TakeOwned(Interop.arupa_kernel_get_extension_partition_key(extensionId)) ?? "";
+        /// <summary>Clear both native partitions, chrome.storage, alarms and migration records.
+        /// Stop the extension first. Call outside the native UI callback; code 0 confirms completion.</summary>
+        public string ClearExtensionStorage(string extensionId)
+            => Interop.TakeOwned(Interop.arupa_kernel_clear_extension_storage(extensionId))
+                ?? throw new InvalidOperationException("Extension storage cleanup returned no result.");
+        /// <summary>Re-evaluate migration after the extension has finished its schema-aware merge.</summary>
+        public bool ForgetExtensionStorageMigration(string extensionId)
+            => Interop.arupa_kernel_forget_extension_storage_migration(extensionId) == 1;
 
         /// <summary>预热一个空闲渲染进程 (spare renderer): kernel 创建后调一次, 首次导航直接领用 → 首帧/首字节更快。
         /// 失败静默 (非致命; 内核会按需起渲染进程)。内核 06-24+ dll 才有此导出。</summary>
@@ -1352,6 +1371,9 @@ namespace Arupa
         internal static readonly IntPtr CallbackPointer = Marshal.GetFunctionPointerForDelegate(Callback);
         private static readonly Interop.ArupaPdfCb PdfCallback = OnPdf;
         internal static readonly IntPtr PdfCallbackPointer = Marshal.GetFunctionPointerForDelegate(PdfCallback);
+        private static readonly Interop.ProxyLookupCbNative ProxyCallback =
+            (user, result, error) => OnResult(user, error == 0 ? result : IntPtr.Zero);
+        internal static readonly IntPtr ProxyCallbackPointer = Marshal.GetFunctionPointerForDelegate(ProxyCallback);
         private static void OnPdf(IntPtr user, int ok, IntPtr data, IntPtr length)
         {
             lock (Gate)
@@ -1478,7 +1500,41 @@ namespace Arupa
         /// <summary>F11/F12 请求，在内核 UI 线程触发。处理器须投递到宿主 UI 线程。
         /// 未订阅时按键继续交给网页。F11 切换宿主窗口；F12 创建/激活专用 OSR view 并调用 OpenDevTools。</summary>
         public event Action<BrowserCommand>? BrowserCommandRequested;
-        public event Action<string>? NewContentsRequested;
+        private Action<string>? _newContentsRequested;
+        /// <summary>Opt into adopting original WebContents. No subscribers preserves NewWindowRequested.
+        /// Tokens are single-use and expire after 60 seconds; reject unused tokens with DiscardPendingContents.</summary>
+        public event Action<string>? NewContentsRequested
+        {
+            add { AddNewContentsHandler(value); }
+            remove { RemoveNewContentsHandler(value); }
+        }
+        private void AddNewContentsHandler(Action<string>? value)
+        {
+            Action<string>? before, after;
+            do { before = _newContentsRequested; after = (Action<string>?)Delegate.Combine(before, value); }
+            while (!ReferenceEquals(Interlocked.CompareExchange(ref _newContentsRequested, after, before), before));
+            UpdateNewContentsCallback();
+        }
+        private void RemoveNewContentsHandler(Action<string>? value)
+        {
+            Action<string>? before, after;
+            do { before = _newContentsRequested; after = (Action<string>?)Delegate.Remove(before, value); }
+            while (!ReferenceEquals(Interlocked.CompareExchange(ref _newContentsRequested, after, before), before));
+            UpdateNewContentsCallback();
+        }
+        private void UpdateNewContentsCallback()
+        {
+            // Never hold a managed lock while waiting on Chromium's UI thread.
+            Action<string>? snapshot;
+            do
+            {
+                snapshot = Volatile.Read(ref _newContentsRequested);
+                IntPtr handle = _handle;
+                if (handle == IntPtr.Zero || Interop.arupa_kernel_abi_minor() < 27) return;
+                Interop.arupa_webview_set_new_contents_callback(handle, snapshot is null ? IntPtr.Zero
+                    : Marshal.GetFunctionPointerForDelegate(_onNewContents), IntPtr.Zero);
+            } while (!ReferenceEquals(snapshot, Volatile.Read(ref _newContentsRequested)));
+        }
         private readonly Interop.ShouldOverrideNative _onShouldOverride;
         // FB-P013 第三批: 权限/认证/文件选择回调 (保活防 GC)。
         private readonly Interop.OnHttpAuthNative _onHttpAuth;
@@ -1671,10 +1727,11 @@ namespace Arupa
                 // token as a decimal string so its full int64 value survives serialization.
                 try
                 {
-                    var handler = NewContentsRequested;
+                    var handler = Volatile.Read(ref _newContentsRequested);
                     if (handler == null)
                     {
-                        Console.Error.WriteLine("[arupa][new-contents] No host listener for pending contents.");
+                        DiscardPendingContents(token.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        NewWindowRequested?.Invoke(Interop.Utf8(targetUrl));
                         return;
                     }
                     handler(JsonSerializer.Serialize(new
@@ -1686,6 +1743,7 @@ namespace Arupa
                 catch (Exception error)
                 {
                     // Never unwind across the native callback, but retain a diagnostic.
+                    try { DiscardPendingContents(token.ToString(System.Globalization.CultureInfo.InvariantCulture)); } catch { }
                     Console.Error.WriteLine($"[arupa][new-contents] Callback failed: {error.GetType().Name}");
                 }
             };
@@ -1814,6 +1872,10 @@ namespace Arupa
             // 新内核只复制 caller_size 内的完整字段，截断字段直接拒绝；缺尾字段置零 → wrapper 不同步也只
             // 少订阅新回调, 永不野跳崩 (断 FB-P012/P016/P018 一族)。旧 dll(MINOR<2)无此导出 →
             // EntryPointNotFoundException 回退完整信任版 (维持原行为)。
+            if (opts.PendingContentsToken != null && opts.LegacyExtensionPartitionId != null)
+                throw new ArgumentException("Adoption and legacy migration partition cannot be combined.", nameof(opts));
+            if (opts.LegacyExtensionPartitionId != null && opts.OffTheRecord)
+                throw new ArgumentException("A legacy migration view must be persistent (OffTheRecord=false).", nameof(opts));
             if (opts.PendingContentsToken is string pendingToken)
             {
                 if (!long.TryParse(pendingToken, System.Globalization.NumberStyles.None,
@@ -1844,15 +1906,22 @@ namespace Arupa
                         throw new InvalidOperationException($"arupa_webview_create failed: {r}");
                 }
             }
+            if (opts.LegacyExtensionPartitionId is string legacyId)
+            {
+                try
+                {
+                    if (!UseLegacyExtensionPartition(legacyId))
+                        throw new InvalidOperationException("Legacy extension partition is unavailable.");
+                }
+                catch { Dispose(); throw; }
+            }
             if (Interop.arupa_kernel_supports("browser.shortcuts.callback") == 1)
                 Interop.arupa_webview_set_browser_command_callback(_handle,
                     Marshal.GetFunctionPointerForDelegate(_onBrowserCommand), IntPtr.Zero);
             // 装配了 PiP 回调 = 宿主接管画中画 → 让网页显示 PiP 入口。保持默认关闭时
             // document.pictureInPictureEnabled=false, 请求根本不会到内核 (也就不会回调)。
             EnableHostPictureInPicture();
-            if (Interop.arupa_kernel_abi_minor() >= 27)
-                Interop.arupa_webview_set_new_contents_callback(_handle,
-                    Marshal.GetFunctionPointerForDelegate(_onNewContents), IntPtr.Zero);
+
         }
 
         private void OnPaintThunk(IntPtr u, IntPtr px, int w, int h, int dx, int dy, int dw, int dh)
@@ -1967,6 +2036,42 @@ namespace Arupa
                 ContentLength = len,
                 Referer = Interop.Utf8(referer),
             });
+
+        /// <summary>Release an unadopted token immediately. False means expired, already used or rejected.</summary>
+        public static bool DiscardPendingContents(string token)
+        {
+            if (!long.TryParse(token, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out long value) || value <= 0)
+                throw new ArgumentException("Pending contents token must be a positive int64.", nameof(token));
+            return Interop.arupa_webview_discard_pending(value) == 0;
+        }
+        /// <summary>Must precede all navigation and CDP attachment; prefer the creation option.</summary>
+        public bool UseLegacyExtensionPartition(string extensionId)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            return Interop.arupa_webview_use_legacy_extension_partition(_handle, extensionId) == 1;
+        }
+        /// <summary>Real network-service proxy result; null on network error, timeout or view disposal.</summary>
+        public Task<string?> LookupProxyForUrlAsync(string url, int timeoutMs = 5000)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(url);
+            if (timeoutMs <= 0 || timeoutMs > 120000) throw new ArgumentOutOfRangeException(nameof(timeoutMs));
+            lock (_evalLifetime)
+            {
+                ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+                var request = _evalRequests.TryStart() ?? throw new InvalidOperationException("proxy_lookup_queue_full");
+                try { Interop.arupa_webview_lookup_proxy_for_url(_handle, url, NativeEvalRequests.ProxyCallbackPointer, request.User); }
+                catch { request.Cancel(); throw; }
+                return request.WaitAsync(timeoutMs);
+            }
+        }
+        /// <summary>Native frame list JSON. The owned native buffer is always released.</summary>
+        public string ListFramesJson()
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            return Interop.TakeOwned(Interop.arupa_webview_list_frames(_handle))
+                ?? throw new InvalidOperationException("Frame list is unavailable.");
+        }
 
         [Obsolete("Set ArupaWebViewOptions.PendingContentsToken when creating a view instead.")]
         public void AdoptPendingContents(string token)
@@ -2608,29 +2713,49 @@ namespace Arupa
             }
         }
 
-        // 发一条 CDP 命令并 await 其响应的 result (按 id 关联)。供 wrapper 上层封装高层 API。
-        public Task<string> SendCdpAsync(string method, string? paramsJson = null,
-                                         int timeoutMs = 8000)
+        // Preserve the three-argument metadata signature used by already compiled newer hosts.
+        public Task<string> SendCdpAsync(string method, string? paramsJson, int timeoutMs)
+            => SendCdpAsync(method, paramsJson, timeoutMs, retryOnRebound: true);
+
+        /// <summary>Send CDP with at most one session-rebound retry, within one total timeout.
+        /// Disable retry for commands whose side effects must not be repeated.</summary>
+        public async Task<string> SendCdpAsync(string method, string? paramsJson = null,
+                                             int timeoutMs = 8000, bool retryOnRebound = true)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(method);
+            if (timeoutMs <= 0 || timeoutMs > 120000) throw new ArgumentOutOfRangeException(nameof(timeoutMs));
+            long deadline = Environment.TickCount64 + timeoutMs;
+            for (int attempt = 0; ; ++attempt)
+            {
+                int remaining = (int)Math.Max(0, deadline - Environment.TickCount64);
+                if (remaining == 0) throw new TimeoutException($"CDP {method} 超时");
+                try { return await SendCdpOnceAsync(method, paramsJson, remaining).ConfigureAwait(false); }
+                catch (InvalidOperationException error) when (retryOnRebound && attempt == 0 &&
+                    error.Message.Contains("ARUPA_CDP_SESSION_REBOUND", StringComparison.Ordinal)) { }
+            }
+        }
+
+        private async Task<string> SendCdpOnceAsync(string method, string? paramsJson, int timeoutMs)
         {
             if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(ArupaWebView));
             if (_cdpPending.Count >= 128) throw new InvalidOperationException("cdp_queue_full");
-            if (timeoutMs <= 0 || timeoutMs > 120000) throw new ArgumentOutOfRangeException(nameof(timeoutMs));
+            long deadline = Environment.TickCount64 + timeoutMs;
             CdpAttach();
             int id = Interlocked.Increment(ref _cdpId);
-            var tcs = new TaskCompletionSource<string>(
-                TaskCreationOptions.RunContinuationsAsynchronously);
+            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             _cdpPending[id] = tcs;
-            string cmd = paramsJson == null
-                ? $"{{\"id\":{id},\"method\":\"{method}\"}}"
-                : $"{{\"id\":{id},\"method\":\"{method}\",\"params\":{paramsJson}}}";
-            Interop.arupa_webview_cdp_send(_handle, cmd);
-            // 超时清理 (避免泄漏)。
-            _ = Task.Delay(timeoutMs).ContinueWith(_ =>
+            try
             {
-                if (_cdpPending.TryRemove(id, out var t))
-                    t.TrySetException(new TimeoutException($"CDP {method} 超时"));
-            });
-            return tcs.Task;
+                string name = JsonSerializer.Serialize(method);
+                string cmd = paramsJson == null
+                    ? $"{{\"id\":{id},\"method\":{name}}}"
+                    : $"{{\"id\":{id},\"method\":{name},\"params\":{paramsJson}}}";
+                Interop.arupa_webview_cdp_send(_handle, cmd);
+                int remaining = (int)Math.Max(0, deadline - Environment.TickCount64);
+                if (remaining == 0) throw new TimeoutException($"CDP {method} 超时");
+                return await tcs.Task.WaitAsync(TimeSpan.FromMilliseconds(remaining)).ConfigureAwait(false);
+            }
+            finally { _cdpPending.TryRemove(id, out _); }
         }
 
         // ── FB-P002 C1: document-start 脚本注入 (反指纹+所有注入模块命脉) ──────────
