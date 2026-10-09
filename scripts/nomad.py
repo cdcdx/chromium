@@ -386,8 +386,7 @@ def refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props):
     """
     d = kernel / 'dotnet'
     top = d / kernel_facade.ASSEMBLY_NAME
-    # PC 仓内的稳定副本与交付顶层必须同一份：Directory.Build.targets 的回落告警就是这么要求的
-    # （「否则两处会各指一份门面」）。口径同 scripts/builder/browser.py 的 ensure_kernel_facade。
+    # PC 仓内的稳定副本与交付顶层必须同一份：Directory.Build.targets 的回落告警就是这么要求的。
     stable = repo / 'build' / 'kernel-facade' / kernel_facade.ASSEMBLY_NAME
 
     def sync_stable(path):
@@ -447,8 +446,7 @@ def desktop_build(root, args, target_os, arch, version, output):
     props = [f'-p:ArupaDeliveryRoot={kernel}', f'-p:ArupaSdkDir={kernel}',
              f'-p:Platform={arch}', '-p:UseSharedCompilation=false', *restore_props]
     if target_os != 'mac' and not (facade and facade.is_file() and facade.stat().st_size >= MIN_FACADE_BYTES):
-        # 现场重建都拿不到完整门面（交付件缺门面源码/工程）：改用 PC 仓内的稳定副本
-        # （由 scripts/builder/browser.py ensure_kernel_facade 维护），否则宿主满屏
+        # 现场重建都拿不到完整门面（交付件缺门面源码/工程）：改用 PC 仓内的稳定副本，否则宿主满屏
         # CS0246 "未能找到 Arupa/ArupaWebView/ArupaKernel"。
         stable = repo / 'build' / 'kernel-facade' / 'ArupaKernel.dll'
         if stable.is_file() and stable.stat().st_size >= MIN_FACADE_BYTES:

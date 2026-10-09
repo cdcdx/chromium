@@ -443,8 +443,7 @@ function Invoke-PackageArch {
     Add-RequiredFile -Src (Join-Path $OutPath 'arupa_plugin_host.exe') -DestDir $dest
 
     # 原生宿主形态（Windows）：内核静态链进浏览器进程 EXE，渲染/GPU 子进程
-    # 由**同一个 EXE** 拉起。这不是"多一个可选工具"—— 它决定交付走哪种形态，
-    # 下游 scripts/builder/browser.py 就是按 kernel\ 下有没有它来切形态的。
+    # 由**同一个 EXE** 拉起。这不是"多一个可选工具"—— 它决定交付走哪种形态。
     # 只有内核仓有 chrome/browser/arupa_desktop:arupa_desktop 目标时才编得出来，
     # 所以按"在不在"判定，不硬编进上面的必需件列表（老内核仓会直接 unknown target）。
     $desktopHost = Join-Path $OutPath 'arupa_desktop.exe'
@@ -466,8 +465,7 @@ function Invoke-PackageArch {
     }
     if ($pakCount -eq 0) { throw "out 里没有任何 *.pak: $OutPath" }
 
-    # gen/ 下的运行时资源 pak（口径同 scripts/builder/kernel.py 的 copy_gen_paks 与
-    # package-arupa_desktop.sh）：内核资源加载（arupa_content_main_delegate.cc）先找
+    # gen/ 下的运行时资源 pak：内核资源加载（arupa_content_main_delegate.cc）先找
     # <dir>/xxx.pak，再回退 <dir>/gen/.../xxx.pak。只收 out 根那几个 pak 的话
     # extensions_strings_* / extensions_renderer_generated_resources 全都不在包里：
     #   · 缺 extensions_strings_en-US.pak  → 扩展层一报本地化错误就 CHECK 崩（FB-P095）

@@ -48,8 +48,7 @@ STATE_TEXT = {
     "dry-run": "交付门面与源码不符 —— (dry-run) 未重建",
 }
 
-# runner(command, cwd) -> 是否成功。调用方注入（fetch.run / builder.common.run），
-# 便于离线测试替换。
+# runner(command, cwd) -> 是否成功。调用方注入（fetch.run 等），便于离线测试替换。
 Runner = Callable[[Sequence[str], Optional[Path]], bool]
 
 

@@ -17,7 +17,6 @@
 | 代理修改 Git 全局设置、dry-run 仍可能写文件 | 代理仅影响子进程，dry-run 不创建文件、不执行命令 |
 | 部分架构不匹配只告警，失败后保留半成品 | 架构不匹配失败；打包失败清理本次不完整目录 |
 
-`scripts/builder/` 保留旧实现供迁移参考，当前入口不再调用它；其中的旧项目命令不属于新接口。
 不再支持旧 `down/test/manifest/print-delivery` 动作。PC 外壳通过 .NET 发布，Android 浏览器通过 Gradle 生成 APK。
 业务仓库的下载仍属于 fetch。
 

@@ -56,8 +56,7 @@
 #   OUT/devtools_resources.pak 或 OUT/gen/content/browser/devtools/devtools_resources.pak → kernel/（必需）
 #   OUT/Libraries/libtest_trace_processor.dylib  → kernel/Libraries/（mac，有则带）
 #   <repo>/arupa_desktop/public/*.h              → include/…
-#   <repo>/package/package_desktop/{docs,dotnet,…}               → 交付根同名（有则带，跟 scripts/builder/kernel.py
-#                                                  的 copy_assets 同一口径；其中 dotnet/ 不带 bin/ obj/）
+#   <repo>/package/package_desktop/{docs,dotnet,…}               → 交付根同名（有则带，其中 dotnet/ 不带 bin/ obj/）
 #   <repo>/package/package_desktop/plugin-runtime/               → kernel/plugin-runtime/（运行期按「内核目录/
 #                                                  plugin-runtime/nomad-plugin-runtime.js」取，不放交付根）
 #   <repo>/package/package_desktop/kernel/**                     → kernel/（内核侧附加件，内容并入）
@@ -246,7 +245,6 @@ have_dir() {
 }
 
 # 把 <repo>/package 下的一级文件/文件夹整份搬进交付根（docs/ dotnet/ …）
-# 口径同 scripts/builder/kernel.py 的 copy_assets：平台无关件不在 kernel/ 里，
 # 直接平铺在交付根，宿主按 dist/docs、dist/dotnet 取用。
 copy_package_dir() {
   local dist="$1" e name n=0
@@ -424,7 +422,6 @@ package_arch() {
     log "  locales/: 旧构建未生成独立语言包，使用主 pak 的英文资源"
   fi
 
-  # 与 scripts/builder/kernel.py 的 ARTIFACTS[<os>].optional 同口径的散件。
   # PC 侧 Mac/ArupaDelivery.props 会逐件校验（缺一件就拦发布），所以宁可这里带全：
   #   vk_swiftshader_icd.json  Vulkan/SwiftShader ICD 描述，缺了软件渲染回退起不来
   #   devtools_resources.pak   devtools 前端资源
