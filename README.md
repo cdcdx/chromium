@@ -71,7 +71,7 @@ Windows 使用 `.\fetch.ps1 log` / `.\fetch.ps1 branch`。从其他目录使用�
 
 Chromium 版本使用四段 tag。业务仓库版本接受 tag、branch 或 commit SHA；要可重现，请使用 tag 或完整 SHA。
 同名 tag/branch 应显式写 `refs/tags/...` 或 `refs/heads/...`。
-脚本按 FETCH_HEAD 分离检出；业务仓库保留历史，Chromium 默认浅拉取。
+业务仓库为分支型版本时，脚本把该分支拉到 `refs/remotes/origin/<branch>` 并检出本地分支（建立 upstream，`pull`/`push` 可直接使用）；tag / commit 型版本仍按 FETCH_HEAD 分离检出。业务仓库保留历史，Chromium 默认浅拉取。
 已有工作区有本地改动时停止，不 reset、不覆盖、不自动 stash；报错会列出具体是哪些文件。
 已有非 Git 目录不会被覆盖。
 depot_tools 自举会生成未跟踪的 `python-bin/`、`bootstrap-*_bin/`、`python3_bin_reldir.txt`，

@@ -356,8 +356,15 @@ def setup_depot_tools(cfg):
         # 它们是工具自己的产物，不该让 require_clean 判定成"本地改动"而永久挡住更新。
         exclude_paths(depot, DEPOT_GENERATED, "depot_tools 自举产物")
         require_clean(depot)
-        run(["git", "fetch", "--progress", "origin", "HEAD"], depot, retry=True)
-        run(["git", "checkout", "--detach", "FETCH_HEAD"], depot)
+        # 有远端默认分支时检出本地分支（建立 upstream，pull/push 可用）；无法确定时
+        # （缺 refs/remotes/origin/HEAD）退回按 FETCH_HEAD 分离检出。
+        branch = remote_default_branch(depot)
+        if branch:
+            run(["git", "fetch", "--progress", "origin"], depot, retry=True)
+            checkout_branch(depot, branch)
+        else:
+            run(["git", "fetch", "--progress", "origin", "HEAD"], depot, retry=True)
+            run(["git", "checkout", "--detach", "FETCH_HEAD"], depot)
     elif depot.exists() and any(depot.iterdir()):
         err(f"{depot} 已存在且不是 Git 仓库")
     else:
@@ -418,8 +425,90 @@ def fetch_chromium(cfg, version, shallow):
     return url
 
 
+HEX_COMMIT = re.compile(r"[0-9a-fA-F]{7,40}")
+
+
+def origin_url(dest):
+    """origin 的 fetch 地址；没有 origin 时返回 None（只读探测，不打印命令）。"""
+    probe = subprocess.run(["git", "-C", str(dest), "remote", "get-url", "origin"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return probe.stdout.strip() if probe.returncode == 0 else None
+
+
+def local_branch_exists(dest, branch):
+    """本地是否已有该分支（只读探测）。dry-run 不执行子进程，按“不存在”给出计划。"""
+    if DRY_RUN:
+        return False
+    probe = subprocess.run(["git", "-C", str(dest), "show-ref", "--verify", "--quiet",
+                            f"refs/heads/{branch}"], capture_output=True)
+    return probe.returncode == 0
+
+
+def remote_has_branch(url, ref):
+    """裸 ref 是否为远端分支（只读探测）。dry-run 不执行子进程，按“是分支”给出计划。"""
+    if DRY_RUN:
+        return True
+    probe = subprocess.run(["git", "ls-remote", "--exit-code", "--heads", url, f"refs/heads/{ref}"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return probe.returncode == 0 and bool(probe.stdout.strip())
+
+
+def remote_default_branch(dest, remote="origin"):
+    """远端默认分支名（refs/remotes/<remote>/HEAD → <branch>）；无法确定时返回空。
+
+    dry-run 只读本地符号引用，不执行子进程。"""
+    prefix = f"refs/remotes/{remote}/"
+    if DRY_RUN:
+        head = dest / ".git" / f"refs/remotes/{remote}/HEAD"
+        text = head.read_text(encoding="utf-8", errors="replace").strip() if head.is_file() else ""
+        value = text[len("ref: "):] if text.startswith("ref: ") else ""
+    else:
+        probe = subprocess.run(["git", "-C", str(dest), "symbolic-ref", "--short", prefix + "HEAD"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace")
+        value = probe.stdout.strip() if probe.returncode == 0 else ""
+    return value[len(prefix):] if value.startswith(prefix) else ""
+
+
+def tracked_branch_name(url, ref):
+    """ref 能作为分支跟踪时返回分支名，否则返回空串（tag / commit / 未确认）。"""
+    if ref.startswith("refs/heads/"):
+        return ref[len("refs/heads/"):]
+    if ref.startswith("refs/tags/") or HEX_COMMIT.fullmatch(ref):
+        return ""
+    # 裸名称可能是分支也可能是 tag：向远端确认，避免把 tag 当成分支去建跟踪分支。
+    return ref if remote_has_branch(url, ref) else ""
+
+
+def ensure_origin(dest, url):
+    """分支跟踪与 pull/push 都依赖 origin 指向配置地址；已存在时只在地址不同时更新。"""
+    if DRY_RUN:
+        return
+    current = origin_url(dest)
+    if current is None:
+        run(["git", "remote", "add", "origin", url], dest)
+    elif current != url:
+        log(f"{dest.name}: 更新 origin 地址 {current} -> {url}")
+        run(["git", "remote", "set-url", "origin", url], dest)
+
+
+def checkout_branch(dest, branch, remote="origin"):
+    """检出本地分支并快进到 <remote>/<branch>；本地分支已分叉时只报错，不 reset、不覆盖。"""
+    if local_branch_exists(dest, branch):
+        run(["git", "checkout", branch], dest)
+        try:
+            run(["git", "merge", "--ff-only", f"{remote}/{branch}"], dest)
+        except subprocess.CalledProcessError:
+            err(f"{dest.name} 的本地分支 {branch} 与 {remote}/{branch} 已分叉；"
+                "脚本不 reset、不覆盖，请手动处理后再重试")
+    else:
+        run(["git", "checkout", "-b", branch, "--track", f"{remote}/{branch}"], dest)
+
+
 def fetch_project(name, url, ref):
-    """Check out a tag, branch, or commit without losing local changes."""
+    """Check out a tag, branch, or commit without losing local changes.
+
+    分支型 ref 会把分支拉到 refs/remotes/origin/<branch> 并检出本地分支（建立 upstream），
+    使 fetch.sh pull/push 可用；tag / commit 型 ref 沿用 FETCH_HEAD 分离检出。"""
     dest = WORKSPACE_ROOT / PROJECTS[name][1]
     if (dest / ".git").exists():
         require_clean(dest)
@@ -428,8 +517,15 @@ def fetch_project(name, url, ref):
     else:
         run(["git", "init", dest])
         run(["git", "remote", "add", "origin", url], dest)
-    run(["git", "fetch", "--progress", url, ref], dest, retry=True)
-    run(["git", "checkout", "--detach", "FETCH_HEAD"], dest)
+    ensure_origin(dest, url)
+    branch = tracked_branch_name(url, ref)
+    if branch:
+        run(["git", "fetch", "--progress", url,
+             f"+refs/heads/{branch}:refs/remotes/origin/{branch}"], dest, retry=True)
+        checkout_branch(dest, branch)
+    else:
+        run(["git", "fetch", "--progress", url, ref], dest, retry=True)
+        run(["git", "checkout", "--detach", "FETCH_HEAD"], dest)
 
 
 def write_gclient(url, android, target_os=None):

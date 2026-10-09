@@ -729,6 +729,67 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual(calls, [('arupa_desktop', 'desktop-url', 'v2'),
                                  ('nomad_android', 'android-url', 'refs/heads/release')])
 
+    def recorded_project_fetch(self, name, url, ref, *, branch_remote=True, branch_local=False):
+        commands = []
+        with patch.object(fetch, 'require_clean'), \
+             patch.object(fetch, 'ensure_origin'), \
+             patch.object(fetch, 'remote_has_branch', return_value=branch_remote), \
+             patch.object(fetch, 'local_branch_exists', return_value=branch_local), \
+             patch.object(fetch, 'run',
+                          side_effect=lambda cmd, *args, **kwargs: commands.append([str(item) for item in cmd]) or ''):
+            self.quiet(fetch.fetch_project, name, url, ref)
+        return commands
+
+    def test_branch_ref_checks_out_local_branch_with_upstream(self):
+        commands = self.recorded_project_fetch('nomad_android', 'ssh://example.invalid/nomad.git', 'flex/v1.1.1')
+        self.assertIn(['git', 'fetch', '--progress', 'ssh://example.invalid/nomad.git',
+                       '+refs/heads/flex/v1.1.1:refs/remotes/origin/flex/v1.1.1'], commands)
+        self.assertIn(['git', 'checkout', '-b', 'flex/v1.1.1', '--track', 'origin/flex/v1.1.1'], commands)
+        self.assertNotIn(['git', 'checkout', '--detach', 'FETCH_HEAD'], commands)
+
+    def test_branch_ref_fast_forwards_existing_branch_without_reset(self):
+        commands = self.recorded_project_fetch('nomad_desktop', 'url', 'refs/heads/flex/dev_charon',
+                                               branch_local=True)
+        self.assertIn(['git', 'checkout', 'flex/dev_charon'], commands)
+        self.assertIn(['git', 'merge', '--ff-only', 'origin/flex/dev_charon'], commands)
+        self.assertNotIn(['git', 'checkout', '-b', 'flex/dev_charon', '--track', 'origin/flex/dev_charon'], commands)
+
+    def test_tag_and_commit_refs_stay_detached_without_branch_probe(self):
+        for ref in ('refs/tags/v1.0.0', '0123456789abcdef0123456789abcdef01234567'):
+            with self.subTest(ref=ref):
+                commands = []
+                with patch.object(fetch, 'require_clean'), \
+                     patch.object(fetch, 'ensure_origin'), \
+                     patch.object(fetch, 'remote_has_branch',
+                                  side_effect=AssertionError('tag/commit ref must not probe remote branches')), \
+                     patch.object(fetch, 'run',
+                                  side_effect=lambda cmd, *args, **kwargs: commands.append([str(item) for item in cmd]) or ''):
+                    self.quiet(fetch.fetch_project, 'nomad_android', 'url', ref)
+                self.assertIn(['git', 'fetch', '--progress', 'url', ref], commands)
+                self.assertIn(['git', 'checkout', '--detach', 'FETCH_HEAD'], commands)
+
+    def test_bare_name_without_matching_remote_branch_stays_detached(self):
+        commands = self.recorded_project_fetch('nomad_desktop', 'url', 'v2.0.0', branch_remote=False)
+        self.assertIn(['git', 'fetch', '--progress', 'url', 'v2.0.0'], commands)
+        self.assertIn(['git', 'checkout', '--detach', 'FETCH_HEAD'], commands)
+
+    def test_depot_tools_refresh_checks_out_default_branch(self):
+        depot = self.root / 'depot_tools'
+        (depot / '.git').mkdir(parents=True)
+        commands = []
+        with patch.object(fetch, 'exclude_paths'), \
+             patch.object(fetch, 'require_clean'), \
+             patch.object(fetch, 'tool_environment'), \
+             patch.object(fetch, 'remote_default_branch', return_value='main'), \
+             patch.object(fetch, 'local_branch_exists', return_value=True), \
+             patch.object(fetch, 'run',
+                          side_effect=lambda cmd, *args, **kwargs: commands.append([str(item) for item in cmd]) or ''):
+            self.quiet(fetch.setup_depot_tools, {})
+        self.assertIn(['git', 'fetch', '--progress', 'origin'], commands)
+        self.assertIn(['git', 'checkout', 'main'], commands)
+        self.assertIn(['git', 'merge', '--ff-only', 'origin/main'], commands)
+        self.assertNotIn(['git', 'checkout', '--detach', 'FETCH_HEAD'], commands)
+
     def test_shared_gn_templates_cover_architecture_and_link_matrix(self):
         for target_os, arches in build.MATRIX.items():
             path = build.args_template(target_os)
