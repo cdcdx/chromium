@@ -363,11 +363,10 @@ footer a { color: var(--mut); }
         <span style="color:var(--mut);font-size:12px">2026-09-08</span></td>
     <td><code>ArupaBrowser.SetExtensionUserLoaded(id, bool)</code></td>
     <td>断言"这个扩展是<b>用户自己加载的开发包</b>"（非商店、非签名包）。<br>
-        🔴 只影响 <code>nativeMessaging</code> 那一档：一个包要拿到它，要么<b>有我们的签名</b>，
-        要么<b>宿主为它背书</b>；两样都没有 ⇒ 拒（<code>NM_NEEDS_SIGNATURE_OR_USER_LOAD</code>）。<br>
-        <span style="color:var(--mut);font-size:13px">⚠ 这<b>不是</b>"用户点一下同意"那种授权 ——
-        拉起本地进程的后果用户看不见也管不了，一个确认框描述不了它。
-        ⚠ 内核<b>不猜</b>：没调过 ⇒ 按"不是用户加载的"算；传 <code>false</code> 是撤销。</span></td></tr>
+        保留给旧版私有宿主检查接口使用；未调用时按非用户加载处理，传 <code>false</code> 撤销。<br>
+        <b>2026-10-10 起，标准 Native Messaging 不依赖此标志或 Nomad 私有签名。</b>
+        扩展必须获授 <code>nativeMessaging</code> 权限，本机原生宿主必须注册清单，
+        清单的 <code>allowed_origins</code> 必须明确包含调用扩展的 ID。</td></tr>
 <tr><td><code>arupa_kernel_set_extension_route_consent</code><br>
         <span style="color:var(--mut);font-size:12px">2026-09-09</span></td>
     <td><code>ArupaBrowser.SetExtensionRouteConsent(id, bool)</code></td>
@@ -588,10 +587,11 @@ MV3 里两者<b>互斥</b>，两样都做的话插件会以为被点了两次。
 判定仍然是 <code>DENY_UNSUPPORTED(6)</code> = 我们还没实现。
 <b>界面上必须把这两件事分开说</b>，否则用户会以为"能用了"。</li>
 
-<li><b>特权逃逸类不受本开关影响</b> —— <code>nativeMessaging</code>（去起宿主机上的本地进程）
-与 <code>debugger</code>（把 CDP 交给扩展）判 <code>DENY_PRIVILEGED</code>，
-<b>任何档位都照剥</b>。产品那句话说的是<b>指纹泄露</b>面，而这两条是另一个风险类别 ——
-不是用户点一下头就能抵消的。要开它们需要产品单独拍板。</li>
+<li><b>原生宿主权限单独校验</b> —— <code>nativeMessaging</code> 采用标准进程通信：
+<code>runtime.sendNativeMessage</code> 按调用启动宿主，<code>runtime.connectNative</code> 保持端口连接。
+采用 UTF-8 JSON 和本机字节序的四字节长度头；宿主到浏览器限 1 MiB，反向限 64 MiB。
+仅扩展页面与后台 Worker 可调用；停用扩展会关闭宿主连接。
+网盘私有 <code>chrome.nomadTransfer</code> 使用独立的宿主接口，不通过 Native Messaging 转发。</li>
 </ul>
 
 <h4>🔴 隐私说明由内核给：<code>arupa_mv3_perm_privacy_note</code>（2026-09-08 新增，<b>宿主必须显示</b>）</h4>
