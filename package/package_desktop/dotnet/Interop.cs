@@ -345,6 +345,9 @@ namespace Arupa
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         public static extern void arupa_kernel_destroy(IntPtr kernel);
 
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_kernel_flush_cookies(IntPtr kernel, int timeoutMs);
+
         // ── 插件加载 (FB-P020, ABI MINOR 5): 签名门控 native 传输引擎 (happyview/fastview)
         // 进程级。load 含阻塞 IO (内核已封送 MayBlock 线程, 但本 P/Invoke 同步阻塞) →
         // 宿主请在后台线程调。outInfoJson = arupa_free 释放, PtrToStringUTF8 解

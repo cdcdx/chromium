@@ -385,6 +385,21 @@ namespace Arupa
             Interop.arupa_kernel_supports("capabilities.v1") == 1
                 ? Interop.TakeOwned(Interop.arupa_kernel_get_capabilities_json()) : null;
 
+        /// <summary>Flush all loaded cookie stores, even after every view has closed.
+        /// Keep this kernel alive until completion. Requires cookie.flush.v1.</summary>
+        public async Task FlushCookiesAsync()
+        {
+            if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(ArupaKernel));
+            if (Interop.arupa_kernel_supports("cookie.flush.v1") != 1)
+                throw new NotSupportedException("Kernel cookie.flush.v1 is required.");
+            IntPtr handle = _handle;
+            int result = await Task.Run(() => Interop.arupa_kernel_flush_cookies(handle, 5000))
+                .ConfigureAwait(false);
+            GC.KeepAlive(this);
+            if (result == 7) throw new TimeoutException("Kernel cookie flush timed out.");
+            if (result != 0) throw new InvalidOperationException($"Kernel cookie flush failed: {result}");
+        }
+
         private IntPtr _handle;
         public ArupaKernel(ArupaKernelOptions? opts = null)
         {
