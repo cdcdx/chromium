@@ -39,6 +39,7 @@ def build_parser():
     p.add_argument("--pc-project", type=Path, help="PC 浏览器主 csproj；默认按系统定位")
     p.add_argument("--variant", choices=("debug", "release"), default="release", help="浏览器构建配置")
     p.add_argument("--no-web", action="store_true", help="PC 浏览器复用已有 WebUI 资源")
+    p.add_argument("-y", "--yes", action="store_true", help="发现其它编译进程时自动关闭而不逐一确认")
     p.add_argument("--dotnet", help="PC 浏览器的 dotnet 可执行文件；默认 dotnet_path 配置或 PATH")
     p.add_argument("--nuget-config", type=Path, help="PC 构建使用的 NuGet 配置；默认 build/nuget.config（官方 v3 源）")
     p.add_argument("--android-sdk", type=Path, help="Android 浏览器 SDK 目录；也可设置 ANDROID_HOME")
@@ -59,6 +60,127 @@ def build_parser():
 
 
 V8_SNAPSHOT_TARGET = "tools/v8_context_snapshot:generate_v8_context_snapshot"
+
+# 会与本次构建抢内存/CPU 的编译相关进程命令行关键字。命中即视为"另一场编译"，
+# 需要用户确认后才继续，避免两场 ninja/clang 同时跑导致 OOM（本机 24 核已实测爆过）。
+_COMPILER_PROCS = (
+    "/ninja",             # ninja 构建驱动（单文件路径，含 windows 的分隔符变体）
+    "ninja -C",           # 显式 -C 形式的 ninja
+    "clang",              # clang/clang++/cc1plus 等编译前端
+    "gn gen",             # gn 生成（通常瞬时，命中概率低）
+    "autoninja",          # 封装 ninja 的脚本
+)
+
+# 进程名黑名单广泛用法：任何包含以上关键词的命令行都算编译进程。
+def _suspicious_cmdline(cmdline):
+    if not cmdline:
+        return False
+    joined = " ".join(str(part) for part in cmdline)
+    for key in _COMPILER_PROCS:
+        if key in joined:
+            return True
+    return False
+
+
+def _find_active_builds():
+    """返回当前正在运行的其它编译进程 (pid, 命令行) 列表。排除自身进程树。"""
+    self_pid = os.getpid()
+    my_tree = {self_pid}
+    try:
+        # 向上收集祖先，向下收集后代，完整隔离本次调用的整个进程树。
+        import psutil
+        proc = psutil.Process(self_pid)
+        my_tree.update(p.pid for p in proc.children(recursive=True))
+        ancestor = proc
+        while True:
+            ppid = ancestor.ppid()
+            if ppid in (0, None) or ppid == ancestor.pid:
+                break
+            my_tree.add(ppid)
+            try:
+                ancestor = psutil.Process(ppid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                break
+        for p in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                if p.info["pid"] in my_tree:
+                    continue
+                if _suspicious_cmdline(p.info["cmdline"]):
+                    yield (p.info["pid"], " ".join(str(x) for x in p.info["cmdline"]))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return
+    except ImportError:
+        pass  # 无 psutil：退回平台命令
+    import subprocess
+    try:
+        if F.HOST_OS == "win":
+            lines = subprocess.run(
+                ["wmic", "process", "get", "processid,commandline", "/format:csv"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                check=False, timeout=15).stdout.splitlines()
+            for line in lines:
+                line = line.strip()
+                if not line or "," not in line:
+                    continue
+                cmdline = line.split(",", 1)[1]
+                pid = line.split(",", 1)[0]
+                if pid and pid.isdigit() and _suspicious_cmdline([cmdline]):
+                    if int(pid) != self_pid:
+                        yield (int(pid), cmdline)
+        else:
+            out = subprocess.run(
+                ["ps", "-eo", "pid=,args="], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", check=False, timeout=15).stdout
+            for line in out.splitlines():
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                pid_s, _, rest = line.strip().partition(" ")
+                if not pid_s.isdigit() or int(pid_s) == self_pid:
+                    continue
+                if _suspicious_cmdline([rest]):
+                    yield (int(pid_s), rest)
+    except (OSError, ValueError):
+        return
+
+
+def _confirm_abort_active_builds(args, actions):
+    """编译前检测：若存在其它编译进程则询问用户，返回是否继续。
+
+    无其它编译进程 -> 直接 True；有 -> 交互确认（-y 自动通过），用户拒绝则中止。
+    """
+    if args.dry_run or "build" not in actions:
+        return True
+    if F.HOST_OS == "win":
+        # 确保 psutil/wmic 在 Windows 可用；都不行就跳过检测（宁可不打断也不能误杀）。
+        pass
+    active = list(_find_active_builds())
+    if not active:
+        return True
+    F.log(f"检测到 {(len(active))} 个正在运行的编译/构建进程，可能与本次构建冲突:")
+    for pid, cmd in active:
+        print(f"  pid {pid}: {cmd}")
+    if args.yes:
+        F.log("-y: 忽略提示，继续当前编译")
+        return True
+    try:
+        answer = input("是否关闭以上进程后再编译？[y/N] 输入 y 关闭，直接回车或 N 中止本次编译: ").strip().lower()
+    except EOFError:
+        answer = "n"
+    if answer not in ("y", "yes"):
+        F.log("保留其它编译进程，中止本次编译")
+        return False
+    # 用户确认关闭：先终止其它编译进程再继续。
+    import signal
+    for pid, _ in active:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            continue
+    import time
+    time.sleep(1)
+    return True
 
 
 def target_in_graph(out, target):
@@ -375,6 +497,9 @@ def main(argv=None):
                     F.err(str(exc))
         F.log(f"GN 配置: {config_path}（arch={arch}, link={args.link}）")
         prepare_project(project)
+        # 编译前检测是否已有其它编译进程，冲突时需用户确认（-y 自动通过）。
+        if not (args.dry_run or _confirm_abort_active_builds(args, actions)):
+            F.err("检测到其它编译进程且未获确认，中止本次构建；确认关闭后重新执行")
         for cpu in arches:
             out = SRC / "out" / f"arupa-{target_os}-{cpu}-{version}{'-static' if args.link == 'static' else ''}"
             template = templates[cpu]
