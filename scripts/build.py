@@ -66,7 +66,9 @@ V8_SNAPSHOT_TARGET = "tools/v8_context_snapshot:generate_v8_context_snapshot"
 _COMPILER_PROCS = (
     "/ninja",             # ninja 构建驱动（单文件路径，含 windows 的分隔符变体）
     "ninja -C",           # 显式 -C 形式的 ninja
-    "clang",              # clang/clang++/cc1plus 等编译前端
+    "clang++",            # clang++ 编译驱动
+    "clang ",             # clang 编译驱动（尾随空格，排除 clangd/clang-tidy/clang-format）
+    "-cc1",               # clang 实际编译前端 cc1/cc1plus
     "gn gen",             # gn 生成（通常瞬时，命中概率低）
     "autoninja",          # 封装 ninja 的脚本
 )

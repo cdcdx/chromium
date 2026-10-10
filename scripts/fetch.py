@@ -269,6 +269,75 @@ def ensure_python_alias(directory):
         return None
 
 
+def prepend_path(directory):
+    """把 directory 提到 PATH 最前：已在里面的先摘出来，否则它会留在存根/桩后面。"""
+    kept = []
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        try:
+            same = os.path.normcase(os.path.normpath(entry)) == os.path.normcase(os.path.normpath(str(directory)))
+        except (TypeError, ValueError):
+            same = False
+        if not same:
+            kept.append(entry)
+    os.environ["PATH"] = str(directory) + os.pathsep + os.pathsep.join(kept)
+
+
+def windows_python3_dir(depot):
+    """Windows 下真 python3.exe 所在的目录（同一个候选表，只是要认 .exe）。"""
+    for directory in python3_candidates(depot):
+        if (directory / "python3.exe").is_file():
+            return directory
+    return None
+
+
+def windows_real_python():
+    """Windows 下本机真解释器，返回 (可执行文件, 前置参数)；跳过 WindowsApps 存根。"""
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        for name, pre in (("py.exe", ("-3",)), ("python.exe", ())):
+            exe = Path(entry) / name
+            if exe.is_file() and "WindowsApps" not in entry:
+                return str(exe), pre
+    return None, ()
+
+
+def ensure_windows_python3(depot):
+    """Windows: 保证 PATH 上的 python3 是真解释器，而不是"应用执行别名"存根。
+
+    Chromium 的部分辅助工具是 .bat，里面裸调 python3（例如
+    tools/protoc_wrapper/protoc-gen-ts_proto.bat）。PATH 上若只有
+    %LOCALAPPDATA%\\Microsoft\\WindowsApps\\python3.exe 这个 0 字节存根，它就只打印
+    "Python was not found; run without arguments to install from the Microsoft Store"
+    并以 9009 退出 —— protoc 插件失败会让 ninja 立刻中断（例如
+    ACTION //content/browser/resources/traces_internals:config_proto_gen）。
+    首选源码树自带的 third_party/cpython3：ninja 跑 protoc_wrapper.py 用的就是它，
+    版本由 DEPS 钉住，比系统里的更稳；实在没有再用本机真解释器补一个 python3.cmd。"""
+    directory = windows_python3_dir(depot)
+    if directory is not None:
+        prepend_path(directory)
+        log(f"python3: {directory}（绕开 Windows 应用执行别名存根）")
+        return
+    exe, pre = windows_real_python()
+    if exe is None:
+        log("警告: 未找到真 python3，PATH 上只有应用执行别名存根 —— Chromium 的 .bat 辅助工具"
+            "（protoc 插件等）会以 9009 失败。请在 设置 > 应用 > 高级应用设置 > 应用执行别名 "
+            "关掉 python.exe / python3.exe，或安装 Python 3")
+        return
+    shim = WORKSPACE_ROOT / ".tools/bin"
+    try:
+        shim.mkdir(parents=True, exist_ok=True)
+        command = " ".join([f'"{exe}"', *pre, "%*"])
+        (shim / "python3.cmd").write_text(f"@echo off\n{command}\n", encoding="utf-8")
+    except OSError as error:
+        log(f"警告: 无法生成 python3 转发脚本（{error}）")
+        return
+    prepend_path(shim)
+    log(f"python3: {shim / 'python3.cmd'} -> {exe}（绕开应用执行别名存根）")
+
+
 def ensure_real_python3(depot):
     """把真解释器挂到 PATH 最前面，并保证 `python` 可用。
 
@@ -279,7 +348,7 @@ def ensure_real_python3(depot):
         xcode-select: Failed to locate 'python3', requesting installation of ...
     depot_tools 自举出的解释器是实打实的，放在 PATH 最前面即可。"""
     if IS_WIN:
-        return
+        return ensure_windows_python3(depot)
     current = os.environ.get("PATH", "").split(os.pathsep)
     for directory in python3_candidates(depot):
         if not (directory / "python3").is_file():
