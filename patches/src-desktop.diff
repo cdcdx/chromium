@@ -1,5 +1,5 @@
 diff --git a/.gitignore b/.gitignore
-index 63b0d3675470..72c975d453c1 100644
+index 63b0d3675470991a21eaac11e6d127e986edf279..72c975d453c19bddad2d8a979190c1b87e47f0b0 100644
 --- a/.gitignore
 +++ b/.gitignore
 @@ -350,3 +350,6 @@ third_party/rust/target/
@@ -10,7 +10,7 @@ index 63b0d3675470..72c975d453c1 100644
 +node_modules/
 +agents/
 diff --git a/BUILD.gn b/BUILD.gn
-index d55402aaad0d..d97171358acc 100644
+index d55402aaad0d7abdb4f9cddfd775ae348e621f0c..d97171358acc8497d8b4781bebe9ab42783dd406 100644
 --- a/BUILD.gn
 +++ b/BUILD.gn
 @@ -96,6 +96,7 @@ group("gn_all") {
@@ -22,7 +22,7 @@ index d55402aaad0d..d97171358acc 100644
        "//base:base_unittests",
        "//build/modules",
 diff --git a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
-index b0ede6d70860..8fdaa8ae58d6 100644
+index b0ede6d70860e8bbc9a16155b0876f3f2bbff60e..8fdaa8ae58d6feecc9f4b97dd4f4def904501258 100644
 --- a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
 +++ b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
 @@ -12,6 +12,7 @@
@@ -105,20 +105,22 @@ index b0ede6d70860..8fdaa8ae58d6 100644
  
  - (void)cancelSynchronously {
 diff --git a/extensions/common/mojom/api_permission_id.mojom b/extensions/common/mojom/api_permission_id.mojom
-index 262221ecd852..1719580d7953 100644
+index 262221ecd852507cd136254725e16c53a155fc99..1719580d79531ffe6eb03220206589afb815f576 100644
 --- a/extensions/common/mojom/api_permission_id.mojom
 +++ b/extensions/common/mojom/api_permission_id.mojom
-@@ -298,6 +298,8 @@ enum APIPermissionID {
+@@ -299,7 +299,10 @@ enum APIPermissionID {
    kBluetoothLowEnergy = 271,
    kBluetoothPeripheral = 272,
    kPublicSuffix = 273,
-+  kNomadTransfer = 274,
-+  kNomad = 275,
+ 
++  kNomad = 274,
++  kNomadTransfer = 275,
++  kNomadSitePermissionAudit = 276,
  
    // Add new entries at the end of the enum and be sure to update the
    // "ExtensionPermission3" enum in
 diff --git a/extensions/renderer/ipc_message_sender.cc b/extensions/renderer/ipc_message_sender.cc
-index 76846f429e30..888184553f24 100644
+index 76846f429e30749797f2f55e3ea706d018f59b4e..888184553f2408fa28c8c6beb45b7b27012b278c 100644
 --- a/extensions/renderer/ipc_message_sender.cc
 +++ b/extensions/renderer/ipc_message_sender.cc
 @@ -10,6 +10,7 @@
@@ -184,7 +186,7 @@ index 76846f429e30..888184553f24 100644
        dispatcher, context_proxy, service_worker_version_id);
  }
 diff --git a/extensions/renderer/ipc_message_sender.h b/extensions/renderer/ipc_message_sender.h
-index b38c247bf2c6..7b24ffc01b5e 100644
+index b38c247bf2c640b1394505d49aa02edbc0dd54ae..7b24ffc01b5e4da9b59c0a27e297bda4aa25b048 100644
 --- a/extensions/renderer/ipc_message_sender.h
 +++ b/extensions/renderer/ipc_message_sender.h
 @@ -9,6 +9,7 @@
@@ -218,8 +220,36 @@ index b38c247bf2c6..7b24ffc01b5e 100644
   protected:
    IPCMessageSender();
  };
+diff --git a/sandbox/win/src/broker_services.cc b/sandbox/win/src/broker_services.cc
+index 1787c7f7749b106e114add997caecc46d3bacd90..5860dd7df30cd41b853c25c422e68d899d40653b 100644
+--- a/sandbox/win/src/broker_services.cc
++++ b/sandbox/win/src/broker_services.cc
+@@ -468,13 +468,21 @@ void BrokerServicesBase::SpawnTargetAsync(const base::CommandLine& command_line,
+ base::expected<BrokerServicesBase::CreateTargetInfo, ResultCode>
+ BrokerServicesBase::PreSpawnTarget(PolicyBase* policy_base) {
+   // This code should only be called from the exe, ensure that this is always
+-  // the case.
++  // the case. Library-mode embeddings (browser code inside a DLL, e.g.
++  // arupa_kernel.dll loaded by a .NET host) legitimately violate this; they
++  // opt in via ARUPA_DLL_BROKER=1, set by the kernel's own startup once it
++  // detects that its module differs from the exe.
+   HMODULE exe_module = nullptr;
+   CHECK(::GetModuleHandleEx(
+       /*dwFlags=*/GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, nullptr,
+       &exe_module));
+   if (CURRENT_MODULE() != exe_module) {
+-    return base::unexpected(SBOX_ERROR_INVALID_LINK_STATE);
++    wchar_t value[2] = {};
++    const DWORD len = ::GetEnvironmentVariableW(L"ARUPA_DLL_BROKER", value, 2);
++    const bool dll_broker_allowed = (len == 1 && value[0] == L'1');
++    if (!dll_broker_allowed) {
++      return base::unexpected(SBOX_ERROR_INVALID_LINK_STATE);
++    }
+   }
+   if (!policy_base) {
+     return base::unexpected(SBOX_ERROR_BAD_PARAMS);
 diff --git a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
-index 1401e99cb9e6..83cb32235f48 100644
+index 1401e99cb9e66f19e1ef8df3380816605b289fec..83cb32235f48259cb192b6b848b8fe766deb0438 100644
 --- a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
 +++ b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
 @@ -138,6 +138,49 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
@@ -273,7 +303,7 @@ index 1401e99cb9e6..83cb32235f48 100644
  }
  
 diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
-index 336c8061e425..71f89bb1d891 100644
+index 336c8061e4251dc355f9480527d03d46506b61c2..71f89bb1d89119cb9132ec2d61b6845fd1dafb2b 100644
 --- a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
 +++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
 @@ -103,6 +103,37 @@ struct BLINK_COMMON_EXPORT RendererPreferences {
@@ -315,7 +345,7 @@ index 336c8061e425..71f89bb1d891 100644
    RendererPreferences(const RendererPreferences& other);
    RendererPreferences(RendererPreferences&& other);
 diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
-index d0279aa1ca30..43bfbf06445c 100644
+index d0279aa1ca30864326c0f20b11dee24730595c36..43bfbf06445c9252c8524290351f6fb7c790fa5b 100644
 --- a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
 +++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
 @@ -299,6 +299,146 @@ struct BLINK_COMMON_EXPORT
@@ -466,7 +496,7 @@ index d0279aa1ca30..43bfbf06445c 100644
                     ::blink::RendererPreferences* out);
  };
 diff --git a/third_party/blink/public/mojom/renderer_preferences.mojom b/third_party/blink/public/mojom/renderer_preferences.mojom
-index 026d009b9d72..51d7fc215599 100644
+index 026d009b9d7280f9e4bd59dee978c4777ffe1f4e..51d7fc21559930e28e283b1ef201c77907544ae0 100644
 --- a/third_party/blink/public/mojom/renderer_preferences.mojom
 +++ b/third_party/blink/public/mojom/renderer_preferences.mojom
 @@ -217,4 +217,35 @@ struct RendererPreferences {
@@ -506,7 +536,7 @@ index 026d009b9d72..51d7fc215599 100644
 +  uint64 arupa_canvas_seed = 0;
  };
 diff --git a/third_party/blink/renderer/build/scripts/json5_generator.py b/third_party/blink/renderer/build/scripts/json5_generator.py
-index fa11cd094122..191bf1fed602 100644
+index fa11cd094122725e015f817c28e62a666110a906..191bf1fed602b1dbace1b2ffd95627968424eb54 100644
 --- a/third_party/blink/renderer/build/scripts/json5_generator.py
 +++ b/third_party/blink/renderer/build/scripts/json5_generator.py
 @@ -311,7 +311,7 @@ class Writer(object):
@@ -519,7 +549,7 @@ index fa11cd094122..191bf1fed602 100644
              if output_file.read() != contents:
                  output_file.truncate(0)
 diff --git a/ui/display/mac/screen_mac_headless.h b/ui/display/mac/screen_mac_headless.h
-index 651c4a000228..01031917e247 100644
+index 651c4a00022857ae5c6532bc8355254e0c2f7265..01031917e2472e24d3a3be5a5f4ddf253205bb50 100644
 --- a/ui/display/mac/screen_mac_headless.h
 +++ b/ui/display/mac/screen_mac_headless.h
 @@ -13,7 +13,7 @@
