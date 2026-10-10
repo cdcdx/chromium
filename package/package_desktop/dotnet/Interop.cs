@@ -134,9 +134,11 @@ namespace Arupa
         }
 
         // OSR sink: 函数指针表。
-        // ⚠ ABI: 严格镜像 capi.h ArupaOsrSink (on_paint, on_cursor, on_popup_show/size/paint)。
+        // ⚠ ABI: 严格镜像 capi.h ArupaOsrSink (on_paint, on_cursor, on_popup_show/size/paint, pip 三回调)。
         //   字段缺失 = 内核按更大 sizeof 读, 越过本结构读栈垃圾当函数指针 → 野跳崩溃 (FB-P012/P018 类)。
         //   FB-P016 加 on_cursor (3caca24); A批 (2026-06-11) 加 popup widget 三回调 (FB-P018 真因之一)。
+        //   ABI 1.33 (pip.osr) 尾部再加 PiP 三回调; arupa_webview_create_checked 传 caller_size,
+        //   内核只复制 caller_size 内完整字段, 故尾部加字段对旧宿主安全。
         [StructLayout(LayoutKind.Sequential)]
         public struct OsrSink
         {
@@ -145,6 +147,10 @@ namespace Arupa
             public IntPtr on_popup_show;   // OnIntNative: 1=显示 0=隐藏 (A批 popup widget: <select>/autocomplete)
             public IntPtr on_popup_size;   // OnPopupSizeNative: popup 在 view 坐标系的矩形
             public IntPtr on_popup_paint;  // OnPaintNative: popup 帧 (语义同 on_paint, 属 popup widget)
+            // ── ABI 1.33: 内核自持 PiP 窗口 (ArupaVideoOverlayWindow, 无 views::Widget) 的三回调 ──
+            public IntPtr on_pip_show;     // OnIntNative: 1=显示 0=隐藏
+            public IntPtr on_pip_size;     // OnPopupSizeNative: PiP 窗口在屏幕坐标系的矩形
+            public IntPtr on_pip_paint;    // OnPaintNative: PiP surface 帧 (BGRA top-down)
         }
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]

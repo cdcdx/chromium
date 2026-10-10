@@ -1550,6 +1550,10 @@ namespace Arupa
         private readonly Interop.OnIntNative _onPopupShow;
         private readonly Interop.OnPopupSizeNative _onPopupSize;
         private readonly Interop.OnPaintNative _onPopupPaint;
+        // ABI 1.33 (pip.osr): 内核自持 PiP 窗口三回调 (保活防 GC)。
+        private readonly Interop.OnIntNative _onPipShow;
+        private readonly Interop.OnPopupSizeNative _onPipSize;
+        private readonly Interop.OnPaintNative _onPipPaint;
         // MINOR6 (FB-P024/P026): 右键菜单 / 通知权限 (保活防 GC)。
         private readonly Interop.OnContextMenuNative _onContextMenu;
         private readonly Interop.OnNotificationPermNative _onNotificationPerm;
@@ -1669,6 +1673,16 @@ namespace Arupa
         /// <summary>popup 帧 (语义同 Paint; blit 到 PopupSize 矩形之上)。</summary>
         public event EventHandler<PaintEventArgs>? PopupPaint;
 
+        // ── ABI 1.33 (pip.osr): 内核自持 PiP 窗口 (ArupaVideoOverlayWindow, headless) ──
+        /// <summary>内核 PiP 窗口显隐 (true=显示; false 后关闭/擦除宿主浮窗)。
+        /// 仅在 <see cref="SetHostPictureInPictureEnabled"/>(false) 时生效 —— 宿主自持 PiP 路径下
+        /// 内核直接拒绝请求, 不会触发本事件。</summary>
+        public event Action<bool>? PipShow;
+        /// <summary>PiP 窗口在屏幕坐标系的矩形 (x, y, w, h), 单位 DIP。</summary>
+        public event Action<int, int, int, int>? PipSize;
+        /// <summary>PiP surface 帧 (BGRA top-down, 语义同 Paint; pixels 仅回调内有效, 须同步拷贝)。</summary>
+        public event EventHandler<PaintEventArgs>? PipPaint;
+
         // ── MINOR6 (2026-06-13): 右键菜单接缝 / 通知权限 ──
         /// <summary>FB-P024: 网页右键 (同步)。宿主接管须置 e.Handled=true 抑制内核原生菜单, 再异步弹自定义菜单 (含微应用注册项)。</summary>
         public event EventHandler<ContextMenuEventArgs>? ContextMenuRequested;
@@ -1786,6 +1800,11 @@ namespace Arupa
             _onPopupSize = (u, x, y, w, h) => PopupSize?.Invoke(x, y, w, h);
             _onPopupPaint = (u, px, w, h, dx, dy, dw, dh) => PopupPaint?.Invoke(this,
                 new PaintEventArgs { Pixels = px, Width = w, Height = h, DirtyX = dx, DirtyY = dy, DirtyW = dw, DirtyH = dh });
+            // ABI 1.33: 内核自持 PiP 三回调 (事件空即丢弃, 装配无副作用)。
+            _onPipShow = (u, s) => PipShow?.Invoke(s != 0);
+            _onPipSize = (u, x, y, w, h) => PipSize?.Invoke(x, y, w, h);
+            _onPipPaint = (u, px, w, h, dx, dy, dw, dh) => PipPaint?.Invoke(this,
+                new PaintEventArgs { Pixels = px, Width = w, Height = h, DirtyX = dx, DirtyY = dy, DirtyW = dw, DirtyH = dh });
             // MINOR6 (FB-P024): 同步回调 — 宿主置 Handled=true 即返 1 抑制内核原生菜单 (未订阅/异常=0 走内核默认)。
             _onContextMenu = (u, mt, link, src, sel, page, x, y, ed) =>
             {
@@ -1813,6 +1832,10 @@ namespace Arupa
                 on_popup_show = Marshal.GetFunctionPointerForDelegate(_onPopupShow),
                 on_popup_size = Marshal.GetFunctionPointerForDelegate(_onPopupSize),
                 on_popup_paint = Marshal.GetFunctionPointerForDelegate(_onPopupPaint),
+                // ABI 1.33: 内核自持 PiP 窗口三回调 (尾部加性扩展, 旧内核按 caller_size 忽略)。
+                on_pip_show = Marshal.GetFunctionPointerForDelegate(_onPipShow),
+                on_pip_size = Marshal.GetFunctionPointerForDelegate(_onPipSize),
+                on_pip_paint = Marshal.GetFunctionPointerForDelegate(_onPipPaint),
             };
             // should_intercept_request: 始终装配 — 每请求回调, ShouldInterceptRequest 为 null 时
             // thunk 返 Zero=放行, 零副作用。on_download_start: 仅 InterceptDownloads 时装配 —

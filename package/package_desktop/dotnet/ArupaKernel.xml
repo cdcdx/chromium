@@ -61,6 +61,10 @@
             <summary>FB-P011: OSR 设备缩放。0/1 = 不强制(dpr=1); 1.5 = 150% DPI 物理出帧+锐利
             (宿主须配合物理出帧 Resize(w*dsf, h*dsf))。默认 0 = 不强制。</summary>
         </member>
+        <member name="P:Arupa.ArupaWebViewOptions.LegacyExtensionPartitionId">
+            <summary>Migration-only view: select the old partition before any navigation or CDP attach.
+            Requires OffTheRecord=false and no PendingContentsToken.</summary>
+        </member>
         <member name="T:Arupa.ArupaPluginInfo">
             <summary>FB-P020: 插件加载结果 (load_plugin 回传)。宿主据 SocksEndpoint + ManagedHosts
             调 view.SetTransportRoute 把 view 路由进插件 (名单内走代理/外直连)。</summary>
@@ -71,7 +75,7 @@
         <member name="M:Arupa.ArupaKernel.LastErrorJson">
              <summary>
              读**本线程**最近一次失败的结构化说明; 没有则 null。形状 {code,what,why,next,detail}。
-
+            
              🔴 三条用法边界(照 capi.h 的错误通道语义, 别当通用错误码使):
                · **thread_local** —— 谁调的谁读。跨线程读到的是那个线程的记录, 多半是 null。
                  ⚠ 对 async 宿主尤其要小心: `await` 之后的续体常常已经换线程了。
@@ -90,6 +94,19 @@
         <member name="M:Arupa.ArupaKernel.GetCapabilitiesJson">
             <summary>Capability schema with compiled, requiresHost and nullable runtimeAvailable.
             Null means the loaded kernel does not provide capabilities.v1.</summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.GetExtensionStorageState(System.String)">
+            <summary>Returns the native migration state JSON, including needs_merge and too_large.</summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.GetExtensionPartitionKey(System.String)">
+            <summary>Local partition path. Compare with a view's PartitionKey on this machine only.</summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.ClearExtensionStorage(System.String)">
+            <summary>Clear both native partitions, chrome.storage, alarms and migration records.
+            Stop the extension first. Call outside the native UI callback; code 0 confirms completion.</summary>
+        </member>
+        <member name="M:Arupa.ArupaKernel.ForgetExtensionStorageMigration(System.String)">
+            <summary>Re-evaluate migration after the extension has finished its schema-aware merge.</summary>
         </member>
         <member name="M:Arupa.ArupaKernel.WarmupRenderer">
             <summary>预热一个空闲渲染进程 (spare renderer): kernel 创建后调一次, 首次导航直接领用 → 首帧/首字节更快。
@@ -368,12 +385,12 @@
         <member name="T:Arupa.ArupaInject">
              <summary>
              页面内注入的**域名粒度授权**判定 (capi.h:719/727; 2026-08-07 内核按 FB-P062 W-b 加的)。
-
+            
              为什么单独一套: 注入是**持续生效**的(同意一次, 之后每页都注), 而别处的能力模型是
              "一次调用一次门控" —— 两者不同形, 不能沿用。
              判定顺序由内核负责(先红线、再声明、后授权), 宿主只按返回码决定 拒 / 弹授权 / 放行 ——
              **不要在宿主再写一套判据**, 那会立刻产生第二真相源。
-
+            
              ⚠ 方案A(同 FB-P013 那批): 本包装由对接侧(桌面端会话)按 FB-P062 草拟, 属内核 owner 域, 待 review。
              </summary>
         </member>
@@ -386,7 +403,7 @@
         <member name="T:Arupa.ArupaMv3">
              <summary>
              MV3 permission 的**内核**风险分级 (capi.h:752/755)。运行时 host.guard.mapPermission 吃它。
-
+            
              🔴 判定在内核 (三端同一份, 64 条测试盯着), 宿主不重写 —— 运行时文件头自己写着:
              宿主没提供 guard 时它**不静默放行**, 而是如实标"未经内核校验"。所以这条接上 = 让风险分级真生效。
              ⚠ 方案A: 由对接侧(桌面端会话)按 FB-P062/FB-P068 草拟, 属内核 owner 域, 待 review。
@@ -395,7 +412,7 @@
         <member name="F:Arupa.ArupaMv3.VendorNamespace">
              <summary>
              5 = 厂商命名空间 (`nomad.*`, capi.h 2026-08-19 加, FB-P072 问题二)。
-
+            
              🔴 **既不是放行也不是拒**: 这张表只管标准 MV3 权限, 我们自己新增的接口由**各自那套
              判定**决定准入 (`nomad.route` → <see cref="M:Arupa.ArupaRoute.Check(System.String,System.String,System.Boolean)"/>)。
              拿到 5 当放行 = 凭一个名字前缀发能力; 当拒 = 加速类插件在装的那一刻就被摘权限
@@ -406,13 +423,13 @@
         <member name="F:Arupa.ArupaMv3.DenyUnsupported">
              <summary>
              6 = **认识这个权限、也认它是合法的 MV3 权限, 但能力还没做**。
-
+            
              🔴 **与 <see cref="F:Arupa.ArupaMv3.DenyUnknown"/>(4) 的差别对宿主很值钱, 别合并**:
              · 4 = "表里没有这个词" —— 可能是标准新加的, 也可能是我们漏了;
              · 6 = "我们认得它, 只是**还没实现**" —— **会随实现落地改判**。
              给用户的那句话也不一样: 4 该说"未知权限", 6 该说"暂未支持"。
              合并的话商店筛不出来, 文案也是错的。
-
+            
              ⚠ 本常量 **2026-09-04 才补上**, 而内核从 `153.0.8010.12+2` 起对 14 条权限返 6
              (`webRequest` 族 / `management` / `cookies` / `history` / `bookmarks` /
              `downloads` / `topSites` / `browsingData` / `privacy` …)。
@@ -422,12 +439,12 @@
         <member name="F:Arupa.ArupaMv3.Substituted">
              <summary>
              7 = **走逐风的替代实现**。上游那条路我们没有, 换了一条。
-
+            
              🔴 **这不是拒。** 拿到 7 的宿主要让插件**装上、跑起来** ——
              只是这条能力走的不是上游那套, 行为可能有差异。
              用 <c>PermissionCapability(perm)</c> 拿"替代走的是哪条能力"
              (例如 <c>webRequest</c> → <c>cap.net.declarative</c>)。
-
+            
              现役例子: <c>webRequest</c> —— 实测**对象在**(开出 23 个入口)而
              **拦不到东西**(FB-P111), 判"没做"和判"放行"都是假话。
              它的拦截类用法可以走 <c>declarativeNetRequest</c>(我们真支持);
@@ -438,18 +455,18 @@
         <member name="F:Arupa.ArupaMv3.DegradedUnavailable">
              <summary>
              8 = **认识 · 这条能力确实没有 · 但不阻止安装**。
-
+            
              🔴 **这不是拒。** 与 6 的区别只有一件事: **6 阻装, 8 不阻装**。
              🔴 拿到 8 的宿主**必须给出可见提示**
              (「本插件的 XX 功能在逐风浏览器上不可用」)—— 这是**契约, 不是建议**。
              不提示就退化成"装上了、然后一声不响不工作", 而那正是码 6 当初拒绝放行
              要防的东西; 那种情况下还不如维持整包拒绝。
-
+            
              🔴 为什么要有这一档 —— 一个实测数字:
              此前一条权限判拒 = 整个插件装不上。语料 2858 个商店扩展里被拒 1517 个(53.1%),
              而**其中 45%(678 个)只被 1 条权限挡住** —— 678 个插件的全部功能被砍掉,
              只因为其中一个功能我们没做。改判之后"能装能跑"从 46.9% 升到 **88.8%**。
-
+            
              ⚠ 2026-09-05 起, 此前判 6 的绝大多数(cookies / downloads / identity /
              webNavigation / notifications / privacy …)改判 8。
              在此之前照本类判定的宿主, 拿到 7/8 会落进"不认识"分支按拒处理 ——
@@ -459,15 +476,15 @@
         <member name="M:Arupa.ArupaMv3.VerdictName(System.Int32)">
              <summary>
              判定码 → 名字(`"ALLOW_MAPPED"` / `"DENY_UNSUPPORTED"` …)。**直接问内核。**
-
+            
              🔴 存在的理由是**让你不必维护上面那张表**。抄一份表的代价已经收过好几次利息:
              内核自己的判据抄漏过两次, 对接端的码表只声明了一半, 而**本类到 2026-09-04
              都还缺 6** —— 三次都是同一个形状, 而且**坏的时候不报错**。
-
+            
              ⚠ 认不出的码回 <c>null</c>(**不是**回 <c>"DENY_UNKNOWN"</c> —— 那会与码 4 撞名,
              分不出"码是 4"和"这个码我不认识")。拿到 null 的正确处理是
              **按拒 + 明说"本版本不认识这个码"**, <b>不许猜成放行</b>。
-
+            
              ⚠ 采用条件是**你的生产基线含这个导出**(`153.0.8010.12+2` 起), 不是"我这台机器上有"。
              旧内核上调它会 <c>EntryPointNotFoundException</c>。
              </summary>
@@ -476,11 +493,11 @@
              <summary>
              ① 这条能力**能不能用**。<c>0</c>/<c>1</c> 能用 ·
              <b><c>7</c> 也能用</b>（走替代）· <c>8</c> 不能用（确实没有）· 其余不能用。
-
+            
              🔴 <b>拿到 <c>7</c> 时必须同时读 <see cref="M:Arupa.ArupaMv3.SubstitutionGap(System.String)"/></b>：
              替代能用不等于等价，缺口非空就要给用户可见提示。
              只读本方法会把"有替代"当成全量等价 ⇒ 覆盖不到的那半照样静默失效。
-
+            
              ⚠ <c>5</c>（厂商命名空间）回 <c>false</c> —— 它的意思是"**不归这张表判**"，
              你要去问对应的那套判定（如 <c>RouteCheck</c>）。把"不归我判"读成"可以"，
              就是凭一个名字前缀发能力。
@@ -490,12 +507,12 @@
              <summary>
              ② 这插件**装不装得上**。<c>0</c>/<c>1</c>/<c>7</c> 装得上 ·
              <b><c>8</c> 也装得上</b> · <c>2</c>/<c>3</c>/<c>4</c>/<c>6</c> 装不上。
-
+            
              🔴 <b>与 <see cref="M:Arupa.ArupaMv3.IsPermUsable(System.Int32)"/> 只在码 8 上不同</b> —— 而 8 正是本版新增那一档。
              此前只有一个函数在答这两个问题，它对 7 和 8 一律回 <c>false</c>，
              <b>两个问题各答错一半</b>：照它写 <c>if (!allowed) 拒装</c>，
              会把本版从 46.9% 抬到 88.8% 的那批插件原样拒回去，而且不报错。
-
+            
              🔴 判 8 装得上是**带条件的**：宿主必须给出可见提示
             （「本插件的 XX 功能在逐风浏览器上不可用」）。不提示就退化成
              "装上了然后一声不响不工作" —— 那还不如整包拒绝。<b>这是契约不是建议。</b>
@@ -546,14 +563,14 @@
         <member name="M:Arupa.ArupaMv3.SubstitutionGap(System.String)">
              <summary>
              判 <b>7 <c>Substituted</c></b> 时，"替代实现**顶不到哪儿**"。
-
+            
              🔴 与 <see cref="M:Arupa.ArupaMv3.PermissionCapability(System.String)"/> 是**一对**：那个答"替代走的是哪条能力"，
              本方法答"那条能力顶不到哪儿"。<b>只读前者会把有替代当成全量等价</b> ⇒ 不提示 ⇒
              覆盖不到的那半照样静默失效。<b>缺口非空就必须给用户可见提示。</b>
-
+            
              ⚠ 返回**空串 = 替代是完整的**（或该权限根本不判 7），<b>不是"没查"</b> ——
              每一条判 7 的权限都必须在内核的缺口表里有一行，漏登记会被判据拦下。
-
+            
              ⚠ 本方法 <b>2026-09-07 才补进 .NET 门面</b>，而内核 09-06 就有了这条导出 ——
              中间那段时间对接文档写着 <c>ArupaMv3.SubstitutionGap(perm)</c> 而它并不存在。
              采用条件是**你的生产基线含这个导出**，不是"我这台机器上有"。
@@ -569,13 +586,13 @@
              <summary>
              出口路由的**档位**护栏 (capi.h:735, 2026-08-19)。回答:
              这个插件能不能拿到**这一档作用域**的出口路由。
-
+            
              🔴 判定在内核, 宿主**不重判**: 签名包四档全给; 未签名只给 global 且首次要用户点头一次,
              请求更细的作用域一律拒。<c>is_signed</c> 不是入参 —— 内核自己查 active 签名包,
              做成入参等于把信任交给调用方, 那就没有门控了。
              🔴 拿到 <see cref="F:Arupa.ArupaRoute.DenyScopeNeedsSign"/> 时**必须报错**, 不许静默降级成 global ——
              那会让插件以为分流生效了, 而实际全局出口都变了。
-
+            
              ⚠ **老交付件上没有这个导出**(内核 2026-08-19 才落地) —— 调用方必须先探测,
              探不到就如实降级, 直接调会抛 <see cref="T:System.EntryPointNotFoundException"/>。
              ⚠ 方案A: 本门面由对接侧(桌面端会话)按 capi.h 草拟, 属内核 owner 域, 待 review。
@@ -589,13 +606,13 @@
              per-plugin 隔离存储 (capi.h:738–749) —— <c>chrome.storage</c> 的后端。
              按插件隔离(A 读不到 B) · 持久 profile 落盘 <c>&lt;udd&gt;/PluginStorage/&lt;id&gt;.json</c> ·
              OTR 纯内存(反取证) · 卸载 <see cref="M:Arupa.ArupaPluginStorage.Clear(System.String)"/> 擦除。
-
+            
              🔴 **value 必须是 JSON 串** —— 这是 capi.h 写死的契约, 不是建议:
              内核 <c>set</c> 先 <c>JSONReader::Read</c> 解析(解析不了才当字符串存), <c>get</c> 一律
              <c>WriteJson</c> 输出 ⇒ 传裸 <c>hello</c> 读回来是 <c>"hello"</c>(带引号)。
              调用方统一 <c>JSON.stringify</c> 写 / <c>JSON.parse</c> 读, 非法 JSON 直接拒, 别指望原样往返。
              ⚠ 本处此前写的是"内核不解析它, 原样存原样还" —— 那句是错的, 2026-08-19 内核确认后订正。
-
+            
              🔴 内核那侧 get/get_all 返回的是 **thread_local** 缓冲区("有效至同线程下次 get"),
              所以这里每次都**立刻拷成托管 string** 再返回 —— 调用方拿到的是自己的副本, 可以存。
              ⚠ 方案A: 由内核会话按 capi.h 补齐(2026-08-18)。补它的起因是那张能力表:
@@ -606,7 +623,7 @@
         <member name="M:Arupa.ArupaPluginStorage.Get(System.String,System.String)">
              <summary>
              读一个键; **键不存在返回 null**。
-
+            
              🔴 内核那侧 <b>永不返回 NULL 指针</b> —— 键不存在时返回的是**空串**
              (`arupa_kernel_capi_impl.cc:2598`: thread_local std::string, miss 就是空)。
              这条 capi.h 此前没写, 是 2026-08-18 对着交付件实跑才知道的。
@@ -640,6 +657,10 @@
         <member name="E:Arupa.ArupaWebView.BrowserCommandRequested">
             <summary>F11/F12 请求，在内核 UI 线程触发。处理器须投递到宿主 UI 线程。
             未订阅时按键继续交给网页。F11 切换宿主窗口；F12 创建/激活专用 OSR view 并调用 OpenDevTools。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.NewContentsRequested">
+            <summary>Opt into adopting original WebContents. No subscribers preserves NewWindowRequested.
+            Tokens are single-use and expire after 60 seconds; reject unused tokens with DiscardPendingContents.</summary>
         </member>
         <member name="E:Arupa.ArupaWebView.CursorChanged">
             <summary>FB-P016: 页面光标类型变化 (ui::mojom::CursorType int: 0=kPointer/2=kHand/3=kIBeam/...)。
@@ -718,11 +739,34 @@
         <member name="E:Arupa.ArupaWebView.PopupPaint">
             <summary>popup 帧 (语义同 Paint; blit 到 PopupSize 矩形之上)。</summary>
         </member>
+        <member name="E:Arupa.ArupaWebView.PipShow">
+            <summary>内核 PiP 窗口显隐 (true=显示; false 后关闭/擦除宿主浮窗)。
+            仅在 <see cref="M:Arupa.ArupaWebView.SetHostPictureInPictureEnabled(System.Boolean)"/>(false) 时生效 —— 宿主自持 PiP 路径下
+            内核直接拒绝请求, 不会触发本事件。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.PipSize">
+            <summary>PiP 窗口在屏幕坐标系的矩形 (x, y, w, h), 单位 DIP。</summary>
+        </member>
+        <member name="E:Arupa.ArupaWebView.PipPaint">
+            <summary>PiP surface 帧 (BGRA top-down, 语义同 Paint; pixels 仅回调内有效, 须同步拷贝)。</summary>
+        </member>
         <member name="E:Arupa.ArupaWebView.ContextMenuRequested">
             <summary>FB-P024: 网页右键 (同步)。宿主接管须置 e.Handled=true 抑制内核原生菜单, 再异步弹自定义菜单 (含微应用注册项)。</summary>
         </member>
         <member name="E:Arupa.ArupaWebView.NotificationPermissionRequested">
             <summary>FB-P026: Web Notification 权限请求 (经 RespondNotificationPermission 应答; 不应答=默认拒绝)。</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.DiscardPendingContents(System.String)">
+            <summary>Release an unadopted token immediately. False means expired, already used or rejected.</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.UseLegacyExtensionPartition(System.String)">
+            <summary>Must precede all navigation and CDP attachment; prefer the creation option.</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.LookupProxyForUrlAsync(System.String,System.Int32)">
+            <summary>Real network-service proxy result; null on network error, timeout or view disposal.</summary>
+        </member>
+        <member name="M:Arupa.ArupaWebView.ListFramesJson">
+            <summary>Native frame list JSON. The owned native buffer is always released.</summary>
         </member>
         <member name="M:Arupa.ArupaWebView.OpenDevTools(Arupa.ArupaWebView)">
             <summary>在宿主创建的专用 frontend view 中打开当前页的 Chromium DevTools。
@@ -779,7 +823,7 @@
         <member name="M:Arupa.ArupaWebView.InjectIsolatedJsAsync(System.Int32,System.String,System.Int32)">
              <summary>
              MV3 Phase 1: 在**隔离世界** world_id∈[1,11] 执行 JS, 取 JSON 结果 (超时/失败 null)。
-
+            
              隔离世界与主世界(0, 内核 15 维反指纹 JS 所在)物理隔离: 独立 JS 上下文、共享 DOM,
              读不到也改不到主世界全局。MV3 content script 就注在这儿。
              ⚠ world_id 越界 (不在 [1,11]) 内核 no-op —— 不崩, 但也**不会回调**, 故本包装靠超时收场。
@@ -794,17 +838,17 @@
         <member name="M:Arupa.ArupaWebView.EvalJsForDocumentAsync(System.UInt64,System.String,System.Int32)">
              <summary>
              在**主世界**(world 0)执行 JS, 取 JSON 结果 (超时/失败返回 null)。
-
+            
              🔴 与 <see cref="M:Arupa.ArupaWebView.InjectIsolatedJsAsync(System.Int32,System.String,System.Int32)"/> 的分工, **别选错**:
              · 本方法 = 主世界 —— 页面自己的 JS 上下文。读得到 <c>document.title</c>、
                写得到 <c>window.*</c> 且**页面里的脚本看得见**。
              · <see cref="M:Arupa.ArupaWebView.InjectIsolatedJsAsync(System.Int32,System.String,System.Int32)"/> = 隔离世界 —— 独立上下文、共享 DOM,
                页面里的脚本**看不见**你写的全局。MV3 content script 注在那儿。
-
+            
              ⚠ 什么时候必须用本方法: 往扩展页面里装 <c>nomad-plugin-runtime.js</c> 那类
              "**要让页面里的脚本够得着**"的东西。用隔离世界注入的话, 插件自己的代码
              看不到 <c>window.nomad</c>, 等于没注入。
-
+            
              ⚠ 已知约束(2026-08-26, 对接侧实测): <c>nomad-plugin-runtime.js</c> 是 **ESM**
              (末尾有 <c>export {…}</c>) ⇒ **直接把它整份丢进来是语法错误**, 必须当模块加载
              (桌面走 <c>nomad://</c> 供应 + <c>&lt;script type="module"&gt;</c> 引)。
@@ -910,6 +954,10 @@
             summary **连着写在同一处** ⇒ 两段都挂在了那个方法上, 而本方法一句注释都没有。
             两者语义**不同**(本方法解析成对象; Raw 那个不解析、给诊断看字段实况),
             所以悬停看到的说明是**错的那一份**。同族第 6 个实例, 由闸 <c>C57</c> 抓出。</remarks>
+        </member>
+        <member name="M:Arupa.ArupaWebView.SendCdpAsync(System.String,System.String,System.Int32,System.Boolean)">
+            <summary>Send CDP with at most one session-rebound retry, within one total timeout.
+            Disable retry for commands whose side effects must not be repeated.</summary>
         </member>
         <member name="M:Arupa.ArupaWebView.SendCdpWithRetryAsync(System.String,System.String,System.Int32,System.Int32)">
             <summary>CDP DevToolsAgentHost attach 后首条命令偶发未就绪 → 短超时重试若干次, 让桥设施稳。</summary>
