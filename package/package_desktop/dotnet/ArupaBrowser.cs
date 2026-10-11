@@ -133,11 +133,13 @@ namespace Arupa
     }
 
     // 拦截回调的处置方式 (capi.h ArupaInterceptResponse.action)。
-    // 内核只在 action == 1 上分支 (arupa_intercept_loader.cc:493), 其余值都走"合成响应替换"。
     public enum InterceptAction
     {
         ServeResponse = 0,                 // 用 InterceptResponse 合成本次响应 (默认值, 旧行为)
         ContinueWithModifiedHeaders = 1,   // 只改头: 请求继续走网络, 不合成响应
+        // Requires ArupaKernel.SupportsRequestBlocking. No HTTP response is
+        // produced; other response fields are ignored. Images/subframes collapse.
+        BlockRequest = 2,                  // net::ERR_BLOCKED_BY_CLIENT
     }
 
     // 返回此对象 = 按 Action 处置该请求; 返回 null = 放行 (原样走网络)。
@@ -414,6 +416,10 @@ namespace Arupa
         private GCHandle _backgroundRoot;
         public static bool SupportsDnrRequestContext {
             get { try { return Interop.arupa_kernel_supports("dnr.request_context.v1") != 0; }
+                catch (EntryPointNotFoundException) { return false; } }
+        }
+        public static bool SupportsRequestBlocking {
+            get { try { return Interop.arupa_kernel_supports("request.block.v1") != 0; }
                 catch (EntryPointNotFoundException) { return false; } }
         }
         // Call before workers start. The native registration is scoped to this

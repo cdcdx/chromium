@@ -95,6 +95,10 @@
             <summary>Capability schema with compiled, requiresHost and nullable runtimeAvailable.
             Null means the loaded kernel does not provide capabilities.v1.</summary>
         </member>
+        <member name="M:Arupa.ArupaKernel.FlushCookiesAsync">
+            <summary>Flush all loaded cookie stores, even after every view has closed.
+            Keep this kernel alive until completion. Requires cookie.flush.v1.</summary>
+        </member>
         <member name="M:Arupa.ArupaKernel.GetExtensionStorageState(System.String)">
             <summary>Returns the native migration state JSON, including needs_merge and too_large.</summary>
         </member>
