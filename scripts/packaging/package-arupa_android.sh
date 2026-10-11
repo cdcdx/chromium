@@ -326,6 +326,16 @@ if [[ -n "${PROBE_DIR}" ]]; then
   log "附带 probe-plugin/ ← ${PROBE_DIR}"
 fi
 
+# ---------------------------------------------------------------- 能力清单（声明 vs 实现同源门禁）
+# 清单**必须由内核源码派生**：schema/路由/权限/事件/内核分发表/窗口预算常量/跨语言结果码/
+# consumer keep 规则/无假保活，全部双向核对（scripts/kernel_capability.py）。
+# 不一致就 exit 1 拒绝出包 —— 不允许"清单声明 passed、实现没有"（N-C08/K-A09）。
+# 必须在算 SHA256SUMS.txt 之前生成，否则清单自己不在校验和里。
+python3 "${ROOT_DIR}/scripts/kernel_capability.py" manifest \
+    --stage "${DIST}" --ver "${VER}" --num "${NUM}" \
+  || err "能力清单生成失败：内核声明与实现不同源，拒绝出包（见上面 [ERROR]）"
+log "capability-manifest.json（由内核源码派生；同源门禁已通过）"
+
 # ---------------------------------------------------------------- 校验和 / 清单
 # ⚠ 临时文件必须落在交付目录外：放在 DIST 里会被 find 自己算进去
 #   （且 grep -v '^SHA256SUMS.txt' 删不掉——sha256sum 的行是「哈希  文件」开头）
