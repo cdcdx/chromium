@@ -456,6 +456,16 @@ def desktop_build(root, args, target_os, arch, version, output):
             F.log('交付顶层门面不可用，PC 仓也没有稳定副本 —— 交由 MSBuild 自行回落')
     if target_os == 'mac':
         props += ['-p:BuildMac=true', f'-p:MacRuntimeIdentifier={rid}']
+        # 签名门禁（NomadBrowser.Avalonia.Mac/build/mac-bundle.targets 的
+        # ValidateMacSigningIdentity）：正式包需 Developer ID(MacCodeSignIdentity)，
+        # 本机/CI 测试需显式 MacAllowAdHocSigning=true。统一入口此前两者都不带，
+        # Release 打包会在门禁处直接报错。这里与 Scripts/macos/package.py 对齐：
+        # 有 identity 就带 identity，否则 ad-hoc（临时签名，不保证跨版本钥匙串延续）。
+        identity = F.cget(F.load_config(), 'mac_code_sign_identity')
+        if identity:
+            props += [f'-p:MacCodeSignIdentity={identity}']
+        else:
+            props += ['-p:MacAllowAdHocSigning=true']
         developer_dir = F.cget(F.load_config(), 'nomad_developer_dir')
         if developer_dir:
             os.environ['DEVELOPER_DIR'] = developer_dir
