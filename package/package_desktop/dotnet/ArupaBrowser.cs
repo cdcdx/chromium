@@ -40,6 +40,85 @@ namespace Arupa
     }
 
     // FB-P002 C2/B2: 资源拦截请求 (IO 线程同步回调; nomad:// 内容供应 + 请求观测共用)。
+    internal sealed class InterceptCallbackBridge : IDisposable
+    {
+        private IntPtr _lastInterceptResp;
+        private readonly object _interceptLock = new();
+        private IntPtr _interceptMime, _interceptCharset, _interceptHeaders, _interceptBody;
+        private IntPtr _interceptSetReqHdr, _interceptRemoveReqHdr, _interceptSetRespHdr, _interceptRemoveRespHdr;
+        internal IntPtr Invoke(Func<InterceptRequest, InterceptResponse?>? h, IntPtr url, IntPtr method, IntPtr resourceType, int isMainFrame, IntPtr headers, IntPtr initiator, bool? thirdParty)
+        {
+            if (h == null) return IntPtr.Zero;
+            InterceptResponse? resp;
+            try
+            {
+                resp = h(new InterceptRequest
+                {
+                    Url = Interop.Utf8(url) ?? "",
+                    Method = Interop.Utf8(method) ?? "GET",
+                    ResourceType = Interop.Utf8(resourceType) ?? "",
+                    IsForMainFrame = isMainFrame != 0,
+                    Headers = Interop.Utf8(headers),
+                    InitiatorOrigin = Interop.Utf8(initiator),
+                    IsThirdParty = thirdParty,
+                });
+            }
+            catch { return IntPtr.Zero; }   // 宿主回调抛 → 放行
+            if (resp == null) return IntPtr.Zero;
+
+            lock (_interceptLock)
+            {
+                FreeLastInterceptResp();    // 内核已拷走上次, 现可释放
+                _interceptMime = Marshal.StringToCoTaskMemUTF8(resp.MimeType ?? "text/html");
+                _interceptCharset = resp.Charset != null ? Marshal.StringToCoTaskMemUTF8(resp.Charset) : IntPtr.Zero;
+                _interceptHeaders = resp.Headers != null ? Marshal.StringToCoTaskMemUTF8(resp.Headers) : IntPtr.Zero;
+                int bodyLen = resp.Body?.Length ?? 0;
+                if (bodyLen > 0)
+                {
+                    _interceptBody = Marshal.AllocCoTaskMem(bodyLen);
+                    Marshal.Copy(resp.Body!, 0, _interceptBody, bodyLen);
+                }
+                // 空串按"不改"处理: 内核只判非 null 指针, 给空串会走一趟空解析。
+                _interceptSetReqHdr = StrOrZero(resp.SetRequestHeaders);
+                _interceptRemoveReqHdr = StrOrZero(resp.RemoveRequestHeaders);
+                _interceptSetRespHdr = StrOrZero(resp.SetResponseHeaders);
+                _interceptRemoveRespHdr = StrOrZero(resp.RemoveResponseHeaders);
+                var native = new Interop.InterceptResponseNative
+                {
+                    status_code = resp.StatusCode,
+                    mime_type = _interceptMime,
+                    charset = _interceptCharset,
+                    headers = _interceptHeaders,
+                    body = _interceptBody,
+                    body_len = (IntPtr)bodyLen,
+                    action = (int)resp.Action,
+                    set_request_headers = _interceptSetReqHdr,
+                    remove_request_headers = _interceptRemoveReqHdr,
+                    set_response_headers = _interceptSetRespHdr,
+                    remove_response_headers = _interceptRemoveRespHdr,
+                };
+                _lastInterceptResp = Marshal.AllocCoTaskMem(Marshal.SizeOf<Interop.InterceptResponseNative>());
+                Marshal.StructureToPtr(native, _lastInterceptResp, false);
+                return _lastInterceptResp;
+            }
+        }
+
+        private static IntPtr StrOrZero(string? s)
+            => string.IsNullOrEmpty(s) ? IntPtr.Zero : Marshal.StringToCoTaskMemUTF8(s);
+
+        private void FreeLastInterceptResp()
+        {
+            void Free(ref IntPtr p) { if (p != IntPtr.Zero) { Marshal.FreeCoTaskMem(p); p = IntPtr.Zero; } }
+            Free(ref _lastInterceptResp);
+            Free(ref _interceptMime); Free(ref _interceptCharset);
+            Free(ref _interceptHeaders); Free(ref _interceptBody);
+            Free(ref _interceptSetReqHdr); Free(ref _interceptRemoveReqHdr);
+            Free(ref _interceptSetRespHdr); Free(ref _interceptRemoveRespHdr);
+        }
+
+        public void Dispose() { lock (_interceptLock) FreeLastInterceptResp(); }
+    }
+
     public sealed class InterceptRequest
     {
         public string Url { get; init; } = "";
@@ -48,6 +127,8 @@ namespace Arupa
         // "xmlhttprequest" …)。仅经 should_intercept_request_ex 下发; 老 DLL 走旧回调时为空串。
         public string ResourceType { get; init; } = "";
         public bool IsForMainFrame { get; init; }
+        public string? InitiatorOrigin { get; init; }
+        public bool? IsThirdParty { get; init; }
         public string? Headers { get; init; }   // \n 分隔 "K: V"
     }
 
@@ -328,6 +409,27 @@ namespace Arupa
 
     public sealed class ArupaKernel : IDisposable
     {
+        private readonly InterceptCallbackBridge _backgroundBridge = new();
+        private Interop.ShouldInterceptV2Native? _backgroundCallback;
+        private GCHandle _backgroundRoot;
+        public static bool SupportsDnrRequestContext {
+            get { try { return Interop.arupa_kernel_supports("dnr.request_context.v1") != 0; }
+                catch (EntryPointNotFoundException) { return false; } }
+        }
+        // Call before workers start. The native registration is scoped to this
+        // kernel's regular profile; private BrowserContexts do not inherit it.
+        public void SetBackgroundRequestHandler(Func<InterceptRequest, InterceptResponse?> handler)
+        {
+            if (!SupportsDnrRequestContext) throw new NotSupportedException("dnr_request_context_unavailable");
+            if (_backgroundCallback != null) throw new InvalidOperationException("dnr_background_already_bound");
+            _backgroundCallback = (u, url, method, type, main, headers, origin, third) =>
+                _backgroundBridge.Invoke(handler, url, method, type, main, headers, origin, third != 0);
+            _backgroundRoot = GCHandle.Alloc(_backgroundCallback);
+            int result = Interop.arupa_kernel_set_background_request_callback(_handle,
+                Marshal.GetFunctionPointerForDelegate(_backgroundCallback), IntPtr.Zero);
+            if (result != 0) throw new InvalidOperationException($"dnr_background_bind_failed:{result}");
+        }
+
         /// <summary>
         /// 读**本线程**最近一次失败的结构化说明; 没有则 null。形状 {code,what,why,next,detail}。
         ///
@@ -997,6 +1099,16 @@ namespace Arupa
         {
             if (_handle != IntPtr.Zero)
             {
+                if (_backgroundCallback != null) {
+                    int result = Interop.arupa_kernel_set_background_request_callback(_handle, IntPtr.Zero, IntPtr.Zero);
+                    // On a stopped/unresponsive runtime keep the delegate rooted;
+                    // a late IO callback must never jump into collected memory.
+                    if (result == 0) {
+                        _backgroundCallback = null;
+                        _backgroundBridge.Dispose();
+                        if (_backgroundRoot.IsAllocated) _backgroundRoot.Free();
+                    }
+                }
                 Interop.arupa_kernel_destroy(_handle);
                 _handle = IntPtr.Zero;
             }
@@ -1492,6 +1604,7 @@ namespace Arupa
         private readonly Interop.OnStringNative _onPageFinished;
         private readonly Interop.OnErrorNative _onError;
         private readonly Interop.ShouldInterceptNative _onIntercept;   // FB-P002 C2/B2
+        private readonly Interop.ShouldInterceptV2Native _onInterceptV2;
         private readonly Interop.ShouldInterceptExNative _onInterceptEx; // #34 (带 resource_type)
         private readonly Interop.OnDownloadNative _onDownload;         // FB-P002 B4
         // FB-P003: 高层 wiring 回调 (保活防 GC)。
@@ -1584,8 +1697,7 @@ namespace Arupa
         private GCHandle _onCdpHandle;
 
         // FB-P002 C2/B2: 拦截响应单槽缓冲 (IO 线程串行回调; 内核拷走后下次/Dispose 才释放)。
-        private IntPtr _lastInterceptResp = IntPtr.Zero;
-        private readonly object _interceptLock = new();
+        private readonly InterceptCallbackBridge _interceptBridge = new();
 
         public event EventHandler<PaintEventArgs>? Paint;
         /// <summary>FB-P016: 页面光标类型变化 (ui::mojom::CursorType int: 0=kPointer/2=kHand/3=kIBeam/...)。
@@ -1712,6 +1824,8 @@ namespace Arupa
             _onNavigationState = (u, json) => { try { NavigationStateChanged?.Invoke(Interop.Utf8(json)); } catch { } };
             _onPageFinished = OnPageFinishedThunk;
             _onError = OnErrorThunk;
+            _onInterceptV2 = (u, url, method, type, main, headers, origin, third) =>
+                _interceptBridge.Invoke(ShouldInterceptRequest, url, method, type, main, headers, origin, third != 0);
             _onIntercept = OnInterceptThunk;
             _onInterceptEx = OnInterceptExThunk;   // #34: 内核优先走这条, 资源类型只在它上面
             _onDownload = OnDownloadThunk;
@@ -1881,6 +1995,7 @@ namespace Arupa
             cbs.on_picture_in_picture_request = Marshal.GetFunctionPointerForDelegate(_onPictureInPictureRequest);
             cbs.on_presentation_changed = Marshal.GetFunctionPointerForDelegate(_onPresentationChanged);
             cbs.on_browser_command = Marshal.GetFunctionPointerForDelegate(_onBrowserCommand);
+            cbs.should_intercept_request_v2 = Marshal.GetFunctionPointerForDelegate(_onInterceptV2);
             cbs.on_open_new_window = Marshal.GetFunctionPointerForDelegate(_onNewWindow);
             cbs.should_override_url_loading = Marshal.GetFunctionPointerForDelegate(_onShouldOverride);
             // FB-P013 第三批: 装配权限/认证/文件选择回调 (struct 字段已在 capi ABI, 仅填指针)。
@@ -1921,7 +2036,9 @@ namespace Arupa
                     throw new ArgumentException("Pending contents token must be a positive int64.", nameof(opts));
                 // Adoption creates the ArupaWebView itself and attaches the original
                 // WebContents. Do not create/reload a replacement: that loses opener/POST.
-                int r = Interop.arupa_webview_adopt_pending(kernel, token, in cfg, in cbs, in osr, out _handle);
+                int r = ArupaKernel.SupportsDnrRequestContext
+                    ? Interop.arupa_webview_adopt_pending_v2(kernel, token, in cfg, in cbs, (nuint)Marshal.SizeOf<Interop.WebViewCallbacks>(), in osr, out _handle)
+                    : Interop.arupa_webview_adopt_pending(kernel, token, in cfg, in cbs, in osr, out _handle);
                 if (r != 0)
                     throw new InvalidOperationException($"arupa_webview_adopt_pending failed: {r}");
             }
@@ -1982,8 +2099,7 @@ namespace Arupa
 
         // FB-P002 C2/B2: 资源拦截 thunk (IO 线程, 同步返回)。返 Zero=放行; 否则返回内核要拷走的
         // ArupaInterceptResponse* (单槽缓冲, 下次回调/Dispose 释放上次)。
-        private IntPtr _interceptMime, _interceptCharset, _interceptHeaders, _interceptBody;
-        private IntPtr _interceptSetReqHdr, _interceptRemoveReqHdr, _interceptSetRespHdr, _interceptRemoveRespHdr;
+
 
         // 老签名 (无 resource_type): 仅在内核不支持 _ex 时用到。
         private IntPtr OnInterceptThunk(IntPtr u, IntPtr url, IntPtr method, int isMainFrame, IntPtr headers)
@@ -1995,73 +2111,7 @@ namespace Arupa
             => InterceptThunkCore(url, method, resourceType, isMainFrame, headers);
 
         private IntPtr InterceptThunkCore(IntPtr url, IntPtr method, IntPtr resourceType, int isMainFrame, IntPtr headers)
-        {
-            var h = ShouldInterceptRequest;
-            if (h == null) return IntPtr.Zero;
-            InterceptResponse? resp;
-            try
-            {
-                resp = h(new InterceptRequest
-                {
-                    Url = Interop.Utf8(url) ?? "",
-                    Method = Interop.Utf8(method) ?? "GET",
-                    ResourceType = Interop.Utf8(resourceType) ?? "",
-                    IsForMainFrame = isMainFrame != 0,
-                    Headers = Interop.Utf8(headers),
-                });
-            }
-            catch { return IntPtr.Zero; }   // 宿主回调抛 → 放行
-            if (resp == null) return IntPtr.Zero;
-
-            lock (_interceptLock)
-            {
-                FreeLastInterceptResp();    // 内核已拷走上次, 现可释放
-                _interceptMime = Marshal.StringToCoTaskMemUTF8(resp.MimeType ?? "text/html");
-                _interceptCharset = resp.Charset != null ? Marshal.StringToCoTaskMemUTF8(resp.Charset) : IntPtr.Zero;
-                _interceptHeaders = resp.Headers != null ? Marshal.StringToCoTaskMemUTF8(resp.Headers) : IntPtr.Zero;
-                int bodyLen = resp.Body?.Length ?? 0;
-                if (bodyLen > 0)
-                {
-                    _interceptBody = Marshal.AllocCoTaskMem(bodyLen);
-                    Marshal.Copy(resp.Body!, 0, _interceptBody, bodyLen);
-                }
-                // 空串按"不改"处理: 内核只判非 null 指针, 给空串会走一趟空解析。
-                _interceptSetReqHdr = StrOrZero(resp.SetRequestHeaders);
-                _interceptRemoveReqHdr = StrOrZero(resp.RemoveRequestHeaders);
-                _interceptSetRespHdr = StrOrZero(resp.SetResponseHeaders);
-                _interceptRemoveRespHdr = StrOrZero(resp.RemoveResponseHeaders);
-                var native = new Interop.InterceptResponseNative
-                {
-                    status_code = resp.StatusCode,
-                    mime_type = _interceptMime,
-                    charset = _interceptCharset,
-                    headers = _interceptHeaders,
-                    body = _interceptBody,
-                    body_len = (IntPtr)bodyLen,
-                    action = (int)resp.Action,
-                    set_request_headers = _interceptSetReqHdr,
-                    remove_request_headers = _interceptRemoveReqHdr,
-                    set_response_headers = _interceptSetRespHdr,
-                    remove_response_headers = _interceptRemoveRespHdr,
-                };
-                _lastInterceptResp = Marshal.AllocCoTaskMem(Marshal.SizeOf<Interop.InterceptResponseNative>());
-                Marshal.StructureToPtr(native, _lastInterceptResp, false);
-                return _lastInterceptResp;
-            }
-        }
-
-        private static IntPtr StrOrZero(string? s)
-            => string.IsNullOrEmpty(s) ? IntPtr.Zero : Marshal.StringToCoTaskMemUTF8(s);
-
-        private void FreeLastInterceptResp()
-        {
-            void Free(ref IntPtr p) { if (p != IntPtr.Zero) { Marshal.FreeCoTaskMem(p); p = IntPtr.Zero; } }
-            Free(ref _lastInterceptResp);
-            Free(ref _interceptMime); Free(ref _interceptCharset);
-            Free(ref _interceptHeaders); Free(ref _interceptBody);
-            Free(ref _interceptSetReqHdr); Free(ref _interceptRemoveReqHdr);
-            Free(ref _interceptSetRespHdr); Free(ref _interceptRemoveRespHdr);
-        }
+            => _interceptBridge.Invoke(ShouldInterceptRequest, url, method, resourceType, isMainFrame, headers, IntPtr.Zero, null);
 
         // FB-P002 B4: 下载 thunk (内核已取消该下载, 此处仅通知宿主接管路由)。
         private void OnDownloadThunk(IntPtr u, IntPtr url, IntPtr mime, IntPtr name,
@@ -3035,7 +3085,7 @@ namespace Arupa
                 return;
             }
             Interop.arupa_webview_destroy(handle);
-            lock (_interceptLock) FreeLastInterceptResp();
+            _interceptBridge.Dispose();
             // ⚠️ 必须在 native teardown 之后释放 GCHandle;否则 Kernel 最后一帧 OnCdpMessage
             //   会调到正在收回的 function pointer 与 Clr FailFast 同根。
             if (_onCdpHandle.IsAllocated)

@@ -42,6 +42,12 @@ namespace Arupa
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int arupa_kernel_abi_minor();
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_kernel_set_background_request_callback(IntPtr kernel, IntPtr callback, IntPtr user);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        internal delegate IntPtr ShouldInterceptV2Native(IntPtr user, IntPtr url, IntPtr method,
+            IntPtr resourceType, int isMainFrame, IntPtr headers, IntPtr initiatorOrigin, int isThirdParty);
+
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern IntPtr arupa_webview_get_ime_state(IntPtr view);
@@ -69,6 +75,10 @@ namespace Arupa
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int arupa_webview_adopt_pending(IntPtr kernel, long token,
             in WebViewConfig config, in WebViewCallbacks callbacks, in OsrSink osr, out IntPtr view);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_webview_adopt_pending_v2(IntPtr kernel, long token,
+            in WebViewConfig config, in WebViewCallbacks callbacks, nuint callbacksSize, in OsrSink osr, out IntPtr view);
+
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int arupa_webview_discard_pending(long token);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
@@ -220,6 +230,7 @@ namespace Arupa
             // ── MINOR25 (presentation.v1; capi.h 尾部加性扩展) ──
             public IntPtr on_presentation_changed;       // 36 OnPresentationChangedNative (统一呈现通道: 全屏 + 画中画)
             public IntPtr on_browser_command;            // 37 OnBrowserCommandNative (ABI 1.29)
+            public IntPtr should_intercept_request_v2;   // 38 ABI 1.35
         }
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
