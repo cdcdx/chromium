@@ -197,7 +197,7 @@ index 262221ecd852507cd136254725e16c53a155fc99..e77891c095ec89351e7ddf8172b590ce
  
 +  kNomad = 900,
 +  kNomadTransfer = 901,
-+  kNomadSitePermissionAudit = 903,
++  kNomadSitePermissionAudit = 902,
 +
    // Add new entries at the end of the enum and be sure to update the
    // "ExtensionPermission3" enum in
