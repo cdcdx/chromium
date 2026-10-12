@@ -241,8 +241,11 @@ def _retry(action, describe):
 
 
 # ── 上传 ───────────────────────────────────────────────────────────────────
-def push(path, url="", token="", allow_http=False, platform="", version=""):
-    """把交付包推到发布服务器；成功返回服务端会话对象。"""
+def push(path, url="", token="", allow_http=False, platform="", version="", replace=False):
+    """把交付包推到发布服务器；成功返回服务端会话对象。
+
+    replace=True 时在会话元数据里声明「强制替换」：服务端对同名已发布包默认拒绝
+    （409），带 replace 才用原子 rename 覆盖，与 scripts/push-http.mjs 同源。"""
     path = Path(path)
     info = parse_artifact(path.name)
     if not version:
@@ -260,15 +263,16 @@ def push(path, url="", token="", allow_http=False, platform="", version=""):
 
     if F.DRY_RUN:
         F.log(f"(dry-run) 推送 {path.name} → {origin}"
-              f"（platform={platform}, version={version}, size={before.st_size}）")
+              f"（platform={platform}, version={version}, size={before.st_size}, "
+              f"replace={replace}）")
         return None
 
     F.log(f"计算 sha256: {path}")
     digest = sha256_file(path)
     metadata = {"platform": platform, "version": version, "filename": path.name,
-                "size": before.st_size, "sha256": digest}
+                "size": before.st_size, "sha256": digest, "replace": replace}
     F.log(f"推送 {path.name} → {origin}（platform={platform}, version={version}, "
-          f"{before.st_size} 字节）")
+          f"{before.st_size} 字节" + ("，replace 强制替换" if replace else "") + "）")
 
     opener = urllib.request.build_opener(_NoRedirect)
     session = _retry(lambda: _call(opener, origin, "/api/uploads", "POST", token,

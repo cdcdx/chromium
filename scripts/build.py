@@ -55,6 +55,7 @@ def build_parser():
     p.add_argument("--url", default="", help="publish 发布站点源，如 http://192.168.77.104:8080；默认取 .env 的 publish_url")
     p.add_argument("--token", default="", help="publish 上传令牌；默认取环境变量/.env 的 publish_upload_token")
     p.add_argument("--allow-http", action="store_true", help="publish 对公网/域名也允许 http://（内网私有地址已默认放行）")
+    p.add_argument("--replace", action="store_true", help="publish 强制替换同名交付包（服务端默认对同名已发布包返回 409 拒绝）")
     p.add_argument("--platform", default="", help="publish 元数据 platform；默认按交付包文件名推断（mac / win / linux / android）")
     p.add_argument("--file", default="", help="publish 指定交付包：路径，或直接给交付序号 n；默认取最大的 zip")
     return p
@@ -578,7 +579,8 @@ def main(argv=None):
                      token=args.token or F.cget(cfg, "publish_upload_token"),
                      allow_http=args.allow_http,
                      platform=args.platform,
-                     version=identity.version)
+                     version=identity.version,
+                     replace=args.replace)
     F.log("构建流程完成" if not args.dry_run else "构建计划完成（未执行）")
     return 0
 

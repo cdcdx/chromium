@@ -314,7 +314,9 @@ Linux 当前项目 GN 未定义 render 目标，交付中缺少 arupa_render 会
 也可用 `--file` 指定路径，或直接给交付序号 `n`（等价 `--num n`）；同一次调用里刚 `package` 过时优先推刚产出的
 那一份。元数据里的 `platform` 默认取文件名里的系统名（`mac` / `win` / `linux` / `android`，服务端会拿它与文件名
 交叉校验；架构也从文件名解析），可用 `--platform` 覆盖。只执行 `publish` 时不校验宿主平台，便于推送别的机器
-上打好的包。
+上打好的包。同名交付包（同 `filename`）已在服务器发布时，默认返回 409 拒绝覆盖；确需重发同一构建号时加
+`--replace`，服务端会用原子 rename 替换旧包（读旧包的连接仍流式读旧 inode，新读者拿到新字节），否则请改用
+新版本号或新构建号。
 
 `http://` 会把上传令牌明文放在链路上：回环与内网私有地址（`10/8`、`172.16/12`、`192.168/16`、`169.254/16`、
 `100.64/10`、IPv6 `fc00::/7`、`fe80::/10`）默认放行；公网 IP 与域名需要确认链路可信后显式加 `--allow-http`，
@@ -324,6 +326,7 @@ Linux 当前项目 GN 未定义 render 目标，交付中缺少 arupa_render 会
 bash build.sh desktop publish                  # 推最大的交付 ZIP，站点源取 .env
 bash build.sh desktop publish --url http://192.168.77.104:8080
 bash build.sh desktop publish --file 7         # 指定交付序号
+bash build.sh desktop publish --replace        # 同名已发布时强制替换（默认 409 拒绝覆盖）
 bash build.sh desktop publish --dry-run        # 只看计划，不联网
 ```
 
