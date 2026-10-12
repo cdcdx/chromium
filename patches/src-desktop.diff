@@ -104,21 +104,104 @@ index b0ede6d70860e8bbc9a16155b0876f3f2bbff60e..8fdaa8ae58d6feecc9f4b97dd4f4def9
  }
  
  - (void)cancelSynchronously {
+diff --git a/content/browser/websockets/websocket_connector_impl.cc b/content/browser/websockets/websocket_connector_impl.cc
+index c1becd05ae6176b3dda90d1c97c48958b8e2a449..4438d02bf432b03ceaa55f36e436edcd19a3e742 100644
+--- a/content/browser/websockets/websocket_connector_impl.cc
++++ b/content/browser/websockets/websocket_connector_impl.cc
+@@ -7,6 +7,8 @@
+ #include <algorithm>
+ 
+ #include "base/command_line.h"
++#include "base/auto_reset.h"
++#include "content/public/browser/websocket_connect_context.h"
+ #include "base/not_fatal_until.h"
+ #include "content/browser/devtools/devtools_instrumentation.h"
+ #include "content/browser/renderer_host/render_frame_host_impl.h"
+@@ -28,6 +30,8 @@ namespace content {
+ 
+ namespace {
+ 
++const WebSocketConnectContext* g_connect_context = nullptr;
++
+ url::Origin MaybeTreatLocalOriginAsOpaque(const url::Origin& origin) {
+   if (std::ranges::contains(url::GetLocalSchemes(), origin.scheme()) &&
+       !base::CommandLine::ForCurrentProcess()->HasSwitch(
+@@ -66,6 +70,11 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
+         })");
+ }
+ 
++const WebSocketConnectContext* GetWebSocketConnectContext() {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  return g_connect_context;
++}
++
+ WebSocketConnectorImpl::WebSocketConnectorImpl(
+     const content::GlobalRenderFrameHostId& frame_id,
+     WeakDocumentPtr weak_document,
+@@ -120,6 +129,8 @@ void WebSocketConnectorImpl::Connect(
+     return;
+   }
+ 
++  WebSocketConnectContext trusted_context{process->GetBrowserContext(), process->GetStoragePartition(), origin_};
++  base::AutoReset<const WebSocketConnectContext*> scoped_context(&g_connect_context, &trusted_context);
+   RenderFrameHost* frame = RenderFrameHost::FromID(frame_id_);
+   content::ContentBrowserClient::WebSocketOptions options =
+       GetContentClient()->browser()->GetWebSocketOptions(frame);
+diff --git a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
+index 86a0536722bf79c105b0ab416f66158a00f01b06..60d2b28dbc4f1ed8cc980625b074c206597bfabb 100644
+--- a/content/public/browser/BUILD.gn
++++ b/content/public/browser/BUILD.gn
+@@ -550,6 +550,7 @@ source_set("browser_sources") {
+     "webrtc_log.cc",
+     "webrtc_log.h",
+     "websocket_handshake_request_info.h",
++    "websocket_connect_context.h",
+     "webui_config.cc",
+     "webui_config.h",
+     "webui_config_map.cc",
+diff --git a/content/public/browser/websocket_connect_context.h b/content/public/browser/websocket_connect_context.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d70dd9be8bb343d7b21f0e32fa7c26ad708e320
+--- /dev/null
++++ b/content/public/browser/websocket_connect_context.h
+@@ -0,0 +1,22 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef CONTENT_PUBLIC_BROWSER_WEBSOCKET_CONNECT_CONTEXT_H_
++#define CONTENT_PUBLIC_BROWSER_WEBSOCKET_CONNECT_CONTEXT_H_
++#include "content/common/content_export.h"
++#include "base/memory/raw_ptr.h"
++#include "url/origin.h"
++namespace content {
++class BrowserContext;
++class StoragePartition;
++// Browser-verified ownership for frame-less service/shared worker connections.
++// Borrowed on UI only, during GetWebSocketOptions/WillInterceptWebSocket/
++// CreateWebSocket. Embedders must copy needed values before posting async work.
++struct WebSocketConnectContext {
++  raw_ptr<BrowserContext> browser_context;
++  raw_ptr<StoragePartition> storage_partition;
++  url::Origin initiator;
++};
++CONTENT_EXPORT const WebSocketConnectContext* GetWebSocketConnectContext();
++}  // namespace content
++#endif
 diff --git a/extensions/common/mojom/api_permission_id.mojom b/extensions/common/mojom/api_permission_id.mojom
-index 262221ecd852507cd136254725e16c53a155fc99..1719580d79531ffe6eb03220206589afb815f576 100644
+index 262221ecd852507cd136254725e16c53a155fc99..e77891c095ec89351e7ddf8172b590cee587a14c 100644
 --- a/extensions/common/mojom/api_permission_id.mojom
 +++ b/extensions/common/mojom/api_permission_id.mojom
-@@ -299,7 +299,10 @@ enum APIPermissionID {
-   kBluetoothLowEnergy = 271,
+@@ -299,6 +299,10 @@ enum APIPermissionID {
    kBluetoothPeripheral = 272,
    kPublicSuffix = 273,
  
-+  kNomad = 274,
-+  kNomadTransfer = 275,
-+  kNomadSitePermissionAudit = 276,
- 
++  kNomad = 900,
++  kNomadTransfer = 901,
++  kNomadSitePermissionAudit = 903,
++
    // Add new entries at the end of the enum and be sure to update the
    // "ExtensionPermission3" enum in
+   // tools/metrics/histograms/metadata/extensions/enums.xml (by running
 diff --git a/extensions/renderer/ipc_message_sender.cc b/extensions/renderer/ipc_message_sender.cc
 index 76846f429e30749797f2f55e3ea706d018f59b4e..888184553f2408fa28c8c6beb45b7b27012b278c 100644
 --- a/extensions/renderer/ipc_message_sender.cc
