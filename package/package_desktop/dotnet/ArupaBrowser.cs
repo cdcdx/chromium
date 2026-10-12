@@ -43,16 +43,13 @@ namespace Arupa
     internal sealed class InterceptCallbackBridge : IDisposable
     {
         private IntPtr _lastInterceptResp;
+        private readonly List<IntPtr> _extraAllocations = new();
         private readonly object _interceptLock = new();
         private IntPtr _interceptMime, _interceptCharset, _interceptHeaders, _interceptBody;
         private IntPtr _interceptSetReqHdr, _interceptRemoveReqHdr, _interceptSetRespHdr, _interceptRemoveRespHdr;
         internal IntPtr Invoke(Func<InterceptRequest, InterceptResponse?>? h, IntPtr url, IntPtr method, IntPtr resourceType, int isMainFrame, IntPtr headers, IntPtr initiator, bool? thirdParty)
         {
-            if (h == null) return IntPtr.Zero;
-            InterceptResponse? resp;
-            try
-            {
-                resp = h(new InterceptRequest
+            return InvokeCore(h, new InterceptRequest
                 {
                     Url = Interop.Utf8(url) ?? "",
                     Method = Interop.Utf8(method) ?? "GET",
@@ -61,8 +58,42 @@ namespace Arupa
                     Headers = Interop.Utf8(headers),
                     InitiatorOrigin = Interop.Utf8(initiator),
                     IsThirdParty = thirdParty,
-                });
-            }
+                }, false);
+        }
+        internal IntPtr InvokeV3(Func<InterceptRequest, InterceptResponse?>? handler, IntPtr pointer)
+        {
+            if (pointer == IntPtr.Zero || (nuint)Marshal.ReadIntPtr(pointer) < (nuint)Marshal.SizeOf<Interop.InterceptRequestV3Native>()) return IntPtr.Zero;
+            var input = Marshal.PtrToStructure<Interop.InterceptRequestV3Native>(pointer);
+            if (input.version != 3) return IntPtr.Zero;
+            return InvokeCore(handler, new InterceptRequest {
+                Url = Interop.Utf8(input.url) ?? "", Method = Interop.Utf8(input.method) ?? "GET",
+                ResourceType = Interop.Utf8(input.resource_type) ?? "", IsForMainFrame = input.is_for_main_frame != 0,
+                Headers = Interop.Utf8(input.headers), InitiatorOrigin = Interop.Utf8(input.initiator_origin),
+                IsThirdParty = input.is_third_party != 0, TabId = input.tab_id, FrameId = input.frame_id,
+                ParentFrameId = input.parent_frame_id, DocumentId = Interop.Utf8(input.document_id),
+                AncestryJson = Interop.Utf8(input.ancestry_json), HasTrustedFrameContext = true,
+            }, true);
+        }
+        private IntPtr OwnString(string? value)
+        {
+            if (value is null) return IntPtr.Zero;
+            var pointer = Marshal.StringToCoTaskMemUTF8(value); _extraAllocations.Add(pointer); return pointer;
+        }
+        private IntPtr Operations(IReadOnlyList<InterceptHeaderOperation> operations)
+        {
+            if (operations.Count == 0 || operations.Count > 4096) return IntPtr.Zero;
+            int size = Marshal.SizeOf<Interop.HeaderOperationNative>();
+            var pointer = Marshal.AllocCoTaskMem(size * operations.Count); _extraAllocations.Add(pointer);
+            for (int i = 0; i < operations.Count; ++i) Marshal.StructureToPtr(new Interop.HeaderOperationNative {
+                operation = operations[i].Operation, name = OwnString(operations[i].Name), value = OwnString(operations[i].Value),
+            }, pointer + i * size, false);
+            return pointer;
+        }
+        private IntPtr InvokeCore(Func<InterceptRequest, InterceptResponse?>? h, InterceptRequest request, bool v3)
+        {
+            if (h == null) return IntPtr.Zero;
+            InterceptResponse? resp;
+            try { resp = h(request); }
             catch { return IntPtr.Zero; }   // 宿主回调抛 → 放行
             if (resp == null) return IntPtr.Zero;
 
@@ -99,7 +130,16 @@ namespace Arupa
                 };
                 _lastInterceptResp = Marshal.AllocCoTaskMem(Marshal.SizeOf<Interop.InterceptResponseNative>());
                 Marshal.StructureToPtr(native, _lastInterceptResp, false);
-                return _lastInterceptResp;
+                if (!v3) return _lastInterceptResp;
+                var extended = new Interop.InterceptResponseV3Native {
+                    struct_size = (nuint)Marshal.SizeOf<Interop.InterceptResponseV3Native>(), version = 3,
+                    legacy = _lastInterceptResp, action = (int)resp.Action, redirect_url = OwnString(resp.RedirectUrl),
+                    request_headers = Operations(resp.RequestHeaderOperations), request_header_count = (nuint)resp.RequestHeaderOperations.Count,
+                    response_headers = Operations(resp.ResponseHeaderOperations), response_header_count = (nuint)resp.ResponseHeaderOperations.Count,
+                };
+                var pointer = Marshal.AllocCoTaskMem(Marshal.SizeOf<Interop.InterceptResponseV3Native>());
+                _extraAllocations.Add(pointer); Marshal.StructureToPtr(extended, pointer, false);
+                return pointer;
             }
         }
 
@@ -109,6 +149,8 @@ namespace Arupa
         private void FreeLastInterceptResp()
         {
             void Free(ref IntPtr p) { if (p != IntPtr.Zero) { Marshal.FreeCoTaskMem(p); p = IntPtr.Zero; } }
+            foreach (var pointer in _extraAllocations) Marshal.FreeCoTaskMem(pointer);
+            _extraAllocations.Clear();
             Free(ref _lastInterceptResp);
             Free(ref _interceptMime); Free(ref _interceptCharset);
             Free(ref _interceptHeaders); Free(ref _interceptBody);
@@ -129,6 +171,12 @@ namespace Arupa
         public bool IsForMainFrame { get; init; }
         public string? InitiatorOrigin { get; init; }
         public bool? IsThirdParty { get; init; }
+        public int TabId { get; init; } = -1;
+        public int FrameId { get; init; } = -1;
+        public int ParentFrameId { get; init; } = -1;
+        public string? DocumentId { get; init; }
+        public string? AncestryJson { get; init; }
+        public bool HasTrustedFrameContext { get; init; }
         public string? Headers { get; init; }   // \n 分隔 "K: V"
     }
 
@@ -139,12 +187,17 @@ namespace Arupa
         ContinueWithModifiedHeaders = 1,   // 只改头: 请求继续走网络, 不合成响应
         // Requires ArupaKernel.SupportsRequestBlocking. No HTTP response is
         // produced; other response fields are ignored. Images/subframes collapse.
+        Redirect = 3,                     // ABI 1.36: real redirect, never a synthetic 307
         BlockRequest = 2,                  // net::ERR_BLOCKED_BY_CLIENT
     }
 
     // 返回此对象 = 按 Action 处置该请求; 返回 null = 放行 (原样走网络)。
+    public sealed record InterceptHeaderOperation(int Operation, string Name, string? Value);
     public sealed class InterceptResponse
     {
+        public string? RedirectUrl { get; init; }
+        public IReadOnlyList<InterceptHeaderOperation> RequestHeaderOperations { get; set; } = Array.Empty<InterceptHeaderOperation>();
+        public IReadOnlyList<InterceptHeaderOperation> ResponseHeaderOperations { get; set; } = Array.Empty<InterceptHeaderOperation>();
         public int StatusCode { get; set; } = 200;
         public string MimeType { get; set; } = "text/html";
         public string? Charset { get; set; } = "utf-8";
@@ -412,8 +465,15 @@ namespace Arupa
     public sealed class ArupaKernel : IDisposable
     {
         private readonly InterceptCallbackBridge _backgroundBridge = new();
-        private Interop.ShouldInterceptV2Native? _backgroundCallback;
+        private Delegate? _backgroundCallback;
+        private bool _backgroundV3;
         private GCHandle _backgroundRoot;
+        public static bool SupportsDnrV3 {
+            get { try { return Interop.arupa_kernel_supports("dnr.execution.v3") != 0; }
+                catch (EntryPointNotFoundException) { return false; } }
+        }
+        public static int CheckDeclarativeRuleCondition(string conditionJson, int actionType, string managedHostsCsv)
+            => Interop.arupa_mv3_check_declarative_rule_v2(conditionJson, actionType, managedHostsCsv);
         public static bool SupportsDnrRequestContext {
             get { try { return Interop.arupa_kernel_supports("dnr.request_context.v1") != 0; }
                 catch (EntryPointNotFoundException) { return false; } }
@@ -428,11 +488,15 @@ namespace Arupa
         {
             if (!SupportsDnrRequestContext) throw new NotSupportedException("dnr_request_context_unavailable");
             if (_backgroundCallback != null) throw new InvalidOperationException("dnr_background_already_bound");
-            _backgroundCallback = (u, url, method, type, main, headers, origin, third) =>
-                _backgroundBridge.Invoke(handler, url, method, type, main, headers, origin, third != 0);
+            _backgroundV3 = SupportsDnrV3;
+            _backgroundCallback = _backgroundV3
+                ? new Interop.ShouldInterceptV3Native((u, request) => _backgroundBridge.InvokeV3(handler, request))
+                : new Interop.ShouldInterceptV2Native((u, url, method, type, main, headers, origin, third) =>
+                    _backgroundBridge.Invoke(handler, url, method, type, main, headers, origin, third != 0));
             _backgroundRoot = GCHandle.Alloc(_backgroundCallback);
-            int result = Interop.arupa_kernel_set_background_request_callback(_handle,
-                Marshal.GetFunctionPointerForDelegate(_backgroundCallback), IntPtr.Zero);
+            int result = _backgroundV3
+                ? Interop.arupa_kernel_set_background_request_callback_v3(_handle, Marshal.GetFunctionPointerForDelegate(_backgroundCallback), IntPtr.Zero)
+                : Interop.arupa_kernel_set_background_request_callback(_handle, Marshal.GetFunctionPointerForDelegate(_backgroundCallback), IntPtr.Zero);
             if (result != 0) throw new InvalidOperationException($"dnr_background_bind_failed:{result}");
         }
 
@@ -1106,7 +1170,7 @@ namespace Arupa
             if (_handle != IntPtr.Zero)
             {
                 if (_backgroundCallback != null) {
-                    int result = Interop.arupa_kernel_set_background_request_callback(_handle, IntPtr.Zero, IntPtr.Zero);
+                    int result = (_backgroundV3 ? Interop.arupa_kernel_set_background_request_callback_v3(_handle, IntPtr.Zero, IntPtr.Zero) : Interop.arupa_kernel_set_background_request_callback(_handle, IntPtr.Zero, IntPtr.Zero));
                     // On a stopped/unresponsive runtime keep the delegate rooted;
                     // a late IO callback must never jump into collected memory.
                     if (result == 0) {
@@ -1611,6 +1675,7 @@ namespace Arupa
         private readonly Interop.OnErrorNative _onError;
         private readonly Interop.ShouldInterceptNative _onIntercept;   // FB-P002 C2/B2
         private readonly Interop.ShouldInterceptV2Native _onInterceptV2;
+        private readonly Interop.ShouldInterceptV3Native _onInterceptV3;
         private readonly Interop.ShouldInterceptExNative _onInterceptEx; // #34 (带 resource_type)
         private readonly Interop.OnDownloadNative _onDownload;         // FB-P002 B4
         // FB-P003: 高层 wiring 回调 (保活防 GC)。
@@ -1832,6 +1897,7 @@ namespace Arupa
             _onError = OnErrorThunk;
             _onInterceptV2 = (u, url, method, type, main, headers, origin, third) =>
                 _interceptBridge.Invoke(ShouldInterceptRequest, url, method, type, main, headers, origin, third != 0);
+            _onInterceptV3 = (u, request) => _interceptBridge.InvokeV3(ShouldInterceptRequest, request);
             _onIntercept = OnInterceptThunk;
             _onInterceptEx = OnInterceptExThunk;   // #34: 内核优先走这条, 资源类型只在它上面
             _onDownload = OnDownloadThunk;
@@ -2002,6 +2068,7 @@ namespace Arupa
             cbs.on_presentation_changed = Marshal.GetFunctionPointerForDelegate(_onPresentationChanged);
             cbs.on_browser_command = Marshal.GetFunctionPointerForDelegate(_onBrowserCommand);
             cbs.should_intercept_request_v2 = Marshal.GetFunctionPointerForDelegate(_onInterceptV2);
+            cbs.should_intercept_request_v3 = Marshal.GetFunctionPointerForDelegate(_onInterceptV3);
             cbs.on_open_new_window = Marshal.GetFunctionPointerForDelegate(_onNewWindow);
             cbs.should_override_url_loading = Marshal.GetFunctionPointerForDelegate(_onShouldOverride);
             // FB-P013 第三批: 装配权限/认证/文件选择回调 (struct 字段已在 capi ABI, 仅填指针)。

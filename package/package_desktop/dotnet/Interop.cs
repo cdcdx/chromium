@@ -45,6 +45,8 @@ namespace Arupa
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int arupa_kernel_set_background_request_callback(IntPtr kernel, IntPtr callback, IntPtr user);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        internal delegate IntPtr ShouldInterceptV3Native(IntPtr user, IntPtr request);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         internal delegate IntPtr ShouldInterceptV2Native(IntPtr user, IntPtr url, IntPtr method,
             IntPtr resourceType, int isMainFrame, IntPtr headers, IntPtr initiatorOrigin, int isThirdParty);
 
@@ -231,6 +233,7 @@ namespace Arupa
             public IntPtr on_presentation_changed;       // 36 OnPresentationChangedNative (统一呈现通道: 全屏 + 画中画)
             public IntPtr on_browser_command;            // 37 OnBrowserCommandNative (ABI 1.29)
             public IntPtr should_intercept_request_v2;   // 38 ABI 1.35
+            public IntPtr should_intercept_request_v3;   // 39 ABI 1.36
         }
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
@@ -334,6 +337,38 @@ namespace Arupa
         //   ArupaHeaderRewriteClient); 其余值 → 用本 struct 合成响应替换 (status_code/mime/
         //   charset/headers/body), 即旧行为。四个改头字段按 \n 分隔, set 为 "K: V"、remove 为 "K"
         //   (行尾 \r 与空格会被内核裁掉)。
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct InterceptRequestV3Native
+        {
+            public nuint struct_size;
+            public int version;
+            public IntPtr url, method, resource_type;
+            public int is_for_main_frame;
+            public IntPtr headers, initiator_origin;
+            public int is_third_party, tab_id, frame_id, parent_frame_id;
+            public IntPtr document_id, ancestry_json;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct HeaderOperationNative { public int operation; public IntPtr name, value; }
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct InterceptResponseV3Native
+        {
+            public nuint struct_size;
+            public int version;
+            public IntPtr legacy;
+            public int action;
+            public IntPtr redirect_url, request_headers;
+            public nuint request_header_count;
+            public IntPtr response_headers;
+            public nuint response_header_count;
+        }
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_kernel_set_background_request_callback_v3(IntPtr kernel, IntPtr callback, IntPtr user);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_mv3_check_declarative_rule_v2(
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string conditionJson, int action,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string hosts);
+
         [StructLayout(LayoutKind.Sequential)]
         public struct InterceptResponseNative
         {
