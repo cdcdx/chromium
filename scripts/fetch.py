@@ -358,7 +358,7 @@ def ensure_real_python3(depot):
             if entry and entry not in current:
                 os.environ["PATH"] = entry + os.pathsep + os.environ.get("PATH", "")
                 current.append(entry)
-        log(f"python3: {directory}（{'绕开系统 xcrun 桩' if HOST_OS == 'mac' else 'depot_tools 自举解释器'}）")
+        log(f"python3: {directory}（{'绕开 xcrun' if HOST_OS == 'mac' else 'depot_tools'}）")
         return
 
 

@@ -415,6 +415,9 @@ def package_command(args, target_os, arch, version):
 
 
 def main(argv=None):
+    # 当前环境缺 zh_CN locale，JVM 默认 ASCII 会导致中文 APK 文件名出现不可映射字符。
+    # 仅当用户未显式设置时兜底为 C.UTF-8，供 gradle/JVM 子进程继承。
+    os.environ.setdefault("LANG", "C.UTF-8")
     p = build_parser()
     args = p.parse_args(argv)
     F.DRY_RUN = args.dry_run

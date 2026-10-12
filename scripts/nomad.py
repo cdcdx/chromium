@@ -605,9 +605,10 @@ def android_build(root, args, arch, output):
         expected = json.loads(manifest.read_text()).get('files', {}).get(aar.relative_to(repo).as_posix())
         if expected and expected != digest(aar):
             F.err('AAR 与 runtime-manifest.json 指纹不匹配；请同步完整内核交付，不能混用版本')
-    # Gradle's ABI builds share outputs. Clean before each ABI so stale APKs
-    # cannot be mislabeled as the next architecture.
-    F.run(['bash', wrapper, ':app:clean', f':app:assemble{args.variant.capitalize()}',
+    # Gradle's ABI builds share outputs. Clean the whole project before each ABI so stale APKs
+    # cannot be mislabeled as the next architecture, and cross-module Kotlin/KSP artifacts
+    # (e.g. core built by a mismatched pre-release compiler) cannot leak into this build.
+    F.run(['bash', wrapper, 'clean', f':app:assemble{args.variant.capitalize()}',
            f'-PkernelAbi={arch}', '--max-workers', str(args.jobs)], repo)
     if F.DRY_RUN:
         return

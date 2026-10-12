@@ -13,6 +13,7 @@
 # python/nodejs
 __pycache__
 node_modules/
+.tmp-*
 
 # google
 _bad_scm/
