@@ -303,6 +303,55 @@ index b38c247bf2c640b1394505d49aa02edbc0dd54ae..7b24ffc01b5e4da9b59c0a27e297bda4
   protected:
    IPCMessageSender();
  };
+diff --git a/extensions/renderer/native_extension_bindings_system.cc b/extensions/renderer/native_extension_bindings_system.cc
+index 651e7d717558820e30bbf354a6002d9bdf5150ff..0faf27979a9323acba77717a2fb7af51f4e406eb 100644
+--- a/extensions/renderer/native_extension_bindings_system.cc
++++ b/extensions/renderer/native_extension_bindings_system.cc
+@@ -629,6 +629,44 @@ void NativeExtensionBindingsSystem::UpdateBindingsForContext(
+ 
+   DCHECK(GetBindingsDataFromContext(v8_context));
+ 
++  // Nomad: runtime is normally instantiated before optional nativeMessaging
++  // is granted. Resetting chrome's accessor does not refresh that cached object.
++  // Refresh only its two permission-dependent methods in place; rebuilding the
++  // namespace would replace event objects and lose existing page/worker listeners.
++  auto* bindings_data = GetBindingsDataFromContext(v8_context);
++  if (!bindings_data->api_object.IsEmpty()) {
++    v8::Context::Scope context_scope(v8_context);
++    v8::TryCatch try_catch(isolate);
++    auto apis = bindings_data->api_object.Get(isolate);
++    auto runtime_name = gin::StringToSymbol(isolate, "runtime");
++    v8::Local<v8::Value> cached;
++    if (apis->GetRealNamedProperty(v8_context, runtime_name).ToLocal(&cached) &&
++        cached->IsObject()) {
++      auto runtime = cached.As<v8::Object>();
++      v8::Local<v8::Object> fresh;
++      for (const char* method : {"connectNative", "sendNativeMessage"}) {
++        auto key = gin::StringToSymbol(isolate, method);
++        const bool available =
++            context->GetAvailability(std::string("runtime.") + method).is_available();
++        if (!available) {
++          if (!runtime->Delete(v8_context, key).FromMaybe(false)) break;
++        } else if (!runtime->HasRealNamedProperty(v8_context, key).FromMaybe(true)) {
++          if (fresh.IsEmpty()) {
++            APIBindingHooks* hooks = nullptr;
++            fresh = api_system_.CreateAPIInstance("runtime", v8_context, &hooks);
++          }
++          v8::Local<v8::Value> value;
++          if (fresh.IsEmpty() || !fresh->Get(v8_context, key).ToLocal(&value) ||
++              !value->IsFunction() ||
++              !runtime->CreateDataProperty(v8_context, key, value).FromMaybe(false))
++            break;
++        }
++      }
++    }
++    // Extension-owned objects may be frozen. Native access checks still enforce
++    // revocation even if JavaScript prevents changing its cached API surface.
++  }
++
+   auto set_accessor =
+       [chrome, &browser, isolate, v8_context,
+        set_accessor_on_browser](std::string_view accessor_name) {
 diff --git a/sandbox/win/src/broker_services.cc b/sandbox/win/src/broker_services.cc
 index 1787c7f7749b106e114add997caecc46d3bacd90..5860dd7df30cd41b853c25c422e68d899d40653b 100644
 --- a/sandbox/win/src/broker_services.cc

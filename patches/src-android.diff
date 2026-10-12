@@ -1,5 +1,5 @@
 diff --git a/.gitignore b/.gitignore
-index 63b0d36754..2e8573a1c1 100644
+index 63b0d3675470991a21eaac11e6d127e986edf279..2e8573a1c173ac234a75ba71a557950c318b235f 100644
 --- a/.gitignore
 +++ b/.gitignore
 @@ -350,3 +350,5 @@ third_party/rust/target/
@@ -9,7 +9,7 @@ index 63b0d36754..2e8573a1c1 100644
 +
 +agents/
 diff --git a/base/android/java/src/org/chromium/base/CallbackUtils.java b/base/android/java/src/org/chromium/base/CallbackUtils.java
-index 80c99c0cc9..d871797270 100644
+index 80c99c0cc91a843c8fdfced158dd9ee2e1d723af..d87179727011e30d1573d4c58c99b71f21943491 100644
 --- a/base/android/java/src/org/chromium/base/CallbackUtils.java
 +++ b/base/android/java/src/org/chromium/base/CallbackUtils.java
 @@ -13,7 +13,7 @@ public class CallbackUtils {
@@ -30,7 +30,7 @@ index 80c99c0cc9..d871797270 100644
      }
  }
 diff --git a/base/android/java/src/org/chromium/base/supplier/SupplierUtils.java b/base/android/java/src/org/chromium/base/supplier/SupplierUtils.java
-index 0da8d021e5..4a52eabd50 100644
+index 0da8d021e595e4b40eb2a80abdc9e4d27a70d28a..4a52eabd500ee7069d7e933135bc8485d887e21e 100644
 --- a/base/android/java/src/org/chromium/base/supplier/SupplierUtils.java
 +++ b/base/android/java/src/org/chromium/base/supplier/SupplierUtils.java
 @@ -42,7 +42,7 @@ public class SupplierUtils {
@@ -43,7 +43,7 @@ index 0da8d021e5..4a52eabd50 100644
                  if (supplier.get() != null) {
                      continue;
 diff --git a/build/android/gyp/compile_java.py b/build/android/gyp/compile_java.py
-index 691f2d956d..4c530d9507 100755
+index 691f2d956d86af8b7811d2539b6fa4c56e06b555..4c530d9507bd96805958f0f64785d46db3496abd 100755
 --- a/build/android/gyp/compile_java.py
 +++ b/build/android/gyp/compile_java.py
 @@ -708,7 +708,7 @@ def main(
@@ -56,7 +56,7 @@ index 691f2d956d..4c530d9507 100755
          # Chromium only allows UTF8 source files.  Being explicit avoids
          # javac pulling a default encoding from the user's environment.
 diff --git a/build/android/gyp/turbine.py b/build/android/gyp/turbine.py
-index e613ca33bf..0ee3ca9f6e 100755
+index e613ca33bf23cccc9827e0f40111c0b037bd9bdd..0ee3ca9f6e025cbdf98bc9d019e33e5e407e4a42 100755
 --- a/build/android/gyp/turbine.py
 +++ b/build/android/gyp/turbine.py
 @@ -107,7 +107,7 @@ def main(argv):
@@ -69,7 +69,7 @@ index e613ca33bf..0ee3ca9f6e 100755
  
      # Turbine reads lists from command line args by consuming args until one
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index f261c72029..7bea9fbdc2 100644
+index f261c72029a989e0fc0cdf0f7042b1bc12b84e07..0df146d14b9fbfad01ad11c2c14e2aca6d1bd23f 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
 @@ -2041,6 +2041,8 @@ source_set("browser") {
@@ -82,7 +82,7 @@ index f261c72029..7bea9fbdc2 100644
      ":unexpire_flags",
      "//base",
 diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
-index 3d46f9e7d3..1f6e512df2 100644
+index 3d46f9e7d35332f594f46cb50c93a072bc5b8208..1f6e512df2a34e0f6d83daab8054c8bcf6f2eb86 100644
 --- a/content/browser/renderer_host/navigation_request.cc
 +++ b/content/browser/renderer_host/navigation_request.cc
 @@ -4678,9 +4678,16 @@ UrlInfo NavigationRequest::GetUrlInfo() {
@@ -104,7 +104,7 @@ index 3d46f9e7d3..1f6e512df2 100644
  
    // Child frames (including fenced frames) should always use the
 diff --git a/content/browser/renderer_host/render_frame_host_manager.cc b/content/browser/renderer_host/render_frame_host_manager.cc
-index f840f244a6..7b4dc60dfd 100644
+index f840f244a653c38ed1f8b78fd08dc938762ccfb9..7b4dc60dfdf12bcbf2f51ef1803ece05f09473cf 100644
 --- a/content/browser/renderer_host/render_frame_host_manager.cc
 +++ b/content/browser/renderer_host/render_frame_host_manager.cc
 @@ -4069,9 +4069,13 @@ scoped_refptr<SiteInstanceImpl> RenderFrameHostManager::ConvertToSiteInstance(
@@ -123,7 +123,7 @@ index f840f244a6..7b4dc60dfd 100644
  
    // First check if the candidate SiteInstance matches.  For example, we get
 diff --git a/content/browser/service_worker/service_worker_new_script_fetcher.cc b/content/browser/service_worker/service_worker_new_script_fetcher.cc
-index 81112801ec..56a6d97172 100644
+index 81112801ec017611764e173cc0f43d17594275e0..56a6d97172caeef98f0ae3f33530c29b5d99482c 100644
 --- a/content/browser/service_worker/service_worker_new_script_fetcher.cc
 +++ b/content/browser/service_worker/service_worker_new_script_fetcher.cc
 @@ -3,6 +3,7 @@
@@ -149,7 +149,7 @@ index 81112801ec..56a6d97172 100644
        final_response_url,
        main_script_load_params->response_head->remote_endpoint);
 diff --git a/content/browser/service_worker/service_worker_version.cc b/content/browser/service_worker/service_worker_version.cc
-index ef0bdca126..2e7f21f753 100644
+index ef0bdca126875e5763b5bb01f4e733d322d0ab6c..2e7f21f753d492c15e8d9a76dee6650adaca88a5 100644
 --- a/content/browser/service_worker/service_worker_version.cc
 +++ b/content/browser/service_worker/service_worker_version.cc
 @@ -3,6 +3,9 @@
@@ -195,7 +195,7 @@ index ef0bdca126..2e7f21f753 100644
  
    embedded_worker_->Start(std::move(params),
 diff --git a/content/browser/site_instance_impl.cc b/content/browser/site_instance_impl.cc
-index 014ad1e920..f3c1cde84e 100644
+index 014ad1e920e648fbfff43ab0c82f655c2be28042..f3c1cde84ee9aba7f782e618763c652552622873 100644
 --- a/content/browser/site_instance_impl.cc
 +++ b/content/browser/site_instance_impl.cc
 @@ -168,8 +168,13 @@ scoped_refptr<SiteInstanceImpl> SiteInstanceImpl::CreateForUrlInfo(
@@ -253,7 +253,7 @@ index 014ad1e920..f3c1cde84e 100644
    return browsing_instance_->HasSiteInstance(site_info);
  }
 diff --git a/content/browser/site_instance_impl.h b/content/browser/site_instance_impl.h
-index 4a3a2353f6..8c0b8893e7 100644
+index 4a3a2353f6172746ade730a80bde6b5cf59ec843..8c0b8893e76fc3a68adc81fc0ae0457b299f9f93 100644
 --- a/content/browser/site_instance_impl.h
 +++ b/content/browser/site_instance_impl.h
 @@ -203,6 +203,8 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance {
@@ -265,8 +265,51 @@ index 4a3a2353f6..8c0b8893e7 100644
    // This is called every time a renderer process is assigned to a SiteInstance
    // and is used by the content embedder for collecting metrics.
    void set_process_assignment(SiteInstanceProcessAssignment assignment) {
+diff --git a/content/browser/websockets/websocket_connector_impl.cc b/content/browser/websockets/websocket_connector_impl.cc
+index c1becd05ae6176b3dda90d1c97c48958b8e2a449..4438d02bf432b03ceaa55f36e436edcd19a3e742 100644
+--- a/content/browser/websockets/websocket_connector_impl.cc
++++ b/content/browser/websockets/websocket_connector_impl.cc
+@@ -7,6 +7,8 @@
+ #include <algorithm>
+ 
+ #include "base/command_line.h"
++#include "base/auto_reset.h"
++#include "content/public/browser/websocket_connect_context.h"
+ #include "base/not_fatal_until.h"
+ #include "content/browser/devtools/devtools_instrumentation.h"
+ #include "content/browser/renderer_host/render_frame_host_impl.h"
+@@ -28,6 +30,8 @@ namespace content {
+ 
+ namespace {
+ 
++const WebSocketConnectContext* g_connect_context = nullptr;
++
+ url::Origin MaybeTreatLocalOriginAsOpaque(const url::Origin& origin) {
+   if (std::ranges::contains(url::GetLocalSchemes(), origin.scheme()) &&
+       !base::CommandLine::ForCurrentProcess()->HasSwitch(
+@@ -66,6 +70,11 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
+         })");
+ }
+ 
++const WebSocketConnectContext* GetWebSocketConnectContext() {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  return g_connect_context;
++}
++
+ WebSocketConnectorImpl::WebSocketConnectorImpl(
+     const content::GlobalRenderFrameHostId& frame_id,
+     WeakDocumentPtr weak_document,
+@@ -120,6 +129,8 @@ void WebSocketConnectorImpl::Connect(
+     return;
+   }
+ 
++  WebSocketConnectContext trusted_context{process->GetBrowserContext(), process->GetStoragePartition(), origin_};
++  base::AutoReset<const WebSocketConnectContext*> scoped_context(&g_connect_context, &trusted_context);
+   RenderFrameHost* frame = RenderFrameHost::FromID(frame_id_);
+   content::ContentBrowserClient::WebSocketOptions options =
+       GetContentClient()->browser()->GetWebSocketOptions(frame);
 diff --git a/content/public/android/java/src/org/chromium/content/browser/sms/SmsVerificationReceiver.java b/content/public/android/java/src/org/chromium/content/browser/sms/SmsVerificationReceiver.java
-index a2a14342a2..d48b7dbe5f 100644
+index a2a14342a2c1b70178089bca77ad571633b99854..d48b7dbe5f31b36d270afe8b291c6955857dcaed 100644
 --- a/content/public/android/java/src/org/chromium/content/browser/sms/SmsVerificationReceiver.java
 +++ b/content/public/android/java/src/org/chromium/content/browser/sms/SmsVerificationReceiver.java
 @@ -208,7 +208,7 @@ public class SmsVerificationReceiver extends BroadcastReceiver {
@@ -278,8 +321,48 @@ index a2a14342a2..d48b7dbe5f 100644
                      this.reportBackendAvailability(BackendAvailability.AVAILABLE);
                      mProvider.verificationReceiverSucceeded(isLocalRequest);
                  });
+diff --git a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
+index 86a0536722bf79c105b0ab416f66158a00f01b06..60d2b28dbc4f1ed8cc980625b074c206597bfabb 100644
+--- a/content/public/browser/BUILD.gn
++++ b/content/public/browser/BUILD.gn
+@@ -550,6 +550,7 @@ source_set("browser_sources") {
+     "webrtc_log.cc",
+     "webrtc_log.h",
+     "websocket_handshake_request_info.h",
++    "websocket_connect_context.h",
+     "webui_config.cc",
+     "webui_config.h",
+     "webui_config_map.cc",
+diff --git a/content/public/browser/websocket_connect_context.h b/content/public/browser/websocket_connect_context.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d70dd9be8bb343d7b21f0e32fa7c26ad708e320
+--- /dev/null
++++ b/content/public/browser/websocket_connect_context.h
+@@ -0,0 +1,22 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef CONTENT_PUBLIC_BROWSER_WEBSOCKET_CONNECT_CONTEXT_H_
++#define CONTENT_PUBLIC_BROWSER_WEBSOCKET_CONNECT_CONTEXT_H_
++#include "content/common/content_export.h"
++#include "base/memory/raw_ptr.h"
++#include "url/origin.h"
++namespace content {
++class BrowserContext;
++class StoragePartition;
++// Browser-verified ownership for frame-less service/shared worker connections.
++// Borrowed on UI only, during GetWebSocketOptions/WillInterceptWebSocket/
++// CreateWebSocket. Embedders must copy needed values before posting async work.
++struct WebSocketConnectContext {
++  raw_ptr<BrowserContext> browser_context;
++  raw_ptr<StoragePartition> storage_partition;
++  url::Origin initiator;
++};
++CONTENT_EXPORT const WebSocketConnectContext* GetWebSocketConnectContext();
++}  // namespace content
++#endif
 diff --git a/extensions/BUILD.gn b/extensions/BUILD.gn
-index 2800d35982..0864af900f 100644
+index 2800d3598299a64e1abe584d162827f6d2fa8cab..0864af900fc558f2fa1ad18789cf435ee79f3dc3 100644
 --- a/extensions/BUILD.gn
 +++ b/extensions/BUILD.gn
 @@ -8,7 +8,6 @@ import("//tools/grit/grit_rule.gni")
@@ -312,7 +395,7 @@ index 2800d35982..0864af900f 100644
      "//extensions/common:unit_tests",
      "//extensions/renderer:unit_tests",
 diff --git a/extensions/common/BUILD.gn b/extensions/common/BUILD.gn
-index 8b9e0d6bd7..8dea2ff582 100644
+index 8b9e0d6bd7040a0d44cc9642b5d5edf44ca5405a..8dea2ff582d81ec1a5eac527bd8445979c8810fa 100644
 --- a/extensions/common/BUILD.gn
 +++ b/extensions/common/BUILD.gn
 @@ -11,7 +11,6 @@ if (is_android) {
@@ -371,7 +454,7 @@ index 8b9e0d6bd7..8dea2ff582 100644
      "//ipc",
      "//services/device/public/cpp:test_support",
 diff --git a/extensions/common/api/BUILD.gn b/extensions/common/api/BUILD.gn
-index 4ff342c46d..d2df30ba35 100644
+index 4ff342c46d18e3152a97308441d2c250e5b5c17d..d2df30ba35f5ee7184a454bb70a4d4e0689025da 100644
 --- a/extensions/common/api/BUILD.gn
 +++ b/extensions/common/api/BUILD.gn
 @@ -8,7 +8,6 @@ import("//mojo/public/tools/bindings/mojom.gni")
@@ -383,7 +466,7 @@ index 4ff342c46d..d2df30ba35 100644
  ################################################################################
  # Public Targets
 diff --git a/extensions/common/api/_api_features.json b/extensions/common/api/_api_features.json
-index fa5b150c53..8df1f3e24b 100644
+index fa5b150c5310fa3559e93d1b2fd38925c2b39ff2..8df1f3e24b3dd34515577501a987d4015cfdef52 100644
 --- a/extensions/common/api/_api_features.json
 +++ b/extensions/common/api/_api_features.json
 @@ -140,16 +140,6 @@
@@ -464,7 +547,7 @@ index fa5b150c53..8df1f3e24b 100644
      "dependencies": ["manifest:replacement_web_app"],
      "extension_types": ["extension", "platform_app"],
 diff --git a/extensions/common/api/extension_action/action_info.cc b/extensions/common/api/extension_action/action_info.cc
-index a13f5a9021..dd3fdb0a17 100644
+index a13f5a90215721fdc9e26d9ee1f2094c19140506..dd3fdb0a179600adc5cb7e8144907b8da6d9f7a7 100644
 --- a/extensions/common/api/extension_action/action_info.cc
 +++ b/extensions/common/api/extension_action/action_info.cc
 @@ -19,7 +19,6 @@
@@ -476,7 +559,7 @@ index a13f5a9021..dd3fdb0a17 100644
  namespace extensions {
  
 diff --git a/extensions/common/api/extension_action/action_info.h b/extensions/common/api/extension_action/action_info.h
-index 63e5beec75..1b29973db6 100644
+index 63e5beec75a6431efbf04c5e54261df825b34161..1b29973db6a2a08ff970d2f01e15f4c94e5774d4 100644
 --- a/extensions/common/api/extension_action/action_info.h
 +++ b/extensions/common/api/extension_action/action_info.h
 @@ -14,7 +14,6 @@
@@ -488,7 +571,7 @@ index 63e5beec75..1b29973db6 100644
  namespace extensions {
  
 diff --git a/extensions/common/api/schema.gni b/extensions/common/api/schema.gni
-index 5fb6138fb2..b761284d94 100644
+index 5fb6138fb2da7cf7215d8c1384d55980e151cf17..b761284d949298170d1628b88f51a92fe84cea42 100644
 --- a/extensions/common/api/schema.gni
 +++ b/extensions/common/api/schema.gni
 @@ -135,6 +135,9 @@ if (enable_desktop_android_extensions) {
@@ -502,7 +585,7 @@ index 5fb6138fb2..b761284d94 100644
      get_path_info(extensions_api_schema_files_, "abspath")
  
 diff --git a/extensions/common/api/speech/tts_engine_manifest_handler.h b/extensions/common/api/speech/tts_engine_manifest_handler.h
-index 716bc98134..ec53e3f2a8 100644
+index 716bc98134d548fe75fc0e601c5c8e3256e945f8..ec53e3f2a8bc5cd4cc9bead1677b9c90104adb81 100644
 --- a/extensions/common/api/speech/tts_engine_manifest_handler.h
 +++ b/extensions/common/api/speech/tts_engine_manifest_handler.h
 @@ -15,7 +15,6 @@
@@ -514,7 +597,7 @@ index 716bc98134..ec53e3f2a8 100644
  namespace extensions {
  
 diff --git a/extensions/common/api/web_request/web_request_filter.h b/extensions/common/api/web_request/web_request_filter.h
-index 46ba17e5a3..78d764fb32 100644
+index 46ba17e5a3d6755a119a91a015a385253d598c52..78d764fb3265b49f47aa3e27a7a574ab9ca75ab7 100644
 --- a/extensions/common/api/web_request/web_request_filter.h
 +++ b/extensions/common/api/web_request/web_request_filter.h
 @@ -13,7 +13,6 @@
@@ -526,7 +609,7 @@ index 46ba17e5a3..78d764fb32 100644
  namespace base {
  class DictValue;
 diff --git a/extensions/common/api/web_request/web_request_resource_type.cc b/extensions/common/api/web_request/web_request_resource_type.cc
-index 8197e3be52..717d5b2e92 100644
+index 8197e3be52cd80f368d89c8ac51ac381e58b6b35..717d5b2e92c9ba4c0873a43418c8bb09cf213791 100644
 --- a/extensions/common/api/web_request/web_request_resource_type.cc
 +++ b/extensions/common/api/web_request/web_request_resource_type.cc
 @@ -11,7 +11,6 @@
@@ -538,7 +621,7 @@ index 8197e3be52..717d5b2e92 100644
  namespace extensions {
  
 diff --git a/extensions/common/api/web_request/web_request_resource_type.h b/extensions/common/api/web_request/web_request_resource_type.h
-index 33358210e5..6655474970 100644
+index 33358210e56131655d3f0a9558e6964b2ffba91d..66554749700a4c9795d15e0c5668948239cf942f 100644
 --- a/extensions/common/api/web_request/web_request_resource_type.h
 +++ b/extensions/common/api/web_request/web_request_resource_type.h
 @@ -11,7 +11,6 @@
@@ -550,7 +633,7 @@ index 33358210e5..6655474970 100644
  namespace extensions {
  
 diff --git a/extensions/common/command.cc b/extensions/common/command.cc
-index 80bfe1714f..1c141cf5d8 100644
+index 80bfe1714f0fad2a917377a9e31ee88056735120..1c141cf5d8c162216b6bde5cccc75b5d62eb9cf9 100644
 --- a/extensions/common/command.cc
 +++ b/extensions/common/command.cc
 @@ -122,6 +122,8 @@ std::string Command::CommandPlatform() {
@@ -563,7 +646,7 @@ index 80bfe1714f..1c141cf5d8 100644
  #error Unsupported platform
  #endif
 diff --git a/extensions/common/extension.h b/extensions/common/extension.h
-index bbbd9bbcc2..66501c8272 100644
+index bbbd9bbcc242ef260bd048d27b78dc8c250cdeab..66501c8272774be396c0ef561d8d06266b528a70 100644
 --- a/extensions/common/extension.h
 +++ b/extensions/common/extension.h
 @@ -29,7 +29,6 @@
@@ -575,7 +658,7 @@ index bbbd9bbcc2..66501c8272 100644
  namespace extensions {
  class HashedExtensionId;
 diff --git a/extensions/common/icons/extension_icon_variant.cc b/extensions/common/icons/extension_icon_variant.cc
-index b56506736f..a8f20640dc 100644
+index b56506736f2f4d9611dd557442e9de6779ac5981..a8f20640dc8dfcaa6462c0c24e059a366f98f3ff 100644
 --- a/extensions/common/icons/extension_icon_variant.cc
 +++ b/extensions/common/icons/extension_icon_variant.cc
 @@ -13,7 +13,6 @@
@@ -587,7 +670,7 @@ index b56506736f..a8f20640dc 100644
  namespace extensions {
  
 diff --git a/extensions/common/icons/extension_icon_variant.h b/extensions/common/icons/extension_icon_variant.h
-index f348f0bafd..a910f81df3 100644
+index f348f0bafdcbe3c15cfd01ed831f05d53115edf3..a910f81df3c240631280fb3e8fac172509e921c5 100644
 --- a/extensions/common/icons/extension_icon_variant.h
 +++ b/extensions/common/icons/extension_icon_variant.h
 @@ -16,7 +16,6 @@
@@ -599,7 +682,7 @@ index f348f0bafd..a910f81df3 100644
  namespace extensions {
  
 diff --git a/extensions/common/icons/extension_icon_variants.cc b/extensions/common/icons/extension_icon_variants.cc
-index c90740f37e..c6a70ea5c6 100644
+index c90740f37ecfddc983dcce4b1866908c2f7548c5..c6a70ea5c6178940cde1042f46b71f33f45d90ab 100644
 --- a/extensions/common/icons/extension_icon_variants.cc
 +++ b/extensions/common/icons/extension_icon_variants.cc
 @@ -8,7 +8,6 @@
@@ -611,7 +694,7 @@ index c90740f37e..c6a70ea5c6 100644
  namespace extensions {
  
 diff --git a/extensions/common/icons/extension_icon_variants.h b/extensions/common/icons/extension_icon_variants.h
-index 43c5b1be01..510788e3c0 100644
+index 43c5b1be01cbb6e04f2cc47b37b12672ada4ea07..510788e3c09799d8c0c20f6f0dc76541ae79dfc9 100644
 --- a/extensions/common/icons/extension_icon_variants.h
 +++ b/extensions/common/icons/extension_icon_variants.h
 @@ -14,7 +14,6 @@
@@ -623,7 +706,7 @@ index 43c5b1be01..510788e3c0 100644
  namespace extensions {
  
 diff --git a/extensions/common/icons/extension_icon_variants_diagnostics.cc b/extensions/common/icons/extension_icon_variants_diagnostics.cc
-index 4b150bfc24..fcbab12278 100644
+index 4b150bfc24639e2517e60bbc23f5364d90bbf5ff..fcbab12278c48697b7c4f4863a753f0f35514f0e 100644
 --- a/extensions/common/icons/extension_icon_variants_diagnostics.cc
 +++ b/extensions/common/icons/extension_icon_variants_diagnostics.cc
 @@ -8,7 +8,6 @@
@@ -635,7 +718,7 @@ index 4b150bfc24..fcbab12278 100644
  namespace extensions::diagnostics::icon_variants {
  
 diff --git a/extensions/common/icons/extension_icon_variants_diagnostics.h b/extensions/common/icons/extension_icon_variants_diagnostics.h
-index 0a8e377c16..5c6871d0b8 100644
+index 0a8e377c16adbeed64c822162d27445ec615a903..5c6871d0b825809e48d52b4e6e1c01225d7736ae 100644
 --- a/extensions/common/icons/extension_icon_variants_diagnostics.h
 +++ b/extensions/common/icons/extension_icon_variants_diagnostics.h
 @@ -7,7 +7,6 @@
@@ -647,7 +730,7 @@ index 0a8e377c16..5c6871d0b8 100644
  namespace extensions::diagnostics::icon_variants {
  
 diff --git a/extensions/common/manifest_handlers/icon_variants_handler.cc b/extensions/common/manifest_handlers/icon_variants_handler.cc
-index ac729225a8..d5e97333f2 100644
+index ac729225a82c6fbe544165794a612d9857acdf4c..d5e97333f29a6c842c408ef004d734a8350a7389 100644
 --- a/extensions/common/manifest_handlers/icon_variants_handler.cc
 +++ b/extensions/common/manifest_handlers/icon_variants_handler.cc
 @@ -19,7 +19,6 @@
@@ -659,7 +742,7 @@ index ac729225a8..d5e97333f2 100644
  namespace extensions {
  
 diff --git a/extensions/common/manifest_handlers/icon_variants_handler.h b/extensions/common/manifest_handlers/icon_variants_handler.h
-index fc98ec58eb..0fb273ddd1 100644
+index fc98ec58eb3096a051c1f76c3f06255f13a5f3fe..0fb273ddd1222d984ef6f328ef3c01ccbe285e88 100644
 --- a/extensions/common/manifest_handlers/icon_variants_handler.h
 +++ b/extensions/common/manifest_handlers/icon_variants_handler.h
 @@ -14,7 +14,6 @@
@@ -671,7 +754,7 @@ index fc98ec58eb..0fb273ddd1 100644
  namespace extensions {
  
 diff --git a/extensions/common/manifest_handlers/icons_handler.cc b/extensions/common/manifest_handlers/icons_handler.cc
-index 8b94f93f4d..dc78a9f653 100644
+index 8b94f93f4d5e9556ee3e512d2f149a5caff3154b..dc78a9f653aebf9b35c735a7619bb8e7c665aa31 100644
 --- a/extensions/common/manifest_handlers/icons_handler.cc
 +++ b/extensions/common/manifest_handlers/icons_handler.cc
 @@ -23,7 +23,6 @@
@@ -683,22 +766,22 @@ index 8b94f93f4d..dc78a9f653 100644
  namespace extensions {
  
 diff --git a/extensions/common/mojom/api_permission_id.mojom b/extensions/common/mojom/api_permission_id.mojom
-index 262221ecd8..444e9df49a 100644
+index 262221ecd852507cd136254725e16c53a155fc99..d741fd21224f28c2e1b68d4124355990633842e1 100644
 --- a/extensions/common/mojom/api_permission_id.mojom
 +++ b/extensions/common/mojom/api_permission_id.mojom
-@@ -299,7 +299,10 @@ enum APIPermissionID {
+@@ -299,6 +299,10 @@ enum APIPermissionID {
    kBluetoothPeripheral = 272,
    kPublicSuffix = 273,
  
 +  kNomad = 900,
 +  kNomadTransfer = 901,
 +  kNomadSitePermissionAudit = 902,
- 
++
    // Add new entries at the end of the enum and be sure to update the
    // "ExtensionPermission3" enum in
    // tools/metrics/histograms/metadata/extensions/enums.xml (by running
 diff --git a/extensions/renderer/BUILD.gn b/extensions/renderer/BUILD.gn
-index 254e3a7e7b..6e8f0771de 100644
+index 254e3a7e7bd7f50444a42c5b04a703da5b816d5f..6e8f0771de47f2f15b574eb9f8894ac9724915a9 100644
 --- a/extensions/renderer/BUILD.gn
 +++ b/extensions/renderer/BUILD.gn
 @@ -6,7 +6,6 @@ import("//components/guest_view/buildflags/buildflags.gni")
@@ -730,7 +813,7 @@ index 254e3a7e7b..6e8f0771de 100644
      sources += [
        "api/automation/automation_api_converters.cc",
 diff --git a/extensions/renderer/ipc_message_sender.cc b/extensions/renderer/ipc_message_sender.cc
-index 76846f429e..444fd75fd0 100644
+index 76846f429e30749797f2f55e3ea706d018f59b4e..444fd75fd0f9beee557d3e010eec02c2bc2d5c77 100644
 --- a/extensions/renderer/ipc_message_sender.cc
 +++ b/extensions/renderer/ipc_message_sender.cc
 @@ -11,6 +11,7 @@
@@ -785,7 +868,7 @@ index 76846f429e..444fd75fd0 100644
        dispatcher, context_proxy, service_worker_version_id);
  }
 diff --git a/extensions/renderer/ipc_message_sender.h b/extensions/renderer/ipc_message_sender.h
-index b38c247bf2..7ebf734317 100644
+index b38c247bf2c640b1394505d49aa02edbc0dd54ae..7ebf734317a99047571e5b21f7ae16e43d585591 100644
 --- a/extensions/renderer/ipc_message_sender.h
 +++ b/extensions/renderer/ipc_message_sender.h
 @@ -118,6 +118,14 @@ class IPCMessageSender {
@@ -804,7 +887,7 @@ index b38c247bf2..7ebf734317 100644
    static std::unique_ptr<IPCMessageSender> CreateMainThreadIPCMessageSender();
  
 diff --git a/extensions/renderer/resources/BUILD.gn b/extensions/renderer/resources/BUILD.gn
-index 9a1ad82ba2..1198b87c65 100644
+index 9a1ad82ba274bb1ae58187c187cc80dd73ce081e..1198b87c656a4f29b9a80ea394729bda62cb16b4 100644
 --- a/extensions/renderer/resources/BUILD.gn
 +++ b/extensions/renderer/resources/BUILD.gn
 @@ -6,7 +6,6 @@ import("//extensions/buildflags/buildflags.gni")
@@ -816,7 +899,7 @@ index 9a1ad82ba2..1198b87c65 100644
  grit("extensions_renderer_resources") {
    source = "extensions_renderer_resources.grd"
 diff --git a/extensions/strings/BUILD.gn b/extensions/strings/BUILD.gn
-index 9fb23a9622..b12ac6f06e 100644
+index 9fb23a962240180984114f340d275b4462a58487..b12ac6f06e468c466d992f8dd3d7748ec4f636f1 100644
 --- a/extensions/strings/BUILD.gn
 +++ b/extensions/strings/BUILD.gn
 @@ -6,7 +6,6 @@ import("//build/config/locales.gni")
@@ -828,7 +911,7 @@ index 9fb23a9622..b12ac6f06e 100644
  grit_strings("strings") {
    source = "extensions_strings.grd"
 diff --git a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
-index 1401e99cb9..cac3ce238b 100644
+index 1401e99cb9e66f19e1ef8df3380816605b289fec..cac3ce238bdc82c14d4decdfa1a373596dfb1ce0 100644
 --- a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
 +++ b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
 @@ -138,6 +138,57 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
@@ -890,7 +973,7 @@ index 1401e99cb9..cac3ce238b 100644
  }
  
 diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
-index 336c8061e4..d713a504e8 100644
+index 336c8061e4251dc355f9480527d03d46506b61c2..d713a504e8d4bd283045aa52a154279fdf393df8 100644
 --- a/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
 +++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences.h
 @@ -103,6 +103,41 @@ struct BLINK_COMMON_EXPORT RendererPreferences {
@@ -936,7 +1019,7 @@ index 336c8061e4..d713a504e8 100644
    RendererPreferences(const RendererPreferences& other);
    RendererPreferences(RendererPreferences&& other);
 diff --git a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
-index d0279aa1ca..ca73a02de3 100644
+index d0279aa1ca30864326c0f20b11dee24730595c36..ca73a02de3ccac8f927f75c441c5f69436089813 100644
 --- a/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
 +++ b/third_party/blink/public/common/renderer_preferences/renderer_preferences_mojom_traits.h
 @@ -299,6 +299,137 @@ struct BLINK_COMMON_EXPORT
@@ -1078,7 +1161,7 @@ index d0279aa1ca..ca73a02de3 100644
                     ::blink::RendererPreferences* out);
  };
 diff --git a/third_party/blink/public/mojom/renderer_preferences.mojom b/third_party/blink/public/mojom/renderer_preferences.mojom
-index 026d009b9d..b508188c8e 100644
+index 026d009b9d7280f9e4bd59dee978c4777ffe1f4e..b508188c8e64ee3785dce1434f65cf133d46ae9d 100644
 --- a/third_party/blink/public/mojom/renderer_preferences.mojom
 +++ b/third_party/blink/public/mojom/renderer_preferences.mojom
 @@ -217,4 +217,38 @@ struct RendererPreferences {
@@ -1121,7 +1204,7 @@ index 026d009b9d..b508188c8e 100644
 +  string arupa_dns_doh_endpoint;
  };
 diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_party/blink/renderer/core/exported/web_view_impl.cc
-index 66e05f0dd9..5d1d08fa4c 100644
+index 66e05f0dd9d7e87a02fc6e76ce74d4d149f4a943..5d1d08fa4c21cf68aa2b71e9d4663131b5a70849 100644
 --- a/third_party/blink/renderer/core/exported/web_view_impl.cc
 +++ b/third_party/blink/renderer/core/exported/web_view_impl.cc
 @@ -141,6 +141,7 @@
@@ -1257,7 +1340,7 @@ index 66e05f0dd9..5d1d08fa4c 100644
        renderer_preferences_.caret_browsing_enabled);
  
 diff --git a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
-index f5c0db2d1b..388a747b69 100644
+index f5c0db2d1b58de1fb54aa6545de8ac0fb177319e..388a747b6984c89de857425747fa6a93fe9b6779 100644
 --- a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
 +++ b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
 @@ -5,10 +5,44 @@
@@ -1306,7 +1389,7 @@ index f5c0db2d1b..388a747b69 100644
  }
  
 diff --git a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h
-index 305eea53fc..7288405be7 100644
+index 305eea53fc02290af419c243b26d83a1adbc144c..7288405be791a550f0ade4a16629f3cc8f2b4d07 100644
 --- a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h
 +++ b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h
 @@ -5,7 +5,9 @@
@@ -1334,7 +1417,7 @@ index 305eea53fc..7288405be7 100644
  
  #endif  // THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_NAVIGATOR_CONCURRENT_HARDWARE_H_
 diff --git a/third_party/blink/renderer/core/frame/navigator_ua_data.cc b/third_party/blink/renderer/core/frame/navigator_ua_data.cc
-index 73ad371b32..da65ff1480 100644
+index 73ad371b3237ad956e7971ab5f9e7145acd80597..da65ff148016a812f92bfaa7af7bc0cb18398f3b 100644
 --- a/third_party/blink/renderer/core/frame/navigator_ua_data.cc
 +++ b/third_party/blink/renderer/core/frame/navigator_ua_data.cc
 @@ -11,8 +11,12 @@
@@ -1401,7 +1484,7 @@ index 73ad371b32..da65ff1480 100644
          values->setFullVersionList(full_version_list_);
        } else if (hint == "wow64") {
 diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
-index ed5028943e..1bc3c1695d 100644
+index ed5028943e3d702f7332807f7fdff73c906dde51..1bc3c1695da5398030a38ede4439ad662312070f 100644
 --- a/third_party/blink/renderer/core/frame/screen.cc
 +++ b/third_party/blink/renderer/core/frame/screen.cc
 @@ -29,6 +29,7 @@
@@ -1460,7 +1543,7 @@ index ed5028943e..1bc3c1695d 100644
               ? unknown_color_depth
               : base::saturated_cast<unsigned>(GetScreenInfo().depth);
 diff --git a/third_party/blink/renderer/core/frame/settings.json5 b/third_party/blink/renderer/core/frame/settings.json5
-index 302de65601..8caef1d715 100644
+index 302de6560185150699a272010595d9be590705d4..8caef1d715e5ac4b2edc203c86063cdad274e827 100644
 --- a/third_party/blink/renderer/core/frame/settings.json5
 +++ b/third_party/blink/renderer/core/frame/settings.json5
 @@ -74,6 +74,143 @@
@@ -1608,7 +1691,7 @@ index 302de65601..8caef1d715 100644
      // visible for N seconds, configured by the passwordEchoDurationInSeconds setting.
  
 diff --git a/third_party/blink/renderer/core/geolocation/geolocation.cc b/third_party/blink/renderer/core/geolocation/geolocation.cc
-index 73e27320ca..1c01b5b3ac 100644
+index 73e27320ca197298bbc682f932241b0c53d4ed1d..1c01b5b3ac91ad884c8bd85de4b4c024d886d1d4 100644
 --- a/third_party/blink/renderer/core/geolocation/geolocation.cc
 +++ b/third_party/blink/renderer/core/geolocation/geolocation.cc
 @@ -30,6 +30,7 @@
@@ -1686,7 +1769,7 @@ index 73e27320ca..1c01b5b3ac 100644
    } else {
      DCHECK(result->is_error());
 diff --git a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
-index 3f4754bec0..08a4882a48 100644
+index 3f4754bec03d67535ae34367b7e99273378a691c..08a4882a48b7ccb18164befa1d0eb8d8fc457424 100644
 --- a/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
 +++ b/third_party/blink/renderer/core/html/canvas/html_canvas_element.cc
 @@ -36,6 +36,7 @@
@@ -1717,7 +1800,7 @@ index 3f4754bec0..08a4882a48 100644
        return String("data:,");
  
 diff --git a/third_party/blink/renderer/core/html/media/html_media_element.cc b/third_party/blink/renderer/core/html/media/html_media_element.cc
-index 6b76280e65..801038d5d4 100644
+index 6b76280e65c07a120354031b1052719cf4eb6efd..801038d5d4d1c377381ba5f860831012ee546117 100644
 --- a/third_party/blink/renderer/core/html/media/html_media_element.cc
 +++ b/third_party/blink/renderer/core/html/media/html_media_element.cc
 @@ -35,7 +35,10 @@
@@ -1767,7 +1850,7 @@ index 6b76280e65..801038d5d4 100644
        GetSupportsType(ContentType(mime_type));
  
 diff --git a/third_party/blink/renderer/modules/battery/battery_manager.cc b/third_party/blink/renderer/modules/battery/battery_manager.cc
-index 51cdc75cee..956da99959 100644
+index 51cdc75ceee61457adf719c20188838d51bb4da5..956da99959a07d300caca0afe5b6f05d48909326 100644
 --- a/third_party/blink/renderer/modules/battery/battery_manager.cc
 +++ b/third_party/blink/renderer/modules/battery/battery_manager.cc
 @@ -11,10 +11,20 @@
@@ -1819,7 +1902,7 @@ index 51cdc75cee..956da99959 100644
  }
  
 diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
-index 3d7a843995..6b0fa37372 100644
+index 3d7a843995b4d882164db14318005ec44116af7a..6b0fa37372aef4d665efeab83f7e73b3c78780ae 100644
 --- a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
 +++ b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
 @@ -1,6 +1,9 @@
@@ -1903,7 +1986,7 @@ index 3d7a843995..6b0fa37372 100644
  
    return image_data;
 diff --git a/third_party/blink/renderer/modules/media_capabilities/BUILD.gn b/third_party/blink/renderer/modules/media_capabilities/BUILD.gn
-index 830b332f18..8944c2806d 100644
+index 830b332f187e0c9e968d2d83815630582d94a363..8944c2806d31f8a35cd05d57e15bade5bd0b7f48 100644
 --- a/third_party/blink/renderer/modules/media_capabilities/BUILD.gn
 +++ b/third_party/blink/renderer/modules/media_capabilities/BUILD.gn
 @@ -8,10 +8,13 @@ import("//third_party/protobuf/proto_library.gni")
@@ -1922,7 +2005,7 @@ index 830b332f18..8944c2806d 100644
      "//third_party/blink/renderer/modules/mediarecorder",
 diff --git a/third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.cc b/third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.cc
 new file mode 100644
-index 0000000000..4f1d3fe392
+index 0000000000000000000000000000000000000000..4f1d3fe3924de9aa436a7fcfef514178812efb3f
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.cc
 @@ -0,0 +1,53 @@
@@ -1981,7 +2064,7 @@ index 0000000000..4f1d3fe392
 +}
 diff --git a/third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.h b/third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.h
 new file mode 100644
-index 0000000000..7ae34dc821
+index 0000000000000000000000000000000000000000..7ae34dc82180074c87a53be2805ee7273852a3f8
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/media_capabilities/arupa_codec_profile.h
 @@ -0,0 +1,11 @@
@@ -1997,7 +2080,7 @@ index 0000000000..7ae34dc821
 +}
 +#endif
 diff --git a/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc b/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc
-index 1dea63eee6..20cb2185e6 100644
+index 1dea63eee609e98e7ef77872f34cc52bafccb13b..20cb2185e6ec24a0a81490f9ccb88c03846d0bc1 100644
 --- a/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc
 +++ b/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc
 @@ -50,7 +50,9 @@
@@ -2037,7 +2120,7 @@ index 1dea63eee6..20cb2185e6 100644
  
    if (config->hasKeySystemConfiguration()) {
 diff --git a/third_party/blink/renderer/modules/mediastream/media_devices.cc b/third_party/blink/renderer/modules/mediastream/media_devices.cc
-index f0e1886c47..b6e3c84a2b 100644
+index f0e1886c47914763c81471da8b1a0f9e9f44a79b..b6e3c84a2b57786bc862f56b2b2bf5bbc40a1094 100644
 --- a/third_party/blink/renderer/modules/mediastream/media_devices.cc
 +++ b/third_party/blink/renderer/modules/mediastream/media_devices.cc
 @@ -1,6 +1,9 @@
@@ -2132,7 +2215,7 @@ index f0e1886c47..b6e3c84a2b 100644
      }
    }
 diff --git a/third_party/blink/renderer/modules/netinfo/network_information.cc b/third_party/blink/renderer/modules/netinfo/network_information.cc
-index 976a3c8c36..5078a77f12 100644
+index 976a3c8c36dbfa20f1271918bd0570a4d9d4419f..5078a77f122b7594ae7599b9bfbde9a67fa49809 100644
 --- a/third_party/blink/renderer/modules/netinfo/network_information.cc
 +++ b/third_party/blink/renderer/modules/netinfo/network_information.cc
 @@ -14,6 +14,9 @@
@@ -2195,7 +2278,7 @@ index 976a3c8c36..5078a77f12 100644
        IsObserving() ? save_data_ : GetNetworkStateNotifier().SaveDataEnabled();
  
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
-index bc4c0c6ca0..1902fc4304 100644
+index bc4c0c6ca00c1976e6ee013a467a9a585c79454f..1902fc43043da7939a649e30bca25f234c429ca4 100644
 --- a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
 +++ b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
 @@ -33,6 +33,7 @@
@@ -2234,7 +2317,7 @@ index bc4c0c6ca0..1902fc4304 100644
  }
  
 diff --git a/third_party/blink/renderer/modules/webcodecs/BUILD.gn b/third_party/blink/renderer/modules/webcodecs/BUILD.gn
-index 39e3a34712..2b6ae48c86 100644
+index 39e3a347124533d973aa82c3632981a1aad0e2c0..2b6ae48c866d0ced75bb8cd4ddd26f8978d548cd 100644
 --- a/third_party/blink/renderer/modules/webcodecs/BUILD.gn
 +++ b/third_party/blink/renderer/modules/webcodecs/BUILD.gn
 @@ -11,6 +11,8 @@ import("//third_party/protobuf/proto_library.gni")
@@ -2248,7 +2331,7 @@ index 39e3a34712..2b6ae48c86 100644
      "audio_data.cc",
 diff --git a/third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.cc b/third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.cc
 new file mode 100644
-index 0000000000..b6e5f29ecf
+index 0000000000000000000000000000000000000000..b6e5f29ecf745306e473d1ed826f8913c6946ebd
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.cc
 @@ -0,0 +1,25 @@
@@ -2279,7 +2362,7 @@ index 0000000000..b6e5f29ecf
 +}
 diff --git a/third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.h b/third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.h
 new file mode 100644
-index 0000000000..915a54185a
+index 0000000000000000000000000000000000000000..915a54185a46f9fc650a6cbd64fcf6e6ba2ba64a
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/webcodecs/arupa_codec_whitelist.h
 @@ -0,0 +1,9 @@
@@ -2293,7 +2376,7 @@ index 0000000000..915a54185a
 +}
 +#endif
 diff --git a/third_party/blink/renderer/modules/webcodecs/audio_decoder.cc b/third_party/blink/renderer/modules/webcodecs/audio_decoder.cc
-index 588eaf21d9..59c01e654b 100644
+index 588eaf21d95a9deb8dc0d37e9c7df1468c3d279f..59c01e654bef10e05aa13f9dadf7dc1ab45fe261 100644
 --- a/third_party/blink/renderer/modules/webcodecs/audio_decoder.cc
 +++ b/third_party/blink/renderer/modules/webcodecs/audio_decoder.cc
 @@ -25,7 +25,11 @@
@@ -2330,7 +2413,7 @@ index 588eaf21d9..59c01e654b 100644
    std::optional<media::AudioType> audio_type =
        IsValidAudioDecoderConfig(*config, &js_error_message);
 diff --git a/third_party/blink/renderer/modules/webcodecs/audio_encoder.cc b/third_party/blink/renderer/modules/webcodecs/audio_encoder.cc
-index 93468e644c..15df52b1c4 100644
+index 93468e644cabc33aa688b5de2b4746685f9ff3a0..15df52b1c474173e90758f2ca348aea2c1f10aa3 100644
 --- a/third_party/blink/renderer/modules/webcodecs/audio_encoder.cc
 +++ b/third_party/blink/renderer/modules/webcodecs/audio_encoder.cc
 @@ -33,7 +33,11 @@
@@ -2367,7 +2450,7 @@ index 93468e644c..15df52b1c4 100644
    if (!parsed_config) {
      DCHECK(exception_state.HadException());
 diff --git a/third_party/blink/renderer/modules/webcodecs/video_decoder.cc b/third_party/blink/renderer/modules/webcodecs/video_decoder.cc
-index b5e7219165..bece471883 100644
+index b5e7219165ba41a47c049b4e598d7b5c02f8b857..bece4718836c4349c8fb7de8a32744eb8994601e 100644
 --- a/third_party/blink/renderer/modules/webcodecs/video_decoder.cc
 +++ b/third_party/blink/renderer/modules/webcodecs/video_decoder.cc
 @@ -31,8 +31,12 @@
@@ -2405,7 +2488,7 @@ index b5e7219165..bece471883 100644
    String js_error_message;
    std::optional<media::VideoType> video_type =
 diff --git a/third_party/blink/renderer/modules/webcodecs/video_encoder.cc b/third_party/blink/renderer/modules/webcodecs/video_encoder.cc
-index b0580eb9b9..13b029e68e 100644
+index b0580eb9b94e437c9644c5de20153355a02e3d1b..13b029e68ee62db9ad7ffc41578daccd6e40314c 100644
 --- a/third_party/blink/renderer/modules/webcodecs/video_encoder.cc
 +++ b/third_party/blink/renderer/modules/webcodecs/video_encoder.cc
 @@ -69,10 +69,12 @@
@@ -2443,7 +2526,7 @@ index b0580eb9b9..13b029e68e 100644
    if (!parsed_config) {
      DCHECK(exception_state.HadException());
 diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
-index 26c0a088cc..b007ab73d1 100644
+index 26c0a088cc1ab42c97f8024fd59fe1bbb481b228..b007ab73d12b3c4164c3f303540d73ce64ac0e07 100644
 --- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
 +++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
 @@ -4200,6 +4200,13 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
@@ -2475,7 +2558,7 @@ index 26c0a088cc..b007ab73d1 100644
                          String(ContextGL()->GetString(GL_VENDOR)));
        }
 diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
-index 5d35a355c7..8c2e3d0ff3 100644
+index 5d35a355c7743111841128548855e86338bbd7c2..8c2e3d0ff3687b84069d05e48455ae3c69128220 100644
 --- a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
 +++ b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
 @@ -11,6 +11,7 @@
@@ -2516,7 +2599,7 @@ index 5d35a355c7..8c2e3d0ff3 100644
    }
  
 diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
-index 372b10936b..204877ff7f 100644
+index 372b10936b23e113239e29dbadad2338c1d27fc4..204877ff7f88db320c3054f4705f4747d015b5c9 100644
 --- a/third_party/blink/renderer/platform/fonts/font_cache.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
 @@ -77,7 +77,42 @@
@@ -2583,7 +2666,7 @@ index 372b10936b..204877ff7f 100644
        font_description,
        FontFaceCreationParams(AdjustFamilyNameToAvoidUnsupportedFonts(family)),
 diff --git a/third_party/blink/renderer/platform/fonts/font_cache.h b/third_party/blink/renderer/platform/fonts/font_cache.h
-index cdeca583f0..75d094fbfb 100644
+index cdeca583f077fe784167062e2445f2ef082a39d5..75d094fbfbb3367eccafdfe6815d9eb569fc8fb9 100644
 --- a/third_party/blink/renderer/platform/fonts/font_cache.h
 +++ b/third_party/blink/renderer/platform/fonts/font_cache.h
 @@ -132,6 +132,8 @@ class PLATFORM_EXPORT FontCache final {
@@ -2596,7 +2679,7 @@ index cdeca583f0..75d094fbfb 100644
  
    void Invalidate();
 diff --git a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
-index c76f6553e1..7b86f924bf 100644
+index c76f6553e1cec3e66ee4f4435bdda02fb044e57f..7b86f924bf19de1ddb445b0d44af329f8ca0762a 100644
 --- a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
 +++ b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
 @@ -30,6 +30,9 @@
@@ -2695,7 +2778,7 @@ index c76f6553e1..7b86f924bf 100644
    DCHECK(is_valid_);
    return gfx::SkPixmapToSpan(pixmap_);
 diff --git a/third_party/blink/renderer/platform/graphics/image_data_buffer.h b/third_party/blink/renderer/platform/graphics/image_data_buffer.h
-index 7788473df7..fc12b0e694 100644
+index 7788473df7e915a0f5d53b7c134cf1ad8177582e..fc12b0e694a8ec7bdc8edebe28dcac5713a767c3 100644
 --- a/third_party/blink/renderer/platform/graphics/image_data_buffer.h
 +++ b/third_party/blink/renderer/platform/graphics/image_data_buffer.h
 @@ -51,6 +51,9 @@ class PLATFORM_EXPORT ImageDataBuffer {
@@ -2709,7 +2792,7 @@ index 7788473df7..fc12b0e694 100644
                     const double& quality) const;
    bool EncodeImage(const ImageEncodingMimeType mime_type,
 diff --git a/ui/android/java/src/org/chromium/ui/base/ApplicationViewportInsetTracker.java b/ui/android/java/src/org/chromium/ui/base/ApplicationViewportInsetTracker.java
-index 1630febc74..fafc3cc630 100644
+index 1630febc7428087823a29296db6730fc24f00f82..fafc3cc6303bddfd6af650a786fba7ad7167887e 100644
 --- a/ui/android/java/src/org/chromium/ui/base/ApplicationViewportInsetTracker.java
 +++ b/ui/android/java/src/org/chromium/ui/base/ApplicationViewportInsetTracker.java
 @@ -58,7 +58,7 @@ public class ApplicationViewportInsetTracker implements Destroyable {
@@ -2722,7 +2805,7 @@ index 1630febc74..fafc3cc630 100644
      private final SettableNonNullObservableSupplier<ViewportInsets> mInsetSupplier =
              ObservableSuppliers.createNonNull(new ViewportInsets());
 diff --git a/ui/android/java/src/org/chromium/ui/base/ViewUtils.java b/ui/android/java/src/org/chromium/ui/base/ViewUtils.java
-index eb77751358..dcd752e5de 100644
+index eb77751358b93b8428bdb87f2d8f602a84d08212..dcd752e5de6d9e7168dc40da7df28fde464fa4c1 100644
 --- a/ui/android/java/src/org/chromium/ui/base/ViewUtils.java
 +++ b/ui/android/java/src/org/chromium/ui/base/ViewUtils.java
 @@ -34,8 +34,10 @@ import java.util.Set;
@@ -2739,7 +2822,7 @@ index eb77751358..dcd752e5de 100644
      // Prevent instantiation.
      private ViewUtils() {}
 diff --git a/ui/android/java/src/org/chromium/ui/gfx/ViewConfigurationHelper.java b/ui/android/java/src/org/chromium/ui/gfx/ViewConfigurationHelper.java
-index 1a2b8e1210..d77e09c952 100644
+index 1a2b8e121064289c981b0acc7c2ea0df52ae0cfe..d77e09c952a969803a96a741944c40618511dddc 100644
 --- a/ui/android/java/src/org/chromium/ui/gfx/ViewConfigurationHelper.java
 +++ b/ui/android/java/src/org/chromium/ui/gfx/ViewConfigurationHelper.java
 @@ -144,7 +144,6 @@ public class ViewConfigurationHelper {
@@ -2751,7 +2834,7 @@ index 1a2b8e1210..d77e09c952 100644
                      TypedValue.applyDimension(
                              TypedValue.COMPLEX_UNIT_MM,
 diff --git a/ui/android/java/src/org/chromium/ui/hierarchicalmenu/HierarchicalMenuController.java b/ui/android/java/src/org/chromium/ui/hierarchicalmenu/HierarchicalMenuController.java
-index 9087b25f24..21b6afd4ee 100644
+index 9087b25f24bdf0bf346316a01e905d48d493f567..21b6afd4eec53f15cc8d2f37055fa387fa5bbb83 100644
 --- a/ui/android/java/src/org/chromium/ui/hierarchicalmenu/HierarchicalMenuController.java
 +++ b/ui/android/java/src/org/chromium/ui/hierarchicalmenu/HierarchicalMenuController.java
 @@ -801,7 +801,7 @@ public class HierarchicalMenuController<T> {
