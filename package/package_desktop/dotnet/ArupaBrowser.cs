@@ -456,18 +456,18 @@ namespace Arupa
         public IReadOnlyList<string> ManagedHosts { get; init; } = Array.Empty<string>();
     }
 
-    /// <summary>One Chromium lifetime per process; stopped/failed requires a new process.</summary>
-    public enum ArupaKernelState
-    {
-        NotStarted = 0, Starting = 1, Running = 2, Stopping = 3, Stopped = 4, Failed = 5
-    }
+    // ArupaKernelState（One Chromium lifetime per process; stopped/failed requires a new
+    // process）见 ArupaAbi.g.cs。
 
-    public sealed class ArupaKernel : IDisposable
+    public sealed partial class ArupaKernel : IDisposable
     {
         private readonly InterceptCallbackBridge _backgroundBridge = new();
+        // V3 回调只拿一个不透明请求指针，V2 拿 8 个展开参数：两种委托没有公共类型，
+        // 所以按 Delegate 存（2026-10-12：批 11 的 wrapper 里两支都活着，而字段声明成 V2 → 编不过）。
         private Delegate? _backgroundCallback;
-        private bool _backgroundV3;
         private GCHandle _backgroundRoot;
+        private bool _backgroundV3;
+        /// <summary>内核能否走 dnr.execution.v3（ABI 1.36）：能就用不透明 V3 请求/响应结构。</summary>
         public static bool SupportsDnrV3 {
             get { try { return Interop.arupa_kernel_supports("dnr.execution.v3") != 0; }
                 catch (EntryPointNotFoundException) { return false; } }
@@ -489,14 +489,16 @@ namespace Arupa
             if (!SupportsDnrRequestContext) throw new NotSupportedException("dnr_request_context_unavailable");
             if (_backgroundCallback != null) throw new InvalidOperationException("dnr_background_already_bound");
             _backgroundV3 = SupportsDnrV3;
-            _backgroundCallback = _backgroundV3
+            Delegate callback = _backgroundV3
                 ? new Interop.ShouldInterceptV3Native((u, request) => _backgroundBridge.InvokeV3(handler, request))
                 : new Interop.ShouldInterceptV2Native((u, url, method, type, main, headers, origin, third) =>
                     _backgroundBridge.Invoke(handler, url, method, type, main, headers, origin, third != 0));
-            _backgroundRoot = GCHandle.Alloc(_backgroundCallback);
+            _backgroundCallback = callback;
+            _backgroundRoot = GCHandle.Alloc(callback);
+            IntPtr thunk = Marshal.GetFunctionPointerForDelegate(callback);
             int result = _backgroundV3
-                ? Interop.arupa_kernel_set_background_request_callback_v3(_handle, Marshal.GetFunctionPointerForDelegate(_backgroundCallback), IntPtr.Zero)
-                : Interop.arupa_kernel_set_background_request_callback(_handle, Marshal.GetFunctionPointerForDelegate(_backgroundCallback), IntPtr.Zero);
+                ? Interop.arupa_kernel_set_background_request_callback_v3(_handle, thunk, IntPtr.Zero)
+                : Interop.arupa_kernel_set_background_request_callback(_handle, thunk, IntPtr.Zero);
             if (result != 0) throw new InvalidOperationException($"dnr_background_bind_failed:{result}");
         }
 
@@ -961,7 +963,7 @@ namespace Arupa
             TabNotFound = 6,
             /// <summary>该扩展的 SW 现在不在。<b>不是"发了"</b> —— 要如实处理, 别当成成功。</summary>
             ServiceWorkerUnavailable = 7,
-            /// <summary>🔴 <paramref name="tabId"/> 不是<b>十进制整数的字符串</b> ⇒ 这次派发被拒
+            /// <summary>🔴 <c>tabId</c> 不是<b>十进制整数的字符串</b> ⇒ 这次派发被拒
             /// (FB-P123, 2026-09-08)。
             /// <para>由来: 标准 <c>chrome.tabs.Tab.id</c> 是<b>整数</b>, 而内核此前把你们给的
             /// 字符串原样塞进 <c>tab.id</c>。扩展<b>拿得到</b>那个对象, 一转手喂给
@@ -1098,8 +1100,8 @@ namespace Arupa
         /// 🔴 同族的病这个文件里一共 **6 个实例**(第 6 个是闸 <c>C57</c> 抓的, 人核那轮漏了):
         /// <see cref="RescanExtensions"/> 的注释自己写着
         /// 「这段说明原先写在 ListExtensions 的 summary 前面 ⇒ 它实际挂在了那个方法上」(08-25 修的第 1 个),
-        /// 2026-08-26 又查出 4 个 —— 本方法 · <c>SetTransportRoute</c> · <see cref="InjectIsolatedJsAsync"/>
-        /// (三个 summary 连挂在 <see cref="LastInjectError"/> 上) · 以及 <c>ArupaPluginStorage.Set</c> 的
+        /// 2026-08-26 又查出 4 个 —— 本方法 · <c>SetTransportRoute</c> · <see cref="ArupaWebView.InjectIsolatedJsAsync"/>
+        /// (三个 summary 连挂在 <see cref="ArupaWebView.LastInjectError"/> 上) · 以及 <c>ArupaPluginStorage.Set</c> 的
         /// param 里留着一句**已被订正掉的错话**。
         /// ⚠ **写下"这次修好了"不等于免疫** —— 08-25 修第 1 个时旁边就躺着另外 3 个。
         /// ⇒ 已立闸 <c>C57</c> 机器判这件事(`build/roll/dotnet-doc-comment-check.py`)。</remarks>
@@ -1447,6 +1449,8 @@ namespace Arupa
         public const int ActionRedirect = 1;
         public const int ActionModifyHeaders = 2;
 
+        /// <param name="urlPattern">要校验的声明式规则 URL 匹配模式。</param>
+        /// <param name="actionType">声明式 action 取值(见本类 <c>ActionBlock</c> / <c>ActionRedirect</c> / <c>ActionModifyHeaders</c>)。</param>
         /// <param name="managedHostsCsv">当前分区被代理接管的域名(逗号分隔), 与注入授权取同一份。</param>
         public static int CheckDeclarativeRule(string urlPattern, int actionType,
                                                string managedHostsCsv = "")
@@ -1529,6 +1533,8 @@ namespace Arupa
             return (p == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(p)) ?? "{}";
         }
 
+        /// <param name="pluginId">插件标识(与 get/remove/clear 同一键空间)。</param>
+        /// <param name="key">该插件下的存储键。</param>
         /// <param name="valueJson">
         /// **必须是合法 JSON 串** —— 这是 capi.h 写死的契约, 不是建议。
         /// <para>内核 <c>set</c> 先 <c>JSONReader::Read</c> 解析(解析不了才当字符串存),
@@ -2509,6 +2515,7 @@ namespace Arupa
         /// 拿它做主世界的事必然不成。同轮还发现文档里凭记忆写了一个**根本不存在**的
         /// <c>EvaluateJavaScriptAsync</c>。⇒ 缺口与幻觉是一对: 门面里没有的东西, 文档里会长出来。
         /// </remarks>
+        /// <param name="document">目标文档句柄(0 视为无效, 直接返回 null)。</param>
         /// <param name="script">要执行的 JS。返回值经内核序列化为 JSON 文本。</param>
         /// <param name="timeoutMs">等回调的上限; 超时返回 null(与"脚本真的返回 null"同形, 这一点与隔离世界那条一致)。</param>
         public async System.Threading.Tasks.Task<string?> EvalJsForDocumentAsync(ulong document, string script, int timeoutMs = 5000)
@@ -2569,7 +2576,7 @@ namespace Arupa
         /// <c>1</c> 清单没声明 <c>proxy</c> ⇒ 去看清单(**弹框也没用**) ·
         /// <c>2</c> 未签名包要更细的作用域 ⇒ 拒 ·
         /// <c>3</c> 🔴 <b>要用户二次确认, 而你没断言过</b> ⇒ 去弹框, 用户同意后调
-        /// <see cref="ArupaBrowser.SetExtensionRouteConsent"/> 再来一次 ·
+        /// <see cref="ArupaKernel.SetExtensionRouteConsent"/> 再来一次 ·
         /// <c>4</c> 认不出的作用域 · <c>5</c> routeJson 坏 ·
         /// <c>6</c> 内核没登记这个扩展(<b>不是</b>"它没权限") ·
         /// <c>-1</c> 这个内核件没有这个导出。</para>

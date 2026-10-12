@@ -15,6 +15,7 @@ import tempfile
 
 import deliveries
 import fetch as F
+import kernel_src_patches
 import native_tools
 import publish
 from linux_shared_library import prepare_v8_tls
@@ -489,6 +490,14 @@ def main(argv=None):
         config_path = args_template(target_os, args.args)
         templates = {cpu: render_args(config_path, target_os, cpu, args.link) for cpu in arches}
         native_tools.kernel_check(target_os, arches)
+        # 内核仓自带的 Chromium 侧补丁必须在 **gen 之前** 打进 src：GN 会核对 BUILD.gn 里
+        # 列出的源文件是否存在，内核代码也直接 include 这些新增头。缺了它们的症状是编译期
+        # 一句 "file not found"，看着像内核代码写错了（详见 scripts/kernel_src_patches.py）。
+        try:
+            kernel_src_patches.ensure_applied(SRC, ROOT / project / "patches",
+                                              dry_run=args.dry_run)
+        except kernel_src_patches.PatchError as exc:
+            F.err(str(exc))
         if target_os == "linux":
             if args.dry_run:
                 F.log("(dry-run) 检查 V8 共享库 TLS 配置")

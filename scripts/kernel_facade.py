@@ -14,6 +14,18 @@
 
 判据用**内容摘要**而不是 mtime：交付是 cp -R 搬的，mtime 全是打包时刻，
 "mtime 比源码新"在交付里恒真，按它判断等于永远不重建。
+
+2026-10-11 补第四类事故（static-25 实证）：**内核升级而门面源码没动**。当时
+source_digest() 只覆盖门面自己的 *.cs，于是"门面与源码自洽"恒成立，ensure() 判 current
+跳过重建，交付带着一份与交付自带头（含 ARUPA_INTERCEPT_BLOCK_REQUEST）不匹配的 DLL 出包，
+一直烂到宿主编译才炸 CS0117。现在摘要里还包含交付上下文 KERNEL_CONTEXT_FILES
+（include/*.h + 内核版本标记）：内核一动，交付门面必然被判"与源码不符"并现场重建。
+
+同日再补第五类：**产物被外部进程按旧快照还原**（本地实测：重建好的
+package/package_desktop/dotnet/ArupaKernel.dll 被还原成 HEAD 版，而摘要侧车还在 ——
+纯按摘要判会得出"一致"，旧 DLL 静默通过）。所以侧车现在多一行 `artifact <sha256>`：
+DLL 与它不一致就重建。源码摘要仍不含产物（照 test_digest_follows_source_content 的口径），
+这一行是**独立**的产物钉桩。
 """
 from __future__ import annotations
 
@@ -32,6 +44,11 @@ ASSEMBLY_NAME = "ArupaKernel.dll"
 DOCS_NAME = "ArupaKernel.xml"
 DIGEST_NAME = ".facade-source.sha256"
 SOURCE_PATTERNS = ("*.cs", "*.csproj")
+# 门面之外的摘要输入，路径相对**交付根**（dotnet/ 的上一级）。仓内模板没有这些文件，
+# 摘要因此退化成纯源码摘要 —— 这正是"模板"与"交付"该有的差别。
+#   · include/arupa_kernel_capi.h: 交付的 ABI 声明（枚举值/能力名都在这里）
+#   · kernel/.arupa-version:      交付的内核版本标记
+KERNEL_CONTEXT_FILES = ("include/arupa_kernel_capi.h", "kernel/.arupa-version")
 # 本模块在交付目录里就地 dotnet build，中间产物会落在 dotnet/bin、dotnet/obj；
 # 交付不该带它们 —— 那里躺着的旧门面 DLL 正是"拿错门面"的温床（宿主的 HintPath
 # 回落链 `dotnet\bin\x64\Release\net10.0\ArupaKernel.dll` 会扫到它）。产物归位后清掉。
@@ -74,7 +91,12 @@ def facade_ok(path) -> bool:
 
 
 def source_digest(dotnet_dir) -> str:
-    """门面源码摘要（文件名 + 内容），与机器、时间无关。"""
+    """门面摘要（源码 + 交付的内核 ABI 上下文），与机器、时间无关。
+
+    交付上下文那一半是给"内核升级、门面源码没动"准备的：没有它，一份与交付自带的
+    capi.h 不匹配的 DLL 会带着自洽的摘要出包（见模块头第四类事故）。仓内模板的
+    dotnet/ 上一级没有 include/、kernel/，那部分自然缺席。
+    """
     d = Path(dotnet_dir)
     digest = hashlib.sha256()
     sources = sorted({p for pattern in SOURCE_PATTERNS for p in d.glob(pattern)})
@@ -82,23 +104,49 @@ def source_digest(dotnet_dir) -> str:
         digest.update(path.name.encode("utf-8"))
         digest.update(b"\0")
         digest.update(hashlib.sha256(path.read_bytes()).digest())
+    for relative in KERNEL_CONTEXT_FILES:
+        context = d.parent / relative
+        if context.is_file():
+            digest.update(relative.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(hashlib.sha256(context.read_bytes()).digest())
     return digest.hexdigest()
 
 
 def recorded_digest(dotnet_dir) -> str:
+    """侧车第一行 = 源码摘要（与 source_digest() 同域比较）。"""
     try:
-        return (Path(dotnet_dir) / DIGEST_NAME).read_text(encoding="utf-8").strip()
-    except OSError:
+        return (Path(dotnet_dir) / DIGEST_NAME).read_text(encoding="utf-8").splitlines()[0].strip()
+    except (OSError, IndexError):
         return ""
 
 
+def artifact_digest(path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def recorded_artifact(dotnet_dir) -> str:
+    """侧车里的 `artifact <sha256>` 行；老交付（只有源码摘要）返回空串 = 不做这层判定。"""
+    try:
+        lines = (Path(dotnet_dir) / DIGEST_NAME).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for line in lines[1:]:
+        if line.startswith("artifact "):
+            return line.split(" ", 1)[1].strip()
+    return ""
+
+
 def is_current(dotnet_dir) -> bool:
-    """门面存在，且确实由当前源码编出（侧车摘要一致）。"""
+    """门面存在，且确实由当前源码编出（摘要一致），且还是那次编出来的产物。"""
     d = Path(dotnet_dir)
     if not facade_ok(d / ASSEMBLY_NAME):
         return False
     recorded = recorded_digest(d)
-    return bool(recorded) and recorded == source_digest(d)
+    if not recorded or recorded != source_digest(d):
+        return False
+    pinned = recorded_artifact(d)
+    return not pinned or pinned == artifact_digest(d / ASSEMBLY_NAME)
 
 
 def built_assembly(dotnet_dir, cfg: str, platform: Optional[str]) -> Optional[Path]:
@@ -116,14 +164,15 @@ def built_assembly(dotnet_dir, cfg: str, platform: Optional[str]) -> Optional[Pa
 
 
 def deploy(dotnet_dir, built) -> Path:
-    """把编出来的门面归位到交付顶层，并写下源码摘要。"""
+    """把编出来的门面归位到交付顶层，并写下源码摘要 + 产物钉桩。"""
     d = Path(dotnet_dir)
     top = d / ASSEMBLY_NAME
     shutil.copyfile(built, top)
     docs = Path(built).with_suffix(".xml")
     if docs.is_file():
         shutil.copyfile(docs, d / DOCS_NAME)
-    (d / DIGEST_NAME).write_text(source_digest(d), encoding="utf-8")
+    (d / DIGEST_NAME).write_text(f"{source_digest(d)}\nartifact {artifact_digest(top)}\n",
+                                 encoding="utf-8")
     return top
 
 

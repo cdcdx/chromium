@@ -49,10 +49,33 @@ class FacadeTest(unittest.TestCase):
         self.assertEqual(first, kernel_facade.source_digest(self.sdk))
         (self.sdk / 'Interop.cs').write_text('// interop changed')
         self.assertNotEqual(first, kernel_facade.source_digest(self.sdk))
-        # 产物本身不参与摘要：改 DLL 不该让"门面与源码一致"的判定失效
+        # 源码摘要本身不含产物：改 DLL 不改 source_digest。产物是否还是"那次编出来的"
+        # 由侧车里的 artifact 钉桩判定（见 test_externally_restored_dll_is_rebuilt）。
         changed = kernel_facade.source_digest(self.sdk)
         self.dll.write_bytes(b'noise'.ljust(BIG, b'n'))
         self.assertEqual(changed, kernel_facade.source_digest(self.sdk))
+
+    def test_externally_restored_dll_is_rebuilt(self):
+        """有人把门面 DLL 换回旧快照（源码没动、侧车摘要还在）—— 不能算"一致"。
+
+        2026-10-11 本地实证：重建好的 package/package_desktop/dotnet/ArupaKernel.dll 被外部
+        进程还原成 HEAD 版，而摘要侧车还在，纯按源码摘要判会得出"一致"，旧 DLL 静默通过。
+        """
+        kernel_facade.ensure(self.sdk, 'dotnet', arch='x64', runner=self.fake_build(b'fresh'))
+        self.assertTrue(kernel_facade.is_current(self.sdk))
+        self.dll.write_bytes(b'snapshot'.ljust(BIG, b's'))
+        self.assertFalse(kernel_facade.is_current(self.sdk))
+        result = kernel_facade.ensure(self.sdk, 'dotnet', arch='x64', runner=self.fake_build(b'fresh'))
+        self.assertEqual('rebuilt', result.state)
+        self.assertEqual(b'fresh'.ljust(BIG, b'x'), self.dll.read_bytes())
+        self.assertTrue(kernel_facade.is_current(self.sdk))
+
+    def test_sidecar_without_the_artifact_pin_still_uses_the_source_digest(self):
+        """老交付（侧车只有源码摘要）不做产物钉桩 —— 不能因此判成永远不一致。"""
+        self.dll.write_bytes(b'ref')
+        (self.sdk / kernel_facade.DIGEST_NAME).write_text(
+            kernel_facade.source_digest(self.sdk), encoding='utf-8')
+        self.assertEqual('', kernel_facade.recorded_artifact(self.sdk))
 
     def test_existing_but_stale_dll_is_rebuilt_and_then_reused(self):
         self.dll.write_bytes(b'old'.ljust(BIG, b'o'))
@@ -72,6 +95,28 @@ class FacadeTest(unittest.TestCase):
         self.assertTrue(kernel_facade.is_current(self.sdk))
         (self.sdk / 'ArupaBrowser.cs').write_text('// wrapper changed after packaging')
         self.assertFalse(kernel_facade.is_current(self.sdk))
+
+    def test_kernel_header_change_makes_the_shipped_dll_stale_again(self):
+        """内核升级而门面源码没动 —— 旧 DLL 也必须被判过期。
+
+        2026-10-11 static-25 实证：摘要只覆盖门面自己的 .cs 时，这样的交付一路"自洽"，
+        直到宿主编译才炸 CS0117（InterceptAction 缺 BlockRequest）。
+        """
+        (self.sdk.parent / 'include').mkdir()
+        header = self.sdk.parent / 'include' / 'arupa_kernel_capi.h'
+        header.write_text('#define ARUPA_INTERCEPT_BLOCK_REQUEST 2\n')
+        kernel_facade.ensure(self.sdk, 'dotnet', arch='x64', runner=self.fake_build(b'fresh'))
+        self.assertTrue(kernel_facade.is_current(self.sdk))
+        header.write_text('#define ARUPA_INTERCEPT_BLOCK_REQUEST 3\n')
+        self.assertFalse(kernel_facade.is_current(self.sdk))
+
+    def test_kernel_version_marker_is_part_of_the_digest(self):
+        (self.sdk.parent / 'kernel').mkdir()
+        marker = self.sdk.parent / 'kernel' / '.arupa-version'
+        marker.write_text('154.0.8037.21')
+        first = kernel_facade.source_digest(self.sdk)
+        marker.write_text('155.0.9000.1')
+        self.assertNotEqual(first, kernel_facade.source_digest(self.sdk))
 
     def test_build_command_never_outputs_into_the_project_dir(self):
         kernel_facade.ensure(self.sdk, 'dotnet', arch='arm64', runner=self.fake_build())
@@ -139,7 +184,9 @@ class FacadeTest(unittest.TestCase):
         (self.sdk / 'ArupaBrowser.cs').write_text('// changed after packaging')
         fresh = kernel_facade.ensure(self.sdk, 'dotnet', arch='x64', runner=self.fake_build())
         self.assertEqual('rebuilt', fresh.state)
-        self.assertEqual('', fresh.detail)
+        # 清单提醒只在"交付里还有 SHA256SUMS.txt"时出现；别把清中间产物的附带说明当提醒
+        # （这条断言原来写死成 ''，在 drop_intermediates 开始写 note 之后就一直失败）。
+        self.assertNotIn('SHA256SUMS.txt', fresh.detail)
 
     def test_ref_only_assembly_counts_as_missing(self):
         self.dll.write_bytes(b'ref')          # ~4KB 的 ref 程序集：只有签名没有实现

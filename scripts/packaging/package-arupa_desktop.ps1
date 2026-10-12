@@ -595,6 +595,21 @@ function Invoke-PackageArch {
     . (Join-Path $Root 'scripts\_find_python.ps1')
     $python = Find-Python3
     if (-not $python) { throw '网盘 V5 交付检查需要 Python 3.9+' }
+
+    # 门面 ABI 面：从本交付自带的 C 头**现场重新生成** dotnet/ArupaAbi.g.cs，并按新源码重建
+    # 门面 DLL。内核更新加了枚举值/能力，这一步就自动把它们带进门面 —— 宿主不用改、也不必
+    # 重复重建（原来每次内核更新都要人肉补 C# 再重编，落点还晚到宿主编译期）。
+    # 与 Android 侧 kernel_capability.py 的"声明 ↔ 实现同源"同一口径，详见该脚本头注释。
+    $abiGen = Join-Path $Root 'scripts\gen_arupa_desktop_abi.py'
+    if ((Test-Path -LiteralPath (Join-Path $DistPath 'dotnet\ArupaBrowser.cs')) -and
+        (Test-Path -LiteralPath $abiGen)) {
+        $abiArgs = @($python.Pre) + @($abiGen, '--stage', $DistPath, '--cpu', $Cpu)
+        & $python.Exe @abiArgs
+        if ($LASTEXITCODE -ne 0) { throw '门面 ABI 面生成/重建失败：交付门面与 C 头不同源，拒绝出包' }
+    } else {
+        Write-Warn '交付里没有 dotnet/ArupaBrowser.cs（或缺生成脚本），跳过门面 ABI 面同步'
+    }
+
     if (-not (Test-Path -LiteralPath $VerifyScript -PathType Leaf)) {
         Fail "缺少交付 ABI 校验脚本: $VerifyScript（可用 --verify-script 指定）"
     }

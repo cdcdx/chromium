@@ -115,6 +115,49 @@ class NomadTest(unittest.TestCase):
                 nomad.desktop_build(self.root, self.args, 'win', 'x64', VERSION, self.root / 'out')
             run.assert_not_called()
 
+    def managed_facade_fixture(self, wrapper=('// 枚举/常量/探针见生成物 ArupaAbi.g.cs\n'
+                                              'public sealed partial class ArupaKernel { }\n')):
+        """造一份带 dotnet/ 门面与 include/ C 头的交付（默认是"生成式布局"的 wrapper）。"""
+        self.pc_fixture('win')
+        delivery = self.args.delivery
+        (delivery / 'include').mkdir()
+        (delivery / 'include/arupa_kernel_capi.h').write_text(self.CAPI_HEADER)
+        dotnet = delivery / 'dotnet'
+        dotnet.mkdir()
+        (dotnet / 'ArupaBrowser.cs').write_text(wrapper)
+        return dotnet
+
+    CAPI_HEADER = (
+        '#define ARUPA_KERNEL_ABI_MAJOR 1\n'
+        '#define ARUPA_KERNEL_ABI_MINOR 35\n'
+        'typedef enum ArupaInterceptAction {\n'
+        '  ARUPA_INTERCEPT_SERVE_RESPONSE = 0,\n'
+        '} ArupaInterceptAction;\n'
+        '#define ARUPA_BROWSER_COMMAND_TOGGLE_FULLSCREEN 1\n'
+        'typedef enum {\n'
+        '  ARUPA_KERNEL_NOT_STARTED = 0,\n'
+        '} ArupaKernelState;\n')
+
+    def test_facade_generated_from_a_foreign_header_blocks_the_build(self):
+        """门面生成物与交付自带 C 头不同源 → 构建期拒，别等到宿主编译撞 CS0117。
+
+        2026-10-11 static-25 实证：旧交付一路"自洽"到浏览器编译才报
+        "InterceptAction 未包含 BlockRequest 的定义"，每次内核更新都要重新查一遍。
+        """
+        dotnet = self.managed_facade_fixture()
+        (dotnet / 'ArupaAbi.g.cs').write_text('// 另一份 C 头派生的\n')
+        fetch.DRY_RUN = True
+        with self.assertRaisesRegex(RuntimeError, 'arupa-facade'):
+            self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION, self.root / 'out')
+
+    def test_facade_derived_from_the_delivery_header_is_accepted(self):
+        dotnet = self.managed_facade_fixture()
+        import gen_arupa_desktop_abi
+        gen_arupa_desktop_abi.write_generated(self.args.delivery / 'include/arupa_kernel_capi.h',
+                                              dotnet / 'ArupaAbi.g.cs')
+        fetch.DRY_RUN = True
+        self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION, self.root / 'out')
+
     def test_android_both_abis_build_and_package_separately(self):
         repo = self.android_fixture()
         def fake_gradle(command, cwd):

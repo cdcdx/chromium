@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 
 import deliveries
 import fetch as F
+import gen_arupa_desktop_abi
 import kernel_facade
 import toolchains
 
@@ -415,7 +416,24 @@ def refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props):
         sync_stable(result.path)
     elif top.is_file():
         sync_stable(top)
+    check_managed_facade_abi(kernel)
     return top if top.is_file() else None
+
+
+def check_managed_facade_abi(kernel):
+    """交付门面的 ABI 面必须由它自带的 C 头派生（见 scripts/gen_arupa_desktop_abi.py）。
+
+    内核加了枚举值/能力（如 ARUPA_INTERCEPT_BLOCK_REQUEST=2 与 request.block.v1）而门面
+    没跟上时，宿主要等到编译期才撞 CS0117 —— 那句"未包含 BlockRequest 的定义"完全指不到
+    病根，每次内核更新都要重新查一遍（2026-10-11 static-25 实证）。这里把判据挪到构建早期：
+    生成物与交付自带 C 头不同源 → 直接拒绝；旧布局交付（枚举手写在 wrapper 里）只提示不拦。
+    """
+    problems = gen_arupa_desktop_abi.parity_refusals(kernel)
+    if problems:
+        for problem in problems:
+            F.err(f'[arupa-facade] {problem}')
+    for note in gen_arupa_desktop_abi.parity_warnings(kernel):
+        F.log(f'[i] {note}')
 
 
 

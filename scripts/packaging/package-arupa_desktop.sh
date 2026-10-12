@@ -505,10 +505,12 @@ package_arch() {
   # （工程里写死的 C6 裁定：glob Interop.cs + ArupaBrowser.cs，不引锁平台的 ArupaKernel.csproj），
   # 而 wrapper 源只随内核仓的 wrapper 包发（内核仓没有远端，clone 不到）。缺了 PC 发布/打包
   # 第一步就被 Mac/ArupaDelivery.props 拦下 —— 出包时先说清楚，别等 PC 那边报。
+  # ArupaAbi.g.cs 是 --stage 从交付自带 C 头生成的（枚举/常量在那里，手写文件里已删），
+  # mac 侧 KernelHost 编译 wrapper 源码时同样需要它。
   if [[ "${OS}" == "mac" ]]; then
-    for f in ArupaBrowser.cs Interop.cs; do
+    for f in ArupaBrowser.cs Interop.cs ArupaAbi.g.cs; do
       [[ -f "${dist}/dotnet/${f}" ]] \
-        || warn "交付根 dotnet/${f} 缺失：PC 侧 mac 发布会拦（wrapper 与 macKernel 必须同一份交付）。把内核 wrapper 包里的 ArupaBrowser.cs / Interop.cs / ArupaKernel.csproj 放进 ${PKG_DIR}/dotnet/ 后重新出包"
+        || warn "交付根 dotnet/${f} 缺失：PC 侧 mac 发布会拦（wrapper 与 macKernel 必须同一份交付）。把内核 wrapper 包里的 ArupaBrowser.cs / Interop.cs / ArupaKernel.csproj 放进 ${PKG_DIR}/dotnet/ 后重新出包（ArupaAbi.g.cs 由 scripts/gen_arupa_desktop_abi.py --stage 生成）"
     done
   fi
 
@@ -603,6 +605,15 @@ for cpu in "${ARCHS[@]}"; do
   log "交付 id: ${DELIVERY_ID}  （ver=${VER} n=${NUM} os=${OS} arch=${cpu}）"
 
   package_arch "${cpu}" "${OUT}" "${DIST}"
+
+  # 门面 ABI 面：从交付自带的 C 头现场重新生成 dotnet/ArupaAbi.g.cs，并按新源码重建门面 DLL。
+  # 内核更新加了枚举值/能力（如 ARUPA_INTERCEPT_BLOCK_REQUEST=2），这一步就自动带进门面；
+  # 不然宿主只能等到编译期撞 CS0117（同口径见 scripts/gen_arupa_desktop_abi.py）。
+  if [[ -f "${DIST}/dotnet/ArupaBrowser.cs" ]]; then
+    python3 "${ROOT_DIR}/scripts/gen_arupa_desktop_abi.py" --stage "${DIST}" --cpu "${cpu}" \
+      || err "门面 ABI 面生成/重建失败：交付门面与 C 头不同源，拒绝出包"
+  fi
+
   [[ -f "${VERIFY_SCRIPT}" ]] \
     || err "缺少交付 ABI 校验脚本: ${VERIFY_SCRIPT}（可用 --verify-script 指定）"
   mkdir -p "${DIST}/tools"
