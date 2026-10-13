@@ -61,6 +61,14 @@ JAVA_BRIDGE_FACADE = ROOT / "plugin/android/java/src/co/arupa/plugin/ArupaPlugin
 DNR_SCHEMA = ROOT / "plugin/api/declarative_net_request.json"
 DNR_RULES_HEADER = ROOT / "mv3/arupa_dnr_rules.h"
 EXT_API_HOST = ROOT / "plugin/arupa_ext_api_host.cc"
+# R-03：扩展重新启用后向**既有文档**补注入内容脚本。渲染侧上游
+# ScriptInjectionManager::OnUserScriptsUpdated 只擦 pending injection、不重注入，
+# 所以"停用 → 重新启用"必须由内核自己补，否则用户得刷新页面。这四个落点缺一个，
+# 这条链就是"看着接了、其实没接"。
+REINJECT_SOURCE = ROOT / "plugin/arupa_content_script_reinject.cc"
+REINJECT_HEADER = ROOT / "plugin/arupa_content_script_reinject.h"
+LOADER_BRIDGE_SOURCE = ROOT / "plugin/arupa_extension_loader_bridge.cc"
+PLUGIN_BUILD_GN = ROOT / "plugin/BUILD.gn"
 
 # v2.4 协议契约（内核不得单边放大/缩小）：业务 ≤30s、最长租约 45s、一次租约一项。
 # 改了这些数字，就必须同批改 App（NetdiskProductionWorkerWindows）与 spec。
@@ -492,6 +500,117 @@ def verify_dnr_surface(facts: dict) -> int:
     return len(supported)
 
 
+def kernel_reinject_facts() -> dict:
+    """R-03 补注入面的源码事实。
+
+    这一面最容易被"看起来接了"骗过去：写了模块却没人调、调了却落在错误分支（宿主每次
+    重复调启用都会再注入一遍）、代次判活被删（停用后迟到的回执又把旧层写回页面）、
+    编译目标没接线或成环。逐条当事实核，不靠函数名存在与否。
+    """
+    bridge = _strip_comments(_read_source(LOADER_BRIDGE_SOURCE))
+    bodies = _cpp_function_bodies(bridge)
+    enable = bodies.get("SetExtensionEnabled", "")
+    purge = bodies.get("PurgeExtensionData", "")
+    source = _strip_comments(_read_source(REINJECT_SOURCE))
+    header = _strip_comments(_read_source(REINJECT_HEADER))
+    # 诚实边界说明写在注释里，必须看**未剥注释**的原文。
+    header_raw = _read_source(REINJECT_HEADER)
+    build = _read_source(PLUGIN_BUILD_GN)
+
+    def gn_target_body(name: str) -> str:
+        match = re.search(rf'source_set\("{re.escape(name)}"\)\s*\{{(.*?)\n  \}}',
+                          build, re.S)
+        return match.group(1) if match else ""
+
+    target_body = gn_target_body("arupa_content_script_reinject")
+    bridge_body = gn_target_body("arupa_extension_loader_bridge")
+    reinject_call = enable.find("ReinjectContentScriptsIntoExistingDocuments(")
+    bump_call = enable.find("BumpActionForExtension(")
+    return {
+        # 启用路径真的补注入，且落在 state_changed 分支（BumpActionForExtension 只在
+        # 那个分支里调；补注入在它之后 = 同分支），避免"宿主重复调启用 → 双重注入"。
+        "enable_calls_reinject": reinject_call >= 0,
+        "reinject_after_state_changed": 0 <= bump_call < reinject_call,
+        # 停用与卸载都要作废代次，否则迟到回执会在停用之后把旧层写回页面。
+        "disable_invalidates": "InvalidateContentScriptGeneration(" in enable,
+        "uninstall_invalidates": "InvalidateContentScriptGeneration(" in purge,
+        # 代次判活 + 迟到回执计数 + 机读回执。判活这一条必须看到"拿本任务的代次去比"
+        # 的那行比较：只留一个同名的恒真函数（GenerationStillCurrent 里 return true）
+        # 等于判活被拆掉了，光看函数名是看不出来的。
+        "generation_guard": (
+            "GenerationStillCurrent" in source and
+            bool(re.search(r"GenerationOf\([^;]*\)\s*==\s*generation_", source))),
+        "stale_counter": "stale_receipts_dropped" in source,
+        "receipt_json": ("LastReinjectReportJson" in source and
+                         "LastReinjectReportJson" in header),
+        "receipt_verdict": '"verdict"' in source,
+        # 逐帧判权而不是"投了就完事"。
+        "per_frame_permission": ("CanAccessPage(" in source and
+                                 "frames_denied" in source),
+        "registered_page_enumeration": "ForEachRegisteredPage(" in source,
+        # Android 侧注入授权登记只有写入方（桌面端读取点在 arupa_user_script_dispatch.cc）。
+        # 这条说明是"诚实边界"的一部分，不能被悄悄删掉后当成"授权已闭环"。
+        "grants_reader_gap_documented": "只有写入方" in header_raw,
+        # 编译接线：新目标存在、loader bridge 依赖它、且新目标**不**反向依赖（成环会
+        # 直接编译失败，但门禁要在出包前就说清，而不是等 ninja 报错）。
+        "compiled": bool(target_body),
+        "loader_bridge_depends_on_it": (
+            "arupa_content_script_reinject" in bridge_body),
+        "no_dependency_cycle": (
+            "arupa_extension_loader_bridge" not in target_body),
+    }
+
+
+def verify_reinjection_contract(facts: dict) -> int:
+    """R-03：补注入的接线契约（启用/停用/代次/回执/编译）逐条核。"""
+    failures = {
+        "enable_calls_reinject":
+            "SetExtensionEnabled 的启用路径没有调用 "
+            "ReinjectContentScriptsIntoExistingDocuments —— 停用再启用后既有文档"
+            "依旧不会恢复（R-03 原样复现）。",
+        "reinject_after_state_changed":
+            "补注入没有落在 state_changed 分支里（应在 BumpActionForExtension 之后）"
+            " —— 宿主每次重复调启用都会把内容脚本再注入一遍：双重注入。",
+        "disable_invalidates":
+            "停用路径没有作废内容脚本代次 —— 停用那一刻还在途的补注入回执会在停用"
+            "之后把旧阅读层写回页面（清单：卸载中的迟到回包不能复活旧会话）。",
+        "uninstall_invalidates":
+            "PurgeExtensionData 没有作废内容脚本代次 —— 卸载后抵达的回执仍会改页面。",
+        "generation_guard":
+            "补注入回执没有代次判活 —— 上一代的回执会被当成有效回执。",
+        "stale_counter":
+            "没有统计被丢弃的迟到回执（stale_receipts_dropped）—— 丢弃是静默的，"
+            "出问题无从判定。",
+        "receipt_json":
+            "缺少机读回执（LastReinjectReportJson / 头文件声明）—— 宿主与设备用例"
+            "拿不到同一份事实。",
+        "receipt_verdict":
+            "回执里没有 verdict 字面量 —— 宿主/门禁只能靠数字猜「恢复没恢复」。",
+        "per_frame_permission":
+            "补注入没有逐帧判权（CanAccessPage / frames_denied）—— 被拒的帧会被"
+            "静默跳过，正是「说恢复了、其实没恢复」。",
+        "registered_page_enumeration":
+            "补注入没有枚举既有页面（ForEachRegisteredPage）—— 看不到已打开的页，"
+            "补注入无从谈起。",
+        "grants_reader_gap_documented":
+            "R-03 模块头里缺「授权登记只有写入方」这条诚实边界说明 —— 删掉它等于"
+            "把未闭环的授权链当成已闭环。",
+        "compiled":
+            "plugin/BUILD.gn 里没有 arupa_content_script_reinject 编译目标。",
+        "loader_bridge_depends_on_it":
+            "arupa_extension_loader_bridge 没有依赖 arupa_content_script_reinject ——"
+            "改完编不过，或（更糟）链接到了别处的旧实现。",
+        "no_dependency_cycle":
+            "arupa_content_script_reinject 反向依赖 arupa_extension_loader_bridge ——"
+            "GN 依赖成环（调用方才是依赖方）。",
+    }
+    bad = [name for name, ok in facts.items() if name in failures and not ok]
+    if bad:
+        err("R-03 补注入接线不成立：\n"
+            + "\n".join(f"  · {failures[name]}" for name in bad))
+    return len(failures)
+
+
 def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
                              window: dict, wakes: dict, facade: dict) -> dict:
     """声明与实现同源门禁（**双向**）—— 回应 N-C08 / K-A09。
@@ -503,6 +622,9 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
     # declarativeNetRequest 面与网盘无关，先核 —— 老内核没有网盘面也不能跳过它。
     dnr = kernel_dnr_facts()
     verify_dnr_surface(dnr)
+    # R-03 补注入面同理：与网盘无关，不能被下面的早退跳过。
+    reinject = kernel_reinject_facts()
+    verify_reinjection_contract(reinject)
     if not routing["netdisk"]["namespaces"]:
         return {}                      # 老内核没有网盘面，不在此处拦
     protos = routing["protocol_namespaces"]
@@ -596,6 +718,8 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
         f" + 跨语言码 {len(pairs)} 条 + 运行期入口 {len(facade['runtime_entrypoints'])} 个"
         f" + DNR {len(dnr['supported_methods'])} 方法(schema↔支持表↔分发，"
         f"错误码 {len(dnr['error_codes'])} 个全部可达)"
+        f" + R-03 补注入({len(kernel_reinject_facts())} 项接线契约全成立："
+        f"启用跳变才补 / 代次判活 / 逐帧判权 / 机读回执 / 编译不成环)"
         f" + 混淆契约 {keep_count} 条 + 无假保活")
     return {"window_keys": declared_keys, "code_pairs": len(pairs),
             "entrypoints": len(facade["runtime_entrypoints"]), "keep_rules": keep_count}
@@ -642,7 +766,9 @@ def capability_manifest_data(ver: str, n: int, locked: dict, abi: dict) -> dict:
                                       WORKER_WINDOW_HEADER, WAKE_OUTBOX_HEADER,
                                       WAKE_OUTBOX_SOURCE, SW_HOST_SOURCE,
                                       SELF_TEST_SOURCE, JAVA_BRIDGE_FACADE,
-                                      DNR_SCHEMA, DNR_RULES_HEADER, EXT_API_HOST)]
+                                      DNR_SCHEMA, DNR_RULES_HEADER, EXT_API_HOST,
+                                      REINJECT_SOURCE, REINJECT_HEADER,
+                                      LOADER_BRIDGE_SOURCE, PLUGIN_BUILD_GN)]
     sources += [d.as_posix() for d in _netdisk_schema_paths(_read_registry())
                 if (SRC / d).is_file()]
     return {
@@ -678,6 +804,8 @@ def capability_manifest_data(ver: str, n: int, locked: dict, abi: dict) -> dict:
         "wake_outbox": wakes,
         # 净化(S-01/S-03/S-04)：DNR 面的可核对事实（方法三处同源、错误码、限额）。
         "declarative_net_request": kernel_dnr_facts(),
+        # 阅读(R-03)：补注入面的可核对事实（启用路径/代次判活/机读回执/编译接线）。
+        "content_script_reinject": kernel_reinject_facts(),
         "runtime_facts": {
             "note": "available/verified 只能由运行期事实给出（Java 门面 "
                     "reserveWorkerWindow() / nomadTransferCapabilities() / "
@@ -696,6 +824,9 @@ def capability_manifest_data(ver: str, n: int, locked: dict, abi: dict) -> dict:
                         "DNR：schema↔支持表↔分发 三处同源（含逐方法分支）",
                         "DNR：E_DNR_* 错误码全部可达且错误回执结构化",
                         "DNR：schema properties↔内核常量数值一致",
+                        "R-03：启用跳变才补注入（宿主重复调启用不双重注入）",
+                        "R-03：停用/卸载作废代次，迟到回执按代次丢弃",
+                        "R-03：逐帧判权 + 机读回执（verdict）+ 编译目标不成环",
                         "交付件 consumer keep 规则齐备（App 构建会逐条校验）",
                         "无假保活：SW 生命周期只由窗口在持引用驱动"],
             "passed": True,
