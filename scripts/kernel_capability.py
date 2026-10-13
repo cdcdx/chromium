@@ -69,6 +69,15 @@ REINJECT_SOURCE = ROOT / "plugin/arupa_content_script_reinject.cc"
 REINJECT_HEADER = ROOT / "plugin/arupa_content_script_reinject.h"
 LOADER_BRIDGE_SOURCE = ROOT / "plugin/arupa_extension_loader_bridge.cc"
 PLUGIN_BUILD_GN = ROOT / "plugin/BUILD.gn"
+SW_HOST_SOURCE = ROOT / "plugin/arupa_extension_sw_host.cc"
+SW_SERVICE_HOST_SOURCE = ROOT / "plugin/arupa_service_worker_host.cc"
+# chrome.storage.local / session / onChanged 的落点：后端 + API 分发 + 宿主 + mojom 面。
+PLUGIN_STORAGE_H = ROOT / "mv3/plugin_storage.h"
+PLUGIN_STORAGE_CC = ROOT / "mv3/plugin_storage.cc"
+STORAGE_HOST = ROOT / "plugin/arupa_plugin_storage_host.cc"
+STORAGE_MOJOM = ROOT / "plugin/mojom/arupa_plugin_storage.mojom"
+STORAGE_IPC = ROOT / "plugin/arupa_ipc_message_sender.cc"
+ALARMS_SOURCE = ROOT / "plugin/arupa_alarms.cc"
 
 # v2.4 协议契约（内核不得单边放大/缩小）：业务 ≤30s、最长租约 45s、一次租约一项。
 # 改了这些数字，就必须同批改 App（NetdiskProductionWorkerWindows）与 spec。
@@ -611,6 +620,132 @@ def verify_reinjection_contract(facts: dict) -> int:
     return len(failures)
 
 
+def kernel_storage_facts() -> dict:
+    """chrome.storage.local / session / onChanged 的接线事实。
+
+    这一组的教训：三个区原先共用一套"落盘 + 8KB/512 条配额"，于是 storage.session
+    **会落盘**（Chrome 语义是重启即空）；超配额只 LOG 不回报，host 照"写前比较"派发
+    onChanged、回调一律报成功；managed 可写；闹钟还把内核内部键写进 storage.local。
+    这四件事任何断言都发现不了，只能逐条当事实核。
+    """
+    storage_cc = _strip_comments(_read_source(PLUGIN_STORAGE_CC))
+    storage_h = _strip_comments(_read_source(PLUGIN_STORAGE_H))
+    host = _strip_comments(_read_source(STORAGE_HOST))
+    mojom = _read_source(STORAGE_MOJOM)
+    ipc = _strip_comments(_read_source(STORAGE_IPC))
+    alarms_raw = _read_source(ALARMS_SOURCE)
+
+    return {
+        # 区语义：session 只活在内存（不落盘、不从盘恢复）。
+        "session_area_enum": "kSession" in storage_h and "StorageAreaFor" in storage_h,
+        "session_not_persisted": storage_cc.count(
+            "if (!AreaPersists(StorageAreaFor(pid))) {") >= 3,
+        "session_quota": "kStorageQuotaBytesSession" in storage_h,
+        # Chrome 口径：单条/条数上限只属于 sync；local/session 只有总量上限。
+        "chrome_area_quotas": storage_cc.count(
+            "return area == StorageArea::kSync;") >= 2,
+        # 内核自用区不吃扩展配额（DNR 规则集可达数 MB，被配额吃掉 = 功能丢失）。
+        "internal_area_unlimited": "return kInternalQuotaUnlimited;" in storage_cc,
+        # 写入结果一路回传：后端 → host → mojom → IPC 回执。
+        "write_result_enum": "StorageWriteResult" in storage_h,
+        "write_result_message": "StorageWriteResultMessage" in storage_h,
+        "mojom_error_channel": mojom.count("=> (string error)") >= 3,
+        "ipc_error_reply": "OnStorageDone(int request_id," in ipc,
+        "host_checks_result": "if (result != mv3::StorageWriteResult::kOk)" in host,
+        "host_reads_back_written":
+            "const std::string after = storage.GetValue(plugin_id, key);" in host,
+        # onChanged 只对真实写入派发（旧实现"写前比较"先算 changes 再统一写）。
+        "changed_after_real_write": (
+            "storage.SetValue(plugin_id, key, value_json)" in host),
+        "no_prewrite_compare": "if (before == value_json) {" not in host,
+        "remove_uses_result": "if (!storage.RemoveValue(plugin_id, key)) {" in host,
+        # managed 只读（Chrome：由策略下发）—— Set/Remove/Clear 三个写入口都要护住。
+        "managed_readonly": (host.count("kReadOnlyArea") >= 3 and
+                             host.count("mv3::StorageArea::kManaged") >= 3),
+        # 内核内部键不进扩展可见区：闹钟必须落在私有区，不能再用 /local。
+        "alarms_private_area": 'kAlarmsStorageArea[] = "__arupa_internal"' in alarms_raw,
+        "alarms_not_in_local": 'extension_id + "/local"' not in alarms_raw,
+    }
+
+
+def verify_storage_contract(facts: dict) -> int:
+    """chrome.storage 的接线契约（session 内存态 / 配额回报 / onChanged 真实性 / 内部键隔离）。"""
+    failures = {
+        "session_area_enum": "plugin_storage.h 没有 StorageArea / StorageAreaFor —— "
+                             "storage.session 与 local 又共用一套语义了。",
+        "session_not_persisted": "session 区没有做到「不落盘、不从盘恢复」 —— 重启后 "
+                                 "session 数据还在（Chrome 语义是重启即空）。",
+        "session_quota": "缺 kStorageQuotaBytesSession（session 区总量上限）。",
+        "chrome_area_quotas": "单条/条数上限没有限定在 sync 上 —— storage.local 里放一个"
+                              "大对象又会被静默拒写。",
+        "internal_area_unlimited": "内核自用区仍吃扩展配额 —— DNR 规则集（可达数 MB）会被"
+                                   "静默丢弃：那不是配额保护，是功能丢失。",
+        "write_result_enum": "SetValue 没有写入结果（StorageWriteResult）—— 超配额只能静默。",
+        "write_result_message": "缺 StorageWriteResultMessage —— 错误文案会各写一份。",
+        "mojom_error_channel": "mojom 的 Set/Remove/Clear 没有 error 回传通道 —— "
+                               "写失败根本没法告诉扩展。",
+        "ipc_error_reply": "IPC 回执不带 error —— 错误到不了 JS（runtime.lastError）。",
+        "host_checks_result": "host Set 没有检查 SetValue 的返回值。",
+        "host_reads_back_written": "host Set 没有写后回读 —— onChanged 的 newValue 可能"
+                                   "是根本没存进去的值。",
+        "changed_after_real_write": "host Set 没有走真实写入路径。",
+        "no_prewrite_compare": "又回到「写前比较」：被拒的键也会派发 onChanged。",
+        "remove_uses_result": "host Remove 没有按 RemoveValue 的返回值判断变更。",
+        "managed_readonly": "managed 区没有只读保护（Chrome：由策略下发）。",
+        "alarms_private_area": "闹钟没有显式落在内核私有区。",
+        "alarms_not_in_local": "闹钟又写回 storage.local 了 —— chrome.storage.local.get() "
+                               "会看到内核内部键，还挤占扩展配额。",
+    }
+    bad = [n for n, ok in facts.items() if n in failures and not ok]
+    if bad:
+        err("chrome.storage 接线不成立：\n"
+            + "\n".join(f"  · {failures[n]}" for n in bad))
+    return len(failures)
+
+
+def kernel_sw_facts() -> dict:
+    """Service worker 的语义/自愈事实（onStartup 每会话一次、注册失败有界重试）。"""
+    sw_host = _strip_comments(_read_source(SW_HOST_SOURCE))
+    sw_service = _strip_comments(_read_source(SW_SERVICE_HOST_SOURCE))
+    return {
+        # runtime.onStartup：Chrome 语义是每个**浏览器会话**一次，不是每次 SW 启动都发
+        # （"每次启动都发"会让扩展把 idle 回收后的重启误判成浏览器启动）。
+        "onstartup_once_per_session": (
+            "bool MarkStartupReported(" in sw_service and
+            "else if (MarkStartupReported(extension_id))" in sw_service),
+        # 注册失败要有界自愈：慢设备/冷启动首次失败很常见，只打日志会让扩展在本进程内
+        # 一直停在"未注册"，宿主随后按启用失败回滚停用。
+        "register_retry_bounded": (
+            "kRegisterRetryMax" in sw_host and
+            "if (attempt < kRegisterRetryMax)" in sw_host),
+        # 两处都要收回计数：注册成功归零 + 重试用尽后放弃（只查"存在"区分不了这两条路，
+        # 因为它们是同一句代码；少任何一处，偶发失败会被跨轮累积成永久放弃）。
+        "register_retry_reset_on_success": sw_host.count(
+            "RegisterRetries().erase(id);") >= 2,
+        "register_retry_scheduled": "ScheduleRegisterRetry(id, this_attempt);" in sw_host,
+    }
+
+
+def verify_sw_contract(facts: dict) -> int:
+    failures = {
+        "onstartup_once_per_session":
+            "runtime.onStartup 没有按「每会话一次」去重 —— 每次 SW 启动都会发，扩展会把"
+            "idle 回收后的重启误判成浏览器启动。",
+        "register_retry_bounded":
+            "SW 注册失败没有有界重试 —— 慢设备首次失败后该扩展会一直停在未注册，宿主按"
+            "启用失败回滚停用。",
+        "register_retry_reset_on_success":
+            "注册成功后没有把重试计数归零 —— 计数会跨轮累积，最终把偶发失败变成永久放弃。",
+        "register_retry_scheduled":
+            "注册失败没有真的安排重试（只打了日志）。",
+    }
+    bad = [n for n, ok in facts.items() if n in failures and not ok]
+    if bad:
+        err("Service worker 接线不成立：\n"
+            + "\n".join(f"  · {failures[n]}" for n in bad))
+    return len(failures)
+
+
 def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
                              window: dict, wakes: dict, facade: dict) -> dict:
     """声明与实现同源门禁（**双向**）—— 回应 N-C08 / K-A09。
@@ -625,6 +760,12 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
     # R-03 补注入面同理：与网盘无关，不能被下面的早退跳过。
     reinject = kernel_reinject_facts()
     verify_reinjection_contract(reinject)
+    # chrome.storage.local/session/onChanged 同理。
+    storage = kernel_storage_facts()
+    verify_storage_contract(storage)
+    # Service worker：onStartup 每会话一次 + 注册失败有界自愈。
+    sw = kernel_sw_facts()
+    verify_sw_contract(sw)
     if not routing["netdisk"]["namespaces"]:
         return {}                      # 老内核没有网盘面，不在此处拦
     protos = routing["protocol_namespaces"]
@@ -720,6 +861,9 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
         f"错误码 {len(dnr['error_codes'])} 个全部可达)"
         f" + R-03 补注入({len(kernel_reinject_facts())} 项接线契约全成立："
         f"启用跳变才补 / 代次判活 / 逐帧判权 / 机读回执 / 编译不成环)"
+        f" + chrome.storage({len(kernel_storage_facts())} 项接线契约全成立："
+        f"session 内存态 / 配额回报 / onChanged 真实写入 / 内部键隔离)"
+        f" + SW({len(kernel_sw_facts())} 项：onStartup 每会话一次 / 注册失败有界自愈)"
         f" + 混淆契约 {keep_count} 条 + 无假保活")
     return {"window_keys": declared_keys, "code_pairs": len(pairs),
             "entrypoints": len(facade["runtime_entrypoints"]), "keep_rules": keep_count}
@@ -768,7 +912,10 @@ def capability_manifest_data(ver: str, n: int, locked: dict, abi: dict) -> dict:
                                       SELF_TEST_SOURCE, JAVA_BRIDGE_FACADE,
                                       DNR_SCHEMA, DNR_RULES_HEADER, EXT_API_HOST,
                                       REINJECT_SOURCE, REINJECT_HEADER,
-                                      LOADER_BRIDGE_SOURCE, PLUGIN_BUILD_GN)]
+                                      LOADER_BRIDGE_SOURCE, PLUGIN_BUILD_GN,
+                                      PLUGIN_STORAGE_H, PLUGIN_STORAGE_CC,
+                                      STORAGE_HOST, STORAGE_MOJOM, STORAGE_IPC,
+                                      ALARMS_SOURCE)]
     sources += [d.as_posix() for d in _netdisk_schema_paths(_read_registry())
                 if (SRC / d).is_file()]
     return {
@@ -806,6 +953,11 @@ def capability_manifest_data(ver: str, n: int, locked: dict, abi: dict) -> dict:
         "declarative_net_request": kernel_dnr_facts(),
         # 阅读(R-03)：补注入面的可核对事实（启用路径/代次判活/机读回执/编译接线）。
         "content_script_reinject": kernel_reinject_facts(),
+        # chrome.storage.local/session/onChanged 的可核对事实（区语义/配额回报/
+        # onChanged 真实性/内部键隔离）。
+        "chrome_storage": kernel_storage_facts(),
+        # Service worker：onStartup 每会话一次 / 注册失败有界自愈。
+        "service_worker": kernel_sw_facts(),
         "runtime_facts": {
             "note": "available/verified 只能由运行期事实给出（Java 门面 "
                     "reserveWorkerWindow() / nomadTransferCapabilities() / "
@@ -827,6 +979,12 @@ def capability_manifest_data(ver: str, n: int, locked: dict, abi: dict) -> dict:
                         "R-03：启用跳变才补注入（宿主重复调启用不双重注入）",
                         "R-03：停用/卸载作废代次，迟到回执按代次丢弃",
                         "R-03：逐帧判权 + 机读回执（verdict）+ 编译目标不成环",
+                        "storage：session 区不落盘（重启即空）+ 分区配额符合 Chrome 口径",
+                        "storage：写入结果经 mojom/IPC 一路回给扩展（不再静默超配额）",
+                        "storage：onChanged 只对真实写入派发 + managed 只读 + 内核内部键不进"
+                        "扩展可见区",
+                        "SW：runtime.onStartup 每浏览器会话一次（不是每次 SW 启动都发）",
+                        "SW：注册失败有界自愈（最多 2 次，成功后计数归零）",
                         "交付件 consumer keep 规则齐备（App 构建会逐条校验）",
                         "无假保活：SW 生命周期只由窗口在持引用驱动"],
             "passed": True,
