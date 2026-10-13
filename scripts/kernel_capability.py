@@ -57,6 +57,10 @@ WAKE_OUTBOX_SOURCE = ROOT / "plugin/arupa_nomadtransfer_outbox.cc"
 SW_HOST_SOURCE = ROOT / "plugin/arupa_extension_sw_host.cc"
 SELF_TEST_SOURCE = ROOT / "mv3/arupa_mv3_self_test.cc"
 JAVA_BRIDGE_FACADE = ROOT / "plugin/android/java/src/co/arupa/plugin/ArupaPluginBridge.java"
+# declarativeNetRequest 的三处落点：对外声明(schema) / 内核自认(支持表) / 真正走得到(分发)。
+DNR_SCHEMA = ROOT / "plugin/api/declarative_net_request.json"
+DNR_RULES_HEADER = ROOT / "mv3/arupa_dnr_rules.h"
+EXT_API_HOST = ROOT / "plugin/arupa_ext_api_host.cc"
 
 # v2.4 协议契约（内核不得单边放大/缩小）：业务 ≤30s、最长租约 45s、一次租约一项。
 # 改了这些数字，就必须同批改 App（NetdiskProductionWorkerWindows）与 spec。
@@ -355,6 +359,34 @@ def kernel_netdisk_schema_facts() -> dict:
     return out
 
 
+def kernel_dnr_facts() -> dict:
+    """declarativeNetRequest 面的事实：schema 声明的方法、内核自认的支持表、
+    分发路由、错误码、两处极限值（内核常量 + schema properties）。"""
+    schema = json.loads((SRC / DNR_SCHEMA).read_text(encoding="utf-8"))
+    declared = sorted(fn["name"] for ns in schema for fn in ns.get("functions", []))
+    header = _strip_comments(_read_source(DNR_RULES_HEADER))
+    supported = sorted(_quoted_strings(
+        _array_body(header, "kSupportedDnrMethods", DNR_RULES_HEADER)))
+    _check_table("kSupportedDnrMethods", supported)
+    limits = _constexpr_ints(DNR_RULES_HEADER)
+    schema_limits = {}
+    for ns in schema:
+        for key, prop in (ns.get("properties") or {}).items():
+            schema_limits[key] = prop.get("value")
+    host = _read_source(EXT_API_HOST)
+    codes = dict(re.findall(r'constexpr char (kDnrErr\w+)\[\] = "(E_DNR_\w+)"', host))
+    if not codes:
+        err(f"{EXT_API_HOST.name} 里解析不到任何 E_DNR_* 错误码 —— "
+            f"错误码又回到自由文本了？(S-03)")
+    return {
+        "supported_methods": supported,
+        "schema_methods": declared,
+        "limits": limits,
+        "schema_limits": schema_limits,
+        "error_codes": {code: name for name, code in codes.items()},
+    }
+
+
 # ── 门禁 ────────────────────────────────────────────────────────────────────
 def verify_consumer_keep_rules() -> int:
     """交付件混淆契约：必需 keep 规则必须显式写在内核的 proguard.flags 里。"""
@@ -397,6 +429,69 @@ def verify_no_fake_keepalive() -> None:
         err("ReleaseWindowKeepAlive 没有 FinishedExternalRequest —— 锁借出去还不回来。")
 
 
+#: schema 的 properties 名 ↔ 内核常量名：同一个数字写两处，必须相等
+#: （schema 自己就在注释里写着"改了一处必须改另一处"）。
+DNR_LIMIT_PARITY = {
+    "kMaxDynamicRules": "MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES",
+    "kMaxRegexRules": "MAX_NUMBER_OF_REGEX_RULES",
+    "kMaxStaticRules": "GUARANTEED_MINIMUM_STATIC_RULES",
+    "kMaxEnabledStaticRulesets": "MAX_NUMBER_OF_ENABLED_STATIC_RULESETS",
+    "kMaxStaticRulesets": "MAX_NUMBER_OF_STATIC_RULESETS",
+}
+
+
+def verify_dnr_surface(facts: dict) -> int:
+    """DNR：schema ↔ 内核支持表 ↔ 分发路由 三处同源（S-04 的正面收口）。
+
+    为什么单设这一道：2026-10-13 实测发现 getEnabledRulesets /
+    updateEnabledRulesets 业务实现齐全，但分发只接了 getDynamicRules /
+    updateDynamicRules，运行期一律回 "not supported in this browser" —— 静态规则集
+    启停整条主链因此不可达。这种「声明有、实现有、**分发没有**」的漏接，任何断言都
+    发现不了，只能把三处摆在一起比。
+    """
+    host = _read_source(EXT_API_HOST)
+    supported, declared = facts["supported_methods"], facts["schema_methods"]
+    if supported != declared:
+        err("DNR 声明与实现不同源：\n"
+            f"  schema 有、内核支持表没有: "
+            f"{[m for m in declared if m not in supported] or '无'}\n"
+            f"  内核支持表有、schema 没有: "
+            f"{[m for m in supported if m not in declared] or '无'}\n"
+            f"  (schema={DNR_SCHEMA.as_posix()}；支持表="
+            f"{DNR_RULES_HEADER.as_posix()}::kSupportedDnrMethods)")
+    if not re.search(r'HasApiPrefix\(\s*name\s*,\s*"declarativeNetRequest\."\s*\)', host):
+        err(f"{EXT_API_HOST.name} 没有按命名空间整体路由 declarativeNetRequest.* —— "
+            "少接一个方法就会静默掉到通用兜底 \"not supported in this browser\""
+            "（S-04 的原样）：必须像其他内核命名空间一样整体移交 HandleKernelOwnedDnr。")
+    no_branch = [m for m in supported if f'"declarativeNetRequest.{m}"' not in host]
+    if no_branch:
+        err(f"{EXT_API_HOST.name} 里没有这些方法的分支: {no_branch} —— "
+            "路由会把它们交给 HandleKernelOwnedDnr，但那里没有对应处理。")
+    # 错误码：声明了却从没抛出 = 插件永远看不到（S-03 的一半）。
+    for code, name in facts["error_codes"].items():
+        if len(re.findall(rf"\b{re.escape(name)}\b", host)) < 2:
+            err(f"错误码 {code}（常量 {name}）声明了却从没被抛出 —— "
+                "插件按码分支时永远等不到它（声明与实现不同源）。")
+    # 错误回执必须结构化：每个错误返回（`Run(std::string(), …)`）都要带 DnrError。
+    handler = _cpp_function_bodies(_strip_comments(host)).get("HandleKernelOwnedDnr")
+    if not handler:
+        err(f"{EXT_API_HOST.name} 里找不到 HandleKernelOwnedDnr —— 实现改名了，先修门禁。")
+    bare = len(re.findall(r"Run\(\s*std::string\(\)\s*,", handler))
+    coded = handler.count("DnrError(")
+    if coded < bare:
+        err(f"HandleKernelOwnedDnr 里有 {bare} 个错误返回，但只有 {coded} 处用了 "
+            "DnrError() —— 自由文本错误串会把插件逼回「匹配中文」那条路（S-03）。")
+    for const, prop in DNR_LIMIT_PARITY.items():
+        want = facts["schema_limits"].get(prop)
+        got = facts["limits"].get(const)
+        if want is None:
+            err(f"schema 里找不到 {prop} —— 门禁与 schema 已漂移，先修门禁。")
+        if got != want:
+            err(f"{prop} 与内核常量不同源：schema={want} vs {const}={got} "
+                f"（{DNR_RULES_HEADER.name} 与 {DNR_SCHEMA.name} 必须同改）。")
+    return len(supported)
+
+
 def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
                              window: dict, wakes: dict, facade: dict) -> dict:
     """声明与实现同源门禁（**双向**）—— 回应 N-C08 / K-A09。
@@ -405,6 +500,9 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
       · 实现有（内核表）      → 声明必须有（schema / 事件白名单）
     任一条不成立就 err() 直接拒绝出包，绝不写一份"看起来通过"的清单。
     """
+    # declarativeNetRequest 面与网盘无关，先核 —— 老内核没有网盘面也不能跳过它。
+    dnr = kernel_dnr_facts()
+    verify_dnr_surface(dnr)
     if not routing["netdisk"]["namespaces"]:
         return {}                      # 老内核没有网盘面，不在此处拦
     protos = routing["protocol_namespaces"]
@@ -496,6 +594,8 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
         f" + 别名成对 + 窗口 {window['max_lease_ms']}ms/业务 {window['business_budget_max_ms']}ms"
         f"/maxItems {window['max_items']}（键名与运行期一致 {len(declared_keys)} 个）"
         f" + 跨语言码 {len(pairs)} 条 + 运行期入口 {len(facade['runtime_entrypoints'])} 个"
+        f" + DNR {len(dnr['supported_methods'])} 方法(schema↔支持表↔分发，"
+        f"错误码 {len(dnr['error_codes'])} 个全部可达)"
         f" + 混淆契约 {keep_count} 条 + 无假保活")
     return {"window_keys": declared_keys, "code_pairs": len(pairs),
             "entrypoints": len(facade["runtime_entrypoints"]), "keep_rules": keep_count}
@@ -515,6 +615,7 @@ def source_facts() -> dict:
         "worker_window": kernel_worker_window_facts(),
         "wake_outbox": kernel_wake_facts(),
         "java_facade": kernel_java_facade_facts(),
+        "dnr": kernel_dnr_facts(),
     }
 
 
@@ -540,7 +641,8 @@ def capability_manifest_data(ver: str, n: int, locked: dict, abi: dict) -> dict:
                                       MV3_PERMISSION_MAP, LISTENER_REGISTRY,
                                       WORKER_WINDOW_HEADER, WAKE_OUTBOX_HEADER,
                                       WAKE_OUTBOX_SOURCE, SW_HOST_SOURCE,
-                                      SELF_TEST_SOURCE, JAVA_BRIDGE_FACADE)]
+                                      SELF_TEST_SOURCE, JAVA_BRIDGE_FACADE,
+                                      DNR_SCHEMA, DNR_RULES_HEADER, EXT_API_HOST)]
     sources += [d.as_posix() for d in _netdisk_schema_paths(_read_registry())
                 if (SRC / d).is_file()]
     return {
@@ -574,6 +676,8 @@ def capability_manifest_data(ver: str, n: int, locked: dict, abi: dict) -> dict:
         "netdisk_schemas": schemas,
         "worker_window": window,
         "wake_outbox": wakes,
+        # 净化(S-01/S-03/S-04)：DNR 面的可核对事实（方法三处同源、错误码、限额）。
+        "declarative_net_request": kernel_dnr_facts(),
         "runtime_facts": {
             "note": "available/verified 只能由运行期事实给出（Java 门面 "
                     "reserveWorkerWindow() / nomadTransferCapabilities() / "
@@ -589,6 +693,9 @@ def capability_manifest_data(ver: str, n: int, locked: dict, abi: dict) -> dict:
                         "事件↔内核分发表（双向）", "nomad/nomadTransfer 别名成对且同能力",
                         "窗口预算自洽与 v2.4 契约", "C++↔Java 结果码 1:1",
                         "运行期事实入口齐备", "清单窗口键名↔运行期 JSON 键名",
+                        "DNR：schema↔支持表↔分发 三处同源（含逐方法分支）",
+                        "DNR：E_DNR_* 错误码全部可达且错误回执结构化",
+                        "DNR：schema properties↔内核常量数值一致",
                         "交付件 consumer keep 规则齐备（App 构建会逐条校验）",
                         "无假保活：SW 生命周期只由窗口在持引用驱动"],
             "passed": True,
