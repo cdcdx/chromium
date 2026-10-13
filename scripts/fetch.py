@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import os
 from pathlib import Path
 import platform
@@ -49,6 +50,11 @@ MAX_RETRY_DELAY = 120.0
 HEARTBEAT_SECONDS = 120.0
 # 补拉空 DEPS 仓库时的重试次数：这类仓库都不小，一次断流就得重下。
 DEPS_REPAIR_RETRIES = 8
+# run_quiet 成功折叠输出时仍然放出来的行：告警不该因为命令退出码为 0 就消失。
+# 两类都要认：工具自己的告警前缀（vite 的 "(!)"）、以及 MSBuild/dotnet 的
+# "<文件>(行,列): warning CSxxxx"（看着像路径开头的普通行，只靠行首前缀会漏）。
+QUIET_WARNING = re.compile(r"^\s*(\(!\)|\[WARN\]|warn(ing)?\b)|:\s+warning\b", re.IGNORECASE)
+QUIET_WARNING_LIMIT = 10
 # depot_tools 自举生成、而它自己又没 gitignore 的路径；会被 require_clean 误判成"本地改动"。
 DEPOT_GENERATED = ("python-bin", "python3_bin_reldir.txt", "bootstrap-*_bin")
 RETRIES = DEFAULT_RETRIES
@@ -57,6 +63,16 @@ RETRY_DELAY = DEFAULT_RETRY_DELAY
 
 def log(message):
     print(f"[INFO] {message}", flush=True)
+
+
+def action(name, detail=""):
+    """动作入口的分隔行。
+
+    一次调用会串起 gen/build/package/publish（all 还会展开成多个），而失败信息大多来自
+    ninja、dotnet、zip 这些外部命令的长输出 —— 事后翻日志很难判断"这一段属于哪个动作"。
+    每个动作进入时打一条带动作名的分隔行，人看和按行切段都方便。
+    """
+    log(f"── 动作 {name}" + (f": {detail}" if detail else "") + " ──")
 
 
 def err(message):
@@ -166,6 +182,47 @@ def execute(cmd, cwd, capture, tee):
         finally:
             state["done"].set()
     return "".join(stdout_chunks).strip(), process.returncode, "".join(stderr_chunks)
+
+
+def run_quiet(cmd, cwd=None, label=""):
+    """跑命令但把输出折叠起来：成功只留一行（警告除外），失败整份吐出。
+
+    测试/打包这类命令成功时要刷几百行（node --test 每个用例一行 ✔、npm 的 notice、
+    vite 的产物清单、dotnet publish 的逐文件列表），失败的关键信息却夹在中间 ——
+    边跑边刷屏反而把失败点冲走。所以：
+      · 成功：只留一行 ✓ 汇总；与"成功无关的告警"仍然逐行放出来（见 QUIET_WARNING），
+        不因为构建成功就把警告一起吞掉；
+      · 失败：完整输出原样打到 stdout，再按 F.run 的口径抛错。
+    长时间没有输出时照常打心跳，不会看起来像卡死。
+    """
+    cmd = [str(item) for item in cmd]
+    show = label or shlex.join(cmd)
+    log(("(dry-run) " if DRY_RUN else "") + f"{show}（输出折叠，失败时全量显示）")
+    if DRY_RUN:
+        return ""
+    started = time.time()
+    buffer = io.StringIO()
+    state = {"start": started, "last": started, "done": threading.Event(), "label": show}
+    with subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as process:
+        threads = [threading.Thread(target=pump, args=(process.stdout, buffer, [], state), daemon=True),
+                   threading.Thread(target=heartbeat, args=(state,), daemon=True)]
+        for thread in threads:
+            thread.start()
+        threads[0].join()
+        process.wait()
+        state["done"].set()
+    output = buffer.getvalue().strip()
+    if process.returncode:
+        if output:
+            print(output, flush=True)
+        err(f"{show} 失败（退出码 {process.returncode}）")
+    warnings = [line for line in output.splitlines() if QUIET_WARNING.search(line)]
+    for line in warnings[:QUIET_WARNING_LIMIT]:
+        print(line, flush=True)
+    if len(warnings) > QUIET_WARNING_LIMIT:
+        log(f"（另有 {len(warnings) - QUIET_WARNING_LIMIT} 行告警被折叠）")
+    log(f"✓ {show} 通过（{time.time() - started:.1f}s，折叠 {len(output.splitlines())} 行输出）")
+    return output
 
 
 def run(cmd, cwd=None, capture=False, retry=False, tee=False, retries=None):

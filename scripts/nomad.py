@@ -500,7 +500,10 @@ def desktop_build(root, args, target_os, arch, version, output):
         # 标记（node_modules/.package-lock.json），只看目录会让它跳过安装、随后构建报缺包。
         if not (web / 'node_modules/.package-lock.json').is_file():
             F.run(npm_install_command(npm, web), web, retry=True)
-        F.run([npm, 'run', 'build'], web)
+        # npm run build 的 prebuild 会跑全量 WebUI 测试（1600+ 用例，spec reporter 每个
+        # 用例一行 ✔），再叠上 tsc/vite 的产物清单 —— 直接流式输出会把构建日志淹掉，
+        # 失败信息反而被冲走。折叠成一行；失败时 run_quiet 原样全量吐出（含失败的用例）。
+        F.run_quiet([npm, 'run', 'build'], web, 'WebUI 构建（npm run build）')
     # 门面已在上面的 refresh_kernel_facade 里按源码重建并归位到交付顶层
     # （原来这里那次 `-o <交付>\dotnet` 的构建会把工程自己的源文件排除掉，
     #   编出 4KB 空程序集且退出码为 0 —— 已移除）。
@@ -775,6 +778,7 @@ def run(root, args, project, target_os, arches, version, actions):
         # 构建目录与交付目录同名（交付再追加 -<序号>），便于按同一个名字定位产物。
         output = root / 'out' / delivery_base(identity)
         if 'build' in actions:
+            F.action('build', f'{project} {target_os}/{arch}')
             if not F.DRY_RUN:
                 output.parent.mkdir(parents=True, exist_ok=True)
                 # A failed rebuild must not permit packaging yesterday's output.
@@ -786,4 +790,5 @@ def run(root, args, project, target_os, arches, version, actions):
             if not F.DRY_RUN:
                 seal(output, identity)
         if 'package' in actions:
+            F.action('package', f'{project} {target_os}/{arch}')
             package(args, output, identity)

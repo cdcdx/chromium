@@ -507,6 +507,25 @@ def parity_warnings(delivery_root: Path) -> list:
 # ── --stage：出包时把生成物与门面 DLL 一起落到交付里 ────────────────────────
 
 def find_dotnet() -> Optional[str]:
+    """按仓内约定解析 .NET SDK：配置 dotnet_path → 工作区 .tools/dotnet → PATH → 常见安装位置。
+
+    不能直接用 PATH 上的 dotnet：门面工程（dotnet/ArupaKernel.csproj）目标是 net10.0，
+    而机器上 PATH 的 dotnet 可能只有旧 SDK（本机 /usr/local/share/dotnet 只有 6.0.301，
+    工作区 .tools/dotnet 才是配套的 10.0.401）。选错 SDK 的后果不是报错，是 NETSDK1045
+    之后门面 DLL 静默建不出来、交付退化成"只带源码"，宿主只能等构建期自愈。
+    口径与 scripts/toolchains.py:dotnet_executable 保持一致（单一来源）。
+    """
+    if str(WORKSPACE / "scripts") not in sys.path:
+        sys.path.insert(0, str(WORKSPACE / "scripts"))
+    try:
+        import fetch as workspace_fetch                              # noqa: PLC0415
+        import toolchains                                             # noqa: PLC0415
+        executable = toolchains.dotnet_executable(workspace_fetch.load_config())
+        resolved = shutil.which(executable) or executable
+        if Path(resolved).is_file():
+            return resolved
+    except Exception:                                                # noqa: BLE001
+        pass                                                          # 读配置失败不阻断出包，退回下面的探测
     found = shutil.which("dotnet")
     if found:
         return found

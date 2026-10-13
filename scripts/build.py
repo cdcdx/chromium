@@ -26,6 +26,8 @@ from platforms import MATRIX, normalize_os, architectures, host_for
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 ALIASES = {"desktop": "arupa_desktop", "android": "arupa_android"}
+# 动作的真实执行次序（actions 本身是集合，日志里要靠这个顺序才读得出计划）。
+ACTIONS_ORDER = ("gen", "build", "package", "publish")
 
 
 
@@ -451,6 +453,9 @@ def main(argv=None):
         p.error("--jobs / --num 必须大于 0")
     if args.keep < 0:
         p.error("--keep 不能为负数")
+    # 动作在内部是集合，日志里看不出先后；all 展开后到底要跑哪几个也读不出来。
+    # 入口处打一遍实际次序，后面每个动作再有分隔行，整段日志可按动作切分。
+    F.log("本次动作: " + " → ".join(name for name in ACTIONS_ORDER if name in actions))
     if args.jobs is None:
         if "build" in actions and not is_browser:
             args.jobs, reason = automatic_jobs()
@@ -521,6 +526,7 @@ def main(argv=None):
             stamp = out / "arupa-build.json"
             identity = {"project": project, "os": target_os, "arch": cpu, "version": version, "link": args.link}
             if "gen" in actions or ("build" in actions and not (out / "build.ninja").exists()):
+                F.action("gen", f"{project} {target_os}/{cpu}")
                 # Invalidate the old success marker BEFORE changing configuration.
                 # A failed gen must never authorize building the previous graph.
                 if not args.dry_run:
@@ -547,6 +553,7 @@ def main(argv=None):
                         or (out / "args.gn").read_text(encoding="utf-8") != template:
                     F.err(f"{out} 配置不匹配；请先执行 gen")
             if "build" in actions:
+                F.action("build", f"{project} {target_os}/{cpu}（-j {args.jobs}）")
                 F.run([ninja, "-C", out, "-j", str(args.jobs),
                        *[t.removeprefix('//') for t in build_targets(project, target_os, cpu, out)]], SRC)
     if "package" in actions:
@@ -554,6 +561,7 @@ def main(argv=None):
         package_arches = (arch,) if target_os == "android" else arches
         dist_dir = args.dist_dir.resolve()
         for cpu in package_arches:
+            F.action("package", f"{project} {target_os}/{cpu}")
             prefix = kernel_delivery_prefix(target_os, cpu, version)
             if args.dry_run:
                 F.log(f'(dry-run) 清理残留（*.trash-*/.publish-* 等）并保留最近 {args.keep} 份交付: '
@@ -567,6 +575,7 @@ def main(argv=None):
                 deliveries.prune(dist_dir, prefix, args.keep,
                                  args.num or deliveries.newest_number(dist_dir, prefix))
     if "publish" in actions:
+        F.action("publish", f"{project} {target_os}/{arch}")
         dist_dir = args.dist_dir.resolve()
         prefix = publish.delivery_prefix(target_os, arch, version, args.link)
         requested = publish.selector(args.file, args.num)
