@@ -436,9 +436,28 @@ def check_managed_facade_abi(kernel):
         F.log(f'[i] {note}')
 
 
+def discard_stage(stage):
+    """回收 stage 里已不再被引用的构建中间物（交付物此时已被 save_output 搬走）。
+
+    mac 分支把三类产物都塞进同一个 stage：`-o` 的 payload/、MacDistRoot 的 bundles/
+    （kernelhost-publish / main-publish / media-tool 与那个 .app）、BaseOutputPath 的 local/，
+    合计 1GB+、上万文件。win/linux 只有 payload/ 且会被 save_output 的 rename 搬空，所以天然
+    是空壳、收尾能直接删；mac 不清就永远超过 finally 的「残留 > 40 就改名搁置」阈值，
+    于是每构建一次都在 out/ 留下一份无人再删的 `.publish-*.trash-*`。
+    删除走 deliveries.remove_path：独立会话子进程，删除闸门拒绝时只返回 False，不牵连构建；
+    失败的构建本来就要重跑，这里的中间物删掉不会丢需要的东西。"""
+    for dead in (stage / 'bundles', stage / 'local', stage / 'payload', stage / 'delivery'):
+        if dead.exists():
+            deliveries.remove_path(dead)
+
 
 def desktop_build(root, args, target_os, arch, version, output):
     repo = root / 'nomad_desktop'
+    # 上一次构建替换输出时会就地把旧输出改名搁置（`<name>.trash-*`，整份近 800MB），
+    # 正常路径下它只在 package 里才被清 —— 只跑 build 的人会一路堆到盘满。
+    # 构建开始时就回收：此时它是「更早那份输出」的墓碑，与本次要用的 out/<name> 无关。
+    if not F.DRY_RUN:
+        deliveries.clean_trash_directories(output.parent)
     # 命令行标志是 --pc-project，对应 argparse 属性 args.pc_project。
     project = desktop_project(repo, target_os, args.pc_project)
     nuget_config = (args.nuget_config or Path(__file__).resolve().parent.parent / 'build/nuget.config').expanduser().resolve()
@@ -530,9 +549,17 @@ def desktop_build(root, args, target_os, arch, version, output):
                 F.err(f'期望 MacDistRoot 下唯一 .app，实际 {len(apps)} 个: {bundle_root}')
             payload = stage / 'delivery'
             payload.mkdir()
-            copy_payload_tree(apps[0], payload / apps[0].name, target_os)
-            F.run(['codesign', '--verify', '--deep', '--strict', payload / apps[0].name])
-            if not (payload / apps[0].name / 'Contents/Resources/arupa-mac').is_dir():
+            # 交付物就是 bundles/ 里那个 .app，与 delivery/ 同卷 —— 直接 rename，不复制。
+            # ditto 再写一份要 850MB/上万文件，而且复制完 bundles/ 里那份原件还留在 stage，
+            # 使残留量永远超过收尾阈值（见 discard_stage）。rename 一样保住扩展属性、
+            # 符号链接与资源分支（不丢信息，只是不再产生第二份），失败才退回 ditto 复制。
+            delivered = payload / apps[0].name
+            try:
+                os.rename(apps[0], delivered)
+            except OSError:
+                copy_payload_tree(apps[0], delivered, target_os)
+            F.run(['codesign', '--verify', '--deep', '--strict', delivered])
+            if not (delivered / 'Contents/Resources/arupa-mac').is_dir():
                 F.err('macOS bundle 缺少内核 Contents/Resources/arupa-mac')
         else:
             payload = stage / 'payload'
@@ -562,6 +589,10 @@ def desktop_build(root, args, target_os, arch, version, output):
                 write_linux_desktop_integration(repo, payload)
                 prune_foreign_native_runtimes(payload, rid)
         save_output(payload, output)
+        # 输出已就位，stage 里的中间物（mac 的 payload/bundles/local）再无人引用：先掏成空壳，
+        # 让收尾走轻量 rmtree。放在成功路径上而不是 finally：构建失败/被打断时不做这种
+        # 同步大目录回收（子进程可能还在写），交给下面的搁置 + 下次构建开始时回收。
+        discard_stage(stage)
     finally:
         if not F.DRY_RUN:
             # 正常路径 payload 已 rename 走，stage 只剩空壳可直接删；

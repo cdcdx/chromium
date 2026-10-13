@@ -43,27 +43,49 @@ def remove_path(path):
         return False
 
 
-def clean_stale_directories(*roots):
-    """清理构建/打包旁置的残留（`*.trash-*`、`.publish-*`、`.browser-package-*`）。
-
-    正常路径不留东西；一旦打包中断或反复重建，out/ 与 dist/ 就会堆下整份拷贝。只按自己产出的
-    命名规则匹配，不碰交付目录、构建目录和内核交付，返回清理掉的项数。"""
+def _clean(*roots, match):
+    """按名字匹配清理旁置残留。删除被拒只记录，不抛出，也不牵连调用方。"""
     removed, refused = 0, []
     for root in roots:
         if not root.is_dir():
             continue
         for entry in sorted(root.iterdir()):
-            if not (STALE_SUFFIX.search(entry.name) or entry.name.startswith(STALE_PREFIXES)):
+            if not match(entry.name):
                 continue
             if remove_path(entry):
                 removed += 1
             else:
                 refused.append(entry)
+    return removed, refused
+
+
+def _report(removed, refused):
     if removed:
         F.log(f'清理残留目录/文件: {removed} 项')
     if refused:
         F.log(f'警告: {len(refused)} 项残留未能清理（删除被拒绝或权限不足）；可在普通终端执行: '
               'rm -rf ' + ' '.join(shlex.quote(str(path)) for path in refused))
+
+
+def clean_stale_directories(*roots):
+    """清理构建/打包旁置的残留（`*.trash-*`、`.publish-*`、`.browser-package-*`）。
+
+    正常路径不留东西；一旦打包中断或反复重建，out/ 与 dist/ 就会堆下整份拷贝。只按自己产出的
+    命名规则匹配，不碰交付目录、构建目录和内核交付，返回清理掉的项数。"""
+    removed, refused = _clean(*roots, match=lambda name: bool(STALE_SUFFIX.search(name))
+                              or name.startswith(STALE_PREFIXES))
+    _report(removed, refused)
+    return removed
+
+
+def clean_trash_directories(*roots):
+    """只清 `*.trash-*`（构建/打包收尾搁置的整份拷贝），可在每次 build 开始时回收上一次的残留。
+
+    与 `clean_stale_directories` 的差别是**不碰 `.publish-*`**：那是正在进行的构建还在读写的
+    暂存目录，并发构建时误删会直接毁掉对方那一次。`*.trash-*` 只在收尾搁置后才出现（改名之后
+    构建即结束），一定是废弃的，所以随时清都安全。"""
+    removed, refused = _clean(*roots, match=STALE_SUFFIX.search)
+    _report(removed, refused)
     return removed
 
 
