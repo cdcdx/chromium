@@ -1,9 +1,16 @@
-"""Git inventory and current-branch synchronization of immediate child directories."""
+"""Git inventory and current-branch synchronization of immediate child directories.
+
+`push` 只处理业务仓库：上游与工具仓库见 PUSH_EXCLUDED。"""
 from __future__ import annotations
 
 import os
 from pathlib import Path
 import subprocess
+
+# 不参与 push 的仓库：src 通常是 tag 分离检出，depot_tools 的本地分支只是上游镜像，
+# 把 HEAD 推回 chromium.googlesource.com 既非本意、也必然失败。两者由 fetch.sh 的
+# depot_tools / chromium 目标单独管理；pull / log / branch 不受影响。
+PUSH_EXCLUDED = frozenset({'depot_tools', 'src'})
 
 
 def repositories(root, onerror):
@@ -66,6 +73,7 @@ def sync(root, action, dry_run=False):
     root = root.resolve()
     errors = []
     count = success = 0
+    skipped = []
     def scan_error(error):
         errors.append(str(error))
         print(f'[ERROR] 无法扫描: {error}')
@@ -73,6 +81,10 @@ def sync(root, action, dry_run=False):
     for path in repositories(root, scan_error):
         count += 1
         print(f'\n=== {path.name} ===', flush=True)
+        if action == 'push' and path.name in PUSH_EXCLUDED:
+            skipped.append(path.name)
+            print('[INFO] 跳过 push：上游/工具仓库')
+            continue
         if dry_run:
             print(f'[INFO] (dry-run) {action} 当前分支 upstream（执行时校验分支和配置）')
             continue
@@ -83,7 +95,9 @@ def sync(root, action, dry_run=False):
         except (RuntimeError, OSError) as error:
             errors.append(f'{path.name}: {error}')
             print(f'[ERROR] {error}；需处于有提交的本地分支并配置 upstream')
-    print(f'\n[INFO] 共 {count} 个仓库，成功 {success} 个，错误 {len(errors)} 个'
+    print(f'\n[INFO] 共 {count} 个仓库，成功 {success} 个'
+          + (f'，跳过 {len(skipped)} 个（{"、".join(skipped)}）' if skipped else '')
+          + f'，错误 {len(errors)} 个'
           + ('（dry-run，未执行）' if dry_run else ''))
     return 1 if errors else 0
 

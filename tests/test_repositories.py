@@ -143,6 +143,34 @@ class RepositoriesTest(unittest.TestCase):
             self.assertEqual(R.sync(self.root, 'pull'), 1)
         self.assertEqual((repo / 'file').read_text(), 'uncommitted')
 
+    def test_push_skips_upstream_and_tool_repositories(self):
+        remote = self.root / 'fixtures/origin.git'
+        remote.mkdir(parents=True)
+        self.git(remote, 'init', '--bare')
+        repos = {}
+        for name in ('depot_tools', 'src', 'project'):
+            repo = self.init(name)
+            self.git(repo, 'remote', 'add', 'origin', str(remote))
+            self.git(repo, 'push', '-u', 'origin', f'HEAD:refs/heads/{name}')
+            (repo / 'file').write_text(name + ' update')
+            self.git(repo, '-c', 'commit.gpgsign=false', 'commit', '-am', name + ' update')
+            repos[name] = repo
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(R.sync(self.root, 'push'), 0)
+        pushed = output.getvalue()
+        self.assertIn('跳过 2 个', pushed)
+        self.assertIn('共 3 个仓库，成功 1 个', pushed)
+        self.assertEqual(self.git(remote, 'rev-parse', 'project'),
+                         self.git(repos['project'], 'rev-parse', 'HEAD'))
+        for name in ('depot_tools', 'src'):
+            self.assertEqual(self.git(remote, 'rev-parse', name),
+                             self.git(repos[name], 'rev-parse', 'HEAD~1'))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(R.sync(self.root, 'pull'), 0)
+        self.assertNotIn('跳过', output.getvalue())
+
     def test_sync_errors_continue_and_dry_run_does_not_execute(self):
         detached = self.init('a-detached')
         self.git(detached, 'checkout', '--detach')

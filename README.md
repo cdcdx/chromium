@@ -39,6 +39,8 @@ bash fetch.sh push --dry-run
 Windows 对应 `./fetch.ps1 pull` / `./fetch.ps1 push`。
 两个命令单独执行，按各仓库当前分支配置的 upstream 拉取或推送，不切换分支，不自动提交。
 `pull` 仅允许快进，工作区有修改时拒绝；`push` 只推送当前 HEAD 到 upstream 分支，不强推或附带 tags。
+`push` 跳过 `src`、`depot_tools` 这类上游/工具仓库（它们由 `fetch depot_tools` / `fetch chromium` 管理），
+汇总里按"跳过"计数、不算错误；`pull`、`log`、`branch` 仍包含它们。
 裸仓库、游离 HEAD、无提交或无 upstream 的仓库报错并继续，最后汇总；任一错误返回非零退出码。
 `--dry-run` 只列出计划，不执行 Git 或联网，也不验证 upstream。
 
