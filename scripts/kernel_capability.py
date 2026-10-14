@@ -451,7 +451,7 @@ def verify_no_fake_keepalive() -> None:
 DNR_LIMIT_PARITY = {
     "kMaxDynamicRules": "MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES",
     "kMaxRegexRules": "MAX_NUMBER_OF_REGEX_RULES",
-    "kMaxStaticRules": "GUARANTEED_MINIMUM_STATIC_RULES",
+    "kGuaranteedMinimumStaticRules": "GUARANTEED_MINIMUM_STATIC_RULES",
     "kMaxEnabledStaticRulesets": "MAX_NUMBER_OF_ENABLED_STATIC_RULESETS",
     "kMaxStaticRulesets": "MAX_NUMBER_OF_STATIC_RULESETS",
 }
@@ -518,7 +518,10 @@ def kernel_reinject_facts() -> dict:
     """
     bridge = _strip_comments(_read_source(LOADER_BRIDGE_SOURCE))
     bodies = _cpp_function_bodies(bridge)
-    enable = bodies.get("SetExtensionEnabled", "")
+    # 启用/停用的状态跳变逻辑落在 UI 线程入口 SetExtensionEnabledOnUi（SetExtensionEnabled
+    # 只做线程跳转），两处拼接起来核，避免把逻辑挪一层就误报"没接"。
+    enable = (bodies.get("SetExtensionEnabled", "") + "\n" +
+              bodies.get("SetExtensionEnabledOnUi", ""))
     purge = bodies.get("PurgeExtensionData", "")
     source = _strip_comments(_read_source(REINJECT_SOURCE))
     header = _strip_comments(_read_source(REINJECT_HEADER))
