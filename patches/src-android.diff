@@ -69,18 +69,28 @@ index e613ca33bf23cccc9827e0f40111c0b037bd9bdd..0ee3ca9f6e025cbdf98bc9d019e33e5e
  
      # Turbine reads lists from command line args by consuming args until one
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index f261c72029a989e0fc0cdf0f7042b1bc12b84e07..0df146d14b9fbfad01ad11c2c14e2aca6d1bd23f 100644
+index f261c72029a989e0fc0cdf0f7042b1bc12b84e07..a8d0120345491a36536c4af1e4395696cb17ce48 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -2041,6 +2041,8 @@ source_set("browser") {
+@@ -2041,6 +2041,7 @@ source_set("browser") {
      ":file_util_service",
      ":font_pref",
      ":icon_loader",
 +    "//chrome/browser/arupa_android",
-+    "//chrome/browser/arupa_android/aar:arupa_kernel_aar_native",
      ":resources_util",
      ":unexpire_flags",
      "//base",
+@@ -2491,6 +2492,10 @@ source_set("browser") {
+     "//chrome/browser/ui/webauthn:impl",
+   ]
+ 
++  if (is_android) {
++    deps += [ "//chrome/browser/arupa_android/aar:arupa_kernel_aar_native" ]
++  }
++
+   if (enable_webui_ntp) {
+     deps += [
+       "//chrome/browser/new_tab_page",
 diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
 index 3d46f9e7d35332f594f46cb50c93a072bc5b8208..1f6e512df2a34e0f6d83daab8054c8bcf6f2eb86 100644
 --- a/content/browser/renderer_host/navigation_request.cc
