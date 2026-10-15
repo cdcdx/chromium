@@ -288,6 +288,17 @@ PY
   PAK_SRC="${PAK_SRC_SAVED}"   # 下一个架构重新解析（各架构的 pak 可能不同）
 done
 
+# ---------------------------------------------------------------- 契约反向核对（K-03/K-05）
+# 不只看工作区源码：从每个 AAR 内解包 assets/arupa-kernel-contract.json，与源码派生契约
+# 逐字段核对（陈旧/混装 AAR 在此被拒）；≥2 个架构时再比对跨 ABI 契约 digest/schema 一致。
+aar_args=()
+for cpu in "${ARCHS[@]}"; do
+  aar_args+=(--aar "${DIST}/kernel/${cpu}/arupa-kernel.aar")
+done
+python3 "${ROOT_DIR}/scripts/kernel_capability.py" verify-aar "${aar_args[@]}" \
+  || err "AAR 内嵌契约与源码不同源（K-03 反向核对 / K-05 跨 ABI 一致）：拒绝交付"
+log "AAR 内嵌契约已核对（K-03 反向核对 + K-05 跨 ABI 一致）"
+
 # ---------------------------------------------------------------- package/ 附加内容
 # ⚠ 必须在算 SHA256SUMS.txt / MANIFEST.md 之前拷，否则清单里没有这些文件
 if [[ "${DO_PACKAGE}" -eq 1 ]]; then

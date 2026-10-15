@@ -50,12 +50,26 @@ REGISTRY_JSON = ROOT / "plugin/arupa_plugin_registry.json"
 REGISTRY_HEADER = ROOT / "plugin/arupa_plugin_registry.h"
 ROUTING_HEADER = ROOT / "plugin/arupa_ext_api_prefixes.h"
 MV3_PERMISSION_MAP = ROOT / "mv3/arupa_mv3_permission_map.cc"
+MV3_PERMISSION_MAP_H = ROOT / "mv3/arupa_mv3_permission_map.h"
+# K-02：Java 自检门面（与 native 权限表做跨语言契约核对）。
+JAVA_MV3_GUARD = ROOT / "mv3/android/java/src/co/arupa/mv3/ArupaMv3Guard.java"
+# K-03/K-04：内核能力契约（单一来源派生的提交产物；三者由 `contract --write` 同批生成，
+# 由 verify_contract_sync 门禁保证与源码同源）。
+CONTRACT_SCHEMA_VERSION = 1
+CONTRACT_JSON = ROOT / "mv3/arupa-kernel-contract.json"
+CONTRACT_HEADER = ROOT / "mv3/arupa_kernel_contract.h"
+CONTRACT_JAVA = ROOT / "mv3/android/java/src/co/arupa/mv3/ArupaKernelContract.java"
+# AAR 内契约文件名（打包反向核对与运行期读取都认这个路径）。
+CONTRACT_ASSET_NAME = "assets/arupa-kernel-contract.json"
 LISTENER_REGISTRY = ROOT / "plugin/arupa_ext_listener_registry.cc"
 WORKER_WINDOW_HEADER = ROOT / "plugin/arupa_worker_window.h"
 WAKE_OUTBOX_HEADER = ROOT / "plugin/arupa_nomadtransfer_outbox.h"
 WAKE_OUTBOX_SOURCE = ROOT / "plugin/arupa_nomadtransfer_outbox.cc"
 SW_HOST_SOURCE = ROOT / "plugin/arupa_extension_sw_host.cc"
 SELF_TEST_SOURCE = ROOT / "mv3/arupa_mv3_self_test.cc"
+SELF_TEST_H = ROOT / "mv3/arupa_mv3_self_test.h"
+# K-06：自检的 JNI 导出落点（结构化结果从这里交给 Java 门面）。
+MV3_GUARD_JNI = ROOT / "mv3/mv3_guard_jni.cc"
 JAVA_BRIDGE_FACADE = ROOT / "plugin/android/java/src/co/arupa/plugin/ArupaPluginBridge.java"
 # declarativeNetRequest 的三处落点：对外声明(schema) / 内核自认(支持表) / 真正走得到(分发)。
 DNR_SCHEMA = ROOT / "plugin/api/declarative_net_request.json"
@@ -297,6 +311,363 @@ def kernel_mv3_permissions() -> dict:
     if not rows:
         err("MV3 权限表解析结果为空 —— 解析器与源码格式漂移。")
     return rows
+
+
+def kernel_perm_verdict_enum() -> dict:
+    """解析 C++ enum class PermVerdict { kX = N, ... }; 返回 name → int。
+
+    这是 native 侧权限 verdict 的权威数值表；Java 侧 PERM_* 必须与它 1:1 对齐
+    （K-02，正是 K-01「native 7 / Java 8」混装错误的拦截点）。"""
+    text = _strip_comments(_read_source(MV3_PERMISSION_MAP_H))
+    m = re.search(r"enum\s+class\s+PermVerdict\s*\{(.*?)\};", text, re.S)
+    if not m:
+        err(f"{MV3_PERMISSION_MAP_H.as_posix()} 里找不到 enum class PermVerdict —— "
+            f"解析器与源码已漂移。")
+    out = {mm.group(1): int(mm.group(2))
+           for mm in re.finditer(r"(k[A-Za-z]+)\s*=\s*(-?\d+)", m.group(1))}
+    if not out:
+        err(f"{MV3_PERMISSION_MAP_H.as_posix()} 的 PermVerdict 枚举解析不到任何成员。")
+    return out
+
+
+def kernel_java_guard_perm_constants() -> dict:
+    """解析 ArupaMv3Guard.java 的 public static final int PERM_* = N; 返回 name → int。"""
+    text = _read_source(JAVA_MV3_GUARD)
+    out = {mm.group(1): int(mm.group(2)) for mm in re.finditer(
+        r"public\s+static\s+final\s+int\s+(PERM_[A-Za-z_]+)\s*=\s*(-?\d+)\s*;",
+        text)}
+    if not out:
+        err(f"{JAVA_MV3_GUARD.as_posix()} 里解析不到任何 PERM_* 常量 —— "
+            f"解析器与源码已漂移。")
+    return out
+
+
+def kernel_java_guard_expect_perms() -> list:
+    """解析 ArupaMv3Guard.selfTest() 里的 expectPerm("perm", PERM_X, "cap"/null)。
+
+    返回 [(perm, verdict_const_name, want_cap_or_None)]；want_cap 为 None 表示 Java
+    不约束能力（对应 Java 里传 null）。每条都必须在 native 权限表里逐条同源。"""
+    text = _read_source(JAVA_MV3_GUARD)
+    out = []
+    for mm in re.finditer(
+            r'expectPerm\(\s*"([^"]+)"\s*,\s*(PERM_[A-Za-z_]+)\s*,\s*'
+            r'((?:null)|"[^"]*")\s*\)', text):
+        cap = None if mm.group(3) == "null" else mm.group(3).strip('"')
+        out.append((mm.group(1), mm.group(2), cap))
+    if not out:
+        err(f"{JAVA_MV3_GUARD.as_posix()} 的 selfTest() 里解析不到任何 expectPerm 调用 "
+            f"—— 解析器与源码已漂移。")
+    return out
+
+
+def _check_perm_verdict_enum(cpp_enum: dict, java_consts: dict) -> list:
+    """C++ PermVerdict 与 Java PERM_* 必须 1:1 数值对齐。
+
+    两侧命名故意不同（kXxx vs PERM_Xxx），所以只比**数值集合**是否相等：任一侧
+    独有数值或数值重复都意味着契约漂移，能直接拦下「native 7 / Java 8」类错误。"""
+    fails = []
+    cpp_vals, java_vals = set(cpp_enum.values()), set(java_consts.values())
+    only_cpp = sorted(cpp_vals - java_vals)
+    only_java = sorted(java_vals - cpp_vals)
+    if only_cpp:
+        fails.append("C++ PermVerdict 有 Java 没有的数值: " + str(only_cpp))
+    if only_java:
+        fails.append("Java PERM_* 有 C++ 没有的数值: " + str(only_java))
+    for label, vals in (("C++", list(cpp_enum.values())),
+                        ("Java", list(java_consts.values()))):
+        dups = sorted({v for v in vals if vals.count(v) > 1})
+        if dups:
+            fails.append(f"{label} 侧 PermVerdict 数值重复（1:1 崩塌）: {dups}")
+    return fails
+
+
+def _check_perm_table_contract(cpp_perms: dict, java_expects: list,
+                               cpp_enum: dict, java_consts: dict) -> list:
+    """对每个 Java 校验的权限，比较 verdict 数值与 capability。
+
+    这是 K-01 类错误的精确拦截点：native 权限表（kTable）与 Java expectPerm 期望
+    必须逐条同源，verdict 数值不等或 capability 不等都拒绝出包。"""
+    fails = []
+    for perm, const_name, want_cap in java_expects:
+        if const_name not in java_consts:
+            fails.append(f"Java expectPerm({perm}) 用了未知常量 {const_name}（门面缺该 PERM_*？）")
+            continue
+        want_val = java_consts[const_name]
+        row = cpp_perms.get(perm)
+        if row is None:
+            # 该权限在 C++ 权限表里没有显式行：它由 MapPermission 的逻辑分支判定
+            # （vendor 前缀 → kVendorNamespace、未知 → kDenyUnknown）。Java 与 native
+            # 调的是同一个 native 函数，不存在 K-01 类「手写表 vs 手写期望」漂移；
+            # 这类权限由 native 自检的 ExpectPerm 统一覆盖，这里不误报。
+            continue
+        cpp_val = cpp_enum.get(row["verdict"])
+        if cpp_val is None:
+            fails.append(f"C++ 权限 {perm} 的 verdict {row['verdict']} 不在 PermVerdict 枚举里。")
+            continue
+        if want_val != cpp_val:
+            fails.append(f"权限 {perm} verdict 不一致: Java={const_name}({want_val}) vs "
+                         f"C++={row['verdict']}({cpp_val})。")
+        if want_cap is not None and want_cap != row["capability"]:
+            fails.append(f"权限 {perm} capability 不一致: Java 期望 '{want_cap}' vs "
+                         f"C++ 实际 '{row['capability']}'。")
+    return fails
+
+
+def verify_permission_contract() -> dict:
+    """K-02 跨语言权限契约门禁（出包前强制）：C++ PermVerdict ↔ Java PERM_*，
+    C++ 权限表 ↔ Java expectPerm。任一条不一致就 err() 拒绝出包。
+
+    与网盘无关，必须在 verify_capability_claims 的 netdisk 早退之前运行，
+    否则老内核（无网盘）能绕过这道门禁。"""
+    cpp_enum = kernel_perm_verdict_enum()
+    java_consts = kernel_java_guard_perm_constants()
+    java_expects = kernel_java_guard_expect_perms()
+    cpp_perms = kernel_mv3_permissions()
+    fails = _check_perm_verdict_enum(cpp_enum, java_consts)
+    fails += _check_perm_table_contract(cpp_perms, java_expects, cpp_enum, java_consts)
+    if fails:
+        err("跨语言权限契约不一致（K-02；正是 K-01 的量产通道）：\n  · "
+            + "\n  · ".join(fails))
+    return {"enum_pairs": len(cpp_enum),
+            "java_consts": len(java_consts),
+            "java_checked_perms": len(java_expects)}
+
+
+def verify_permission_contract_regression() -> None:
+    """K-02 负向回归夹具（CI/沙箱可断言，不触发 sys.exit）。
+
+    构造「Java 把 browsingData 期望成 8 而 native 仍是 7」的篡改场景，门禁必须报失败；
+    同时断言当前正常源码不被该门禁误伤。这把「门禁形同虚设」本身变成可测失败。"""
+    cpp_enum = kernel_perm_verdict_enum()
+    java_consts = kernel_java_guard_perm_constants()
+    cpp_perms = kernel_mv3_permissions()
+    real = kernel_java_guard_expect_perms()
+    # 篡改：browsingData 的 verdict 常量替换成 8（PERM_DEGRADED_UNAVAILABLE）。
+    tampered = [(p, "PERM_DEGRADED_UNAVAILABLE" if p == "browsingData" else c, cap)
+                for (p, c, cap) in real]
+    if not _check_perm_table_contract(cpp_perms, tampered, cpp_enum, java_consts):
+        err("K-02 负向回归夹具失效：把 browsingData 期望改成 8 后门禁没有报错 —— "
+            "跨语言权限契约门禁形同虚设。")
+    ok_fails = _check_perm_table_contract(cpp_perms, real, cpp_enum, java_consts)
+    if ok_fails:
+        err("K-02 负向回归夹具前提错误：当前正常源码就被门禁判失败，门禁可能误伤：\n  · "
+            + "\n  · ".join(ok_fails))
+
+
+# ── K-03/K-04 内核能力契约（单一来源派生 + 提交产物 + 同步门禁 + AAR 反向核对）──────
+def _canonical_contract() -> dict:
+    """从源码派生**语义契约**（不含 git 修订等每次提交都变的字段，保证 digest 稳定）。
+
+    只纳入会被混装影响、且两侧（Java/native）都依赖的事实：PermVerdict 数值表、
+    权限三元组、路由前缀、宿主可发事件、协议命名空间。"""
+    reg = _read_registry()
+    routing = reg["routing"]
+    enum_ = kernel_perm_verdict_enum()
+    perms = kernel_mv3_permissions()
+    return {
+        "schemaVersion": CONTRACT_SCHEMA_VERSION,
+        "permVerdict": {k: enum_[k] for k in sorted(enum_)},
+        "permissions": [
+            {"name": p, "verdict": perms[p]["verdict"], "capability": perms[p]["capability"]}
+            for p in sorted(perms)
+        ],
+        "routing": {
+            "hostOwnedPrefixes": sorted(routing["host_owned_prefixes"]),
+            "kernelOwnedBridgePrefixes": sorted(routing["kernel_owned_bridge_prefixes"]),
+            "hostFireableEvents": sorted(routing["host_fireable_events"]),
+        },
+        "protocolNamespaces": sorted(_registry_protocol_namespaces(reg)),
+    }
+
+
+def _contract_payload(doc: dict) -> str:
+    """规范化序列化：与 JSON 产物无关的稳定字节串（用于算 digest）。"""
+    return json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def build_contract() -> dict:
+    """语义契约 + contractDigest + contractEpoch（digest 覆盖规范化后的语义契约本身）。"""
+    doc = _canonical_contract()
+    digest = hashlib.sha256(_contract_payload(doc).encode("utf-8")).hexdigest()
+    doc = dict(doc)
+    doc["contractDigest"] = digest
+    doc["contractEpoch"] = digest[:16]
+    return doc
+
+
+def _render_contract_json(doc: dict) -> str:
+    return json.dumps(doc, indent=1, ensure_ascii=False, sort_keys=True) + "\n"
+
+
+def _render_contract_header(doc: dict) -> str:
+    return (
+        "// 自动生成，请勿手改 —— 重跑: python3 scripts/kernel_capability.py contract --write\n"
+        "// K-04：native 与 Java 各自嵌入同一份契约身份；启动时 O(1) 比对，不一致即\n"
+        "// KERNEL_CONTRACT_MISMATCH（陈旧/混装 AAR 的物理拦截点）。\n"
+        "#ifndef CHROME_BROWSER_ARUPA_ANDROID_MV3_ARUPA_KERNEL_CONTRACT_H_\n"
+        "#define CHROME_BROWSER_ARUPA_ANDROID_MV3_ARUPA_KERNEL_CONTRACT_H_\n"
+        "\n"
+        "namespace arupa::mv3::contract {\n"
+        f"inline constexpr int kSchemaVersion = {doc['schemaVersion']};\n"
+        f"inline constexpr char kDigest[] = \"{doc['contractDigest']}\";\n"
+        f"inline constexpr char kEpoch[] = \"{doc['contractEpoch']}\";\n"
+        "}  // namespace arupa::mv3::contract\n"
+        "\n"
+        "#endif  // CHROME_BROWSER_ARUPA_ANDROID_MV3_ARUPA_KERNEL_CONTRACT_H_\n"
+    )
+
+
+def _render_contract_java(doc: dict) -> str:
+    return (
+        "package co.arupa.mv3;\n"
+        "\n"
+        "// 自动生成，请勿手改 —— 重跑: python3 scripts/kernel_capability.py contract --write\n"
+        "// K-04：与 native 内嵌同一契约身份；ArupaMv3Guard.verifyContractIdentity() 启动时\n"
+        "// 与 JNI 返回的 native digest 做 O(1) 比对（陈旧/混装 AAR 的物理拦截点）。\n"
+        "public final class ArupaKernelContract {\n"
+        "    private ArupaKernelContract() {}\n"
+        "\n"
+        f"    public static final int SCHEMA_VERSION = {doc['schemaVersion']};\n"
+        f"    public static final String DIGEST = \"{doc['contractDigest']}\";\n"
+        f"    public static final String EPOCH = \"{doc['contractEpoch']}\";\n"
+        "}\n"
+    )
+
+
+def write_contract(repo_root: Path) -> list:
+    """把三份契约产物写到源码树（单一来源派生的提交产物）。"""
+    doc = build_contract()
+    arts = [(CONTRACT_JSON, _render_contract_json(doc)),
+            (CONTRACT_HEADER, _render_contract_header(doc)),
+            (CONTRACT_JAVA, _render_contract_java(doc))]
+    written = []
+    for rel, text in arts:
+        p = (repo_root / rel).resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        written.append(p)
+    log(f"  契约产物已写出: digest={doc['contractDigest'][:16]} epoch={doc['contractEpoch']} "
+        f"schema=v{doc['schemaVersion']}")
+    return written
+
+
+def verify_contract_sync() -> dict:
+    """K-04 同步门禁：提交的契约产物必须与当前源码派生的一致（否则漏跑 contract --write）。"""
+    doc = build_contract()
+    for rel, expected in ((CONTRACT_JSON, _render_contract_json(doc)),
+                          (CONTRACT_HEADER, _render_contract_header(doc)),
+                          (CONTRACT_JAVA, _render_contract_java(doc))):
+        p = SRC / rel
+        if not p.is_file():
+            err(f"缺契约产物 {rel.as_posix()} —— 运行 "
+                f"python3 scripts/kernel_capability.py contract --write 生成后再出包。")
+        got = p.read_text(encoding="utf-8")
+        if got != expected:
+            err(f"契约产物与源码不同源: {rel.as_posix()} —— "
+                f"权限表/枚举/路由变了却没重跑 contract --write。")
+    # 顺带保证 AAR 内资产名与产物路径一致（打包反向核对认这个）。
+    if CONTRACT_JSON.name != Path(CONTRACT_ASSET_NAME).name:
+        err("契约 JSON 文件名与 AAR 资产名不一致 —— 打包反向核对会找错文件。")
+    return {"digest": doc["contractDigest"], "epoch": doc["contractEpoch"],
+            "schema_version": doc["schemaVersion"]}
+
+
+def verify_aar_contract(aar_path: Path, expected: dict | None = None) -> dict:
+    """K-03：从 AAR 内解包读取内嵌契约，与源码派生契约逐字段核对。
+
+    只证明「这份 AAR 里真实带的契约」与当前源码同源，而不是只看工作区源码。
+    SHA256 只证明文件后来没变，证明不了它自带哪份契约。"""
+    import zipfile
+    aar_path = Path(aar_path)
+    if not aar_path.is_file():
+        err(f"找不到 AAR: {aar_path}")
+    want = expected or build_contract()
+    with zipfile.ZipFile(aar_path) as z:
+        names = z.namelist()
+        if CONTRACT_ASSET_NAME not in names:
+            err(f"{aar_path.name} 里没有内嵌契约 {CONTRACT_ASSET_NAME} —— "
+                f"这份 AAR 无法证明与源码同源（拒绝交付）。")
+        got = json.loads(z.read(CONTRACT_ASSET_NAME).decode("utf-8"))
+    for key in ("schemaVersion", "contractDigest", "permVerdict",
+                "permissions", "routing", "protocolNamespaces"):
+        if got.get(key) != want.get(key):
+            err(f"{aar_path.name} 内嵌契约与源码不同源: 字段 {key} 不一致 —— "
+                f"陈旧/混装的 AAR，拒绝交付。")
+    return {"aar": aar_path.name, "digest": got["contractDigest"],
+            "schema_version": got["schemaVersion"]}
+
+
+def verify_cross_abi_contract(aar_paths: list) -> dict:
+    """K-05：多 ABI 的 AAR 必须内嵌同一份契约（digest/schema 一致，仅允许 native/ABI 不同）。"""
+    import zipfile
+    seen = {}
+    for p in aar_paths:
+        p = Path(p)
+        with zipfile.ZipFile(p) as z:
+            if CONTRACT_ASSET_NAME not in z.namelist():
+                err(f"{p.name} 里没有内嵌契约 {CONTRACT_ASSET_NAME} —— 无法做跨 ABI 比对。")
+            c = json.loads(z.read(CONTRACT_ASSET_NAME).decode("utf-8"))
+        seen[p.name] = (c.get("contractDigest"), c.get("schemaVersion"))
+    digests = {v[0] for v in seen.values()}
+    schemas = {v[1] for v in seen.values()}
+    if len(digests) > 1 or len(schemas) > 1:
+        err("跨 ABI 契约不一致（不同 ABI 会得到不同能力行为）：\n  "
+            + "\n  ".join(f"  {k}: digest={v[0][:16]} schema=v{v[1]}" for k, v in seen.items()))
+    return {"count": len(seen), "digest": next(iter(digests))}
+
+
+# ── K-06 结构化自检结果 ────────────────────────────────────────────────────────
+def kernel_selftest_facts() -> dict:
+    """结构化自检（K-06）的接线事实：native 产出结构化 JSON、结构体带 items、
+    JNI 与 Java 门面都暴露 selfTestJson —— 缺一个，宿主就只能回去匹配自由文本。"""
+    h = _strip_comments(_read_source(SELF_TEST_H))
+    cc = _strip_comments(_read_source(SELF_TEST_SOURCE))
+    jni = _strip_comments(_read_source(MV3_GUARD_JNI))
+    java = _read_source(JAVA_MV3_GUARD)
+    json_fn = ""
+    m = re.search(r"std::string\s+SelfTestJson\(\)\s*\{(.*?)\n\}", cc, re.S)
+    if m:
+        json_fn = m.group(1)
+    return {
+        "struct_has_failure": "struct SelfTestFailure" in h,
+        "struct_has_items": "std::vector<SelfTestFailure> items" in h,
+        "records_structured_failure": "r.items.push_back" in cc,
+        "json_fn_declared": "std::string SelfTestJson();" in h,
+        "json_fn_defined": bool(json_fn),
+        # 必备字段：schemaVersion / contractDigest / pass / fail / retryable / failures。
+        "json_fields": all(f'"{k}"' in json_fn for k in
+                           ("schemaVersion", "contractDigest", "pass", "fail",
+                            "retryable", "failures")),
+        "json_layer_classified": "permission-contract" in json_fn,
+        "jni_export": "JNI_ArupaMv3Guard_SelfTestJson" in jni and
+                      "arupa::mv3::SelfTestJson()" in jni,
+        "java_facade": "public static String selfTestJson()" in java and
+                       "selfTestJson();" in java and
+                       "String selfTestJson();" in java,
+    }
+
+
+def verify_selftest_contract(facts: dict) -> int:
+    """K-06 结构化自检的接线契约（native 结构体/JSON/JNI/Java 门面）逐条核。"""
+    failures = {
+        "struct_has_failure": "SelfTestResult 没有 SelfTestFailure 结构 —— 失败项没有结构化层。",
+        "struct_has_items": "SelfTestResult 没有 items 列表 —— 结构化失败项无处存放。",
+        "records_structured_failure": "Expect 没有把失败记为结构化项（r.items.push_back）—— "
+                                      "依旧只能靠自由文本。",
+        "json_fn_declared": "头文件里没有 SelfTestJson() 声明。",
+        "json_fn_defined": "self_test.cc 里没有 SelfTestJson() 定义。",
+        "json_fields": "SelfTestJson 缺必备字段（schemaVersion/contractDigest/pass/fail/"
+                       "retryable/failures）—— 宿主拿不到稳定协议。",
+        "json_layer_classified": "SelfTestJson 没有区分契约层失败（permission-contract）—— "
+                                 "retryable 无法正确分类。",
+        "jni_export": "JNI 没有导出 SelfTestJson（mv3_guard_jni.cc）。",
+        "java_facade": "Java 门面没有 selfTestJson()（声明 + 调用 + Natives 接口）。",
+    }
+    bad = [n for n, ok in facts.items() if n in failures and not ok]
+    if bad:
+        err("K-06 结构化自检接线不成立：\n"
+            + "\n".join(f"  · {failures[n]}" for n in bad))
+    return len(failures)
 
 
 def kernel_dispatched_events() -> list:
@@ -769,6 +1140,14 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
     # Service worker：onStartup 每会话一次 + 注册失败有界自愈。
     sw = kernel_sw_facts()
     verify_sw_contract(sw)
+    # K-06 结构化自检结果（与网盘无关，先于早退）。
+    selftest = kernel_selftest_facts()
+    verify_selftest_contract(selftest)
+    # K-02 跨语言权限契约门禁（与网盘无关，必须先于下面的早退运行，否则老内核绕过）。
+    perm_stats = verify_permission_contract()
+    verify_permission_contract_regression()
+    # K-04 契约产物同步门禁：提交的 C++/Java/JSON 必须与源码派生的一致。
+    contract_stats = verify_contract_sync()
     if not routing["netdisk"]["namespaces"]:
         return {}                      # 老内核没有网盘面，不在此处拦
     protos = routing["protocol_namespaces"]
@@ -867,7 +1246,14 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
         f" + chrome.storage({len(kernel_storage_facts())} 项接线契约全成立："
         f"session 内存态 / 配额回报 / onChanged 真实写入 / 内部键隔离)"
         f" + SW({len(kernel_sw_facts())} 项：onStartup 每会话一次 / 注册失败有界自愈)"
-        f" + 混淆契约 {keep_count} 条 + 无假保活")
+        f" + 混淆契约 {keep_count} 条 + 无假保活"
+        f" + 跨语言权限契约(C++ PermVerdict {perm_stats['enum_pairs']} ↔ Java PERM_* "
+        f"{perm_stats['java_consts']} 数值 1:1；Java 自校验权限 {perm_stats['java_checked_perms']} "
+        f"条逐条 verdict+capability；负向回归夹具已通过)"
+        f" + 契约产物同步(v{contract_stats['schema_version']} digest={contract_stats['digest'][:16]} "
+        f"epoch={contract_stats['epoch']}；C++/Java/JSON 与源码同源)"
+        f" + 结构化自检(K-06：{len(selftest)} 项接线成立，JSON pass/fail/retryable/failures"
+        f"+contractDigest，JNI↔Java 门面齐备)")
     return {"window_keys": declared_keys, "code_pairs": len(pairs),
             "entrypoints": len(facade["runtime_entrypoints"]), "keep_rules": keep_count}
 
@@ -909,10 +1295,13 @@ def capability_manifest_data(ver: str, n: int, locked: dict, abi: dict) -> dict:
     facade = kernel_java_facade_facts()
     verify_capability_claims(routing, permissions, schemas, window, wakes, facade)
     sources = [p.as_posix() for p in (REGISTRY_JSON, REGISTRY_HEADER, ROUTING_HEADER,
-                                      MV3_PERMISSION_MAP, LISTENER_REGISTRY,
+                                      MV3_PERMISSION_MAP, MV3_PERMISSION_MAP_H,
+                                      JAVA_MV3_GUARD, CONTRACT_JSON, CONTRACT_HEADER,
+                                      CONTRACT_JAVA, LISTENER_REGISTRY,
                                       WORKER_WINDOW_HEADER, WAKE_OUTBOX_HEADER,
                                       WAKE_OUTBOX_SOURCE, SW_HOST_SOURCE,
-                                      SELF_TEST_SOURCE, JAVA_BRIDGE_FACADE,
+                                      SELF_TEST_SOURCE, SELF_TEST_H, MV3_GUARD_JNI,
+                                      JAVA_BRIDGE_FACADE,
                                       DNR_SCHEMA, DNR_RULES_HEADER, EXT_API_HOST,
                                       REINJECT_SOURCE, REINJECT_HEADER,
                                       LOADER_BRIDGE_SOURCE, PLUGIN_BUILD_GN,
@@ -975,6 +1364,11 @@ def capability_manifest_data(ver: str, n: int, locked: dict, abi: dict) -> dict:
             "checked": ["schema↔路由（含逐方法）", "schema↔事件白名单（双向）",
                         "事件↔内核分发表（双向）", "nomad/nomadTransfer 别名成对且同能力",
                         "窗口预算自洽与 v2.4 契约", "C++↔Java 结果码 1:1",
+                        "K-02：C++ PermVerdict ↔ Java PERM_* 数值 1:1",
+                        "K-02：C++ 权限表 ↔ Java expectPerm 逐条 verdict+capability（含负向回归夹具）",
+                        "K-03：AAR 内嵌契约 JSON ↔ 源码派生契约逐字段核对（打包强制）",
+                        "K-04：契约产物(C++ 头/Java 常量/JSON)与源码同步 + 启动 O(1) 身份比对",
+                        "K-05：跨 ABI 内嵌契约 digest/schema 一致",
                         "运行期事实入口齐备", "清单窗口键名↔运行期 JSON 键名",
                         "DNR：schema↔支持表↔分发 三处同源（含逐方法分支）",
                         "DNR：E_DNR_* 错误码全部可达且错误回执结构化",
@@ -989,7 +1383,9 @@ def capability_manifest_data(ver: str, n: int, locked: dict, abi: dict) -> dict:
                         "SW：runtime.onStartup 每浏览器会话一次（不是每次 SW 启动都发）",
                         "SW：注册失败有界自愈（最多 2 次，成功后计数归零）",
                         "交付件 consumer keep 规则齐备（App 构建会逐条校验）",
-                        "无假保活：SW 生命周期只由窗口在持引用驱动"],
+                        "无假保活：SW 生命周期只由窗口在持引用驱动",
+                        "K-06：结构化自检结果（JSON pass/fail/retryable/failures + "
+                        "contractDigest，JNI↔Java 门面齐备）"],
             "passed": True,
             "note": "只证明静态声明与内核实现同源（回应 N-C08/K-A09）；设备上是否真可用"
                     "由 runtime_facts 的入口与设备用例给出。",
@@ -1019,12 +1415,19 @@ def write_capability_manifest(stage: Path, ver: str, n: int,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="内核能力清单与声明↔实现同源门禁")
-    ap.add_argument("cmd", nargs="?", choices=("facts", "gate", "manifest"), default="facts")
+    ap.add_argument("cmd", nargs="?",
+                    choices=("facts", "gate", "manifest", "contract", "verify-aar"),
+                    default="facts")
     ap.add_argument("--stage", help="交付目录（manifest 用；其下应有 kernel/）")
     ap.add_argument("--ver", help="内核版本（manifest 用）")
     ap.add_argument("--num", type=int, help="交付编号（manifest 用）")
     ap.add_argument("--abi-major", type=int, default=1)
     ap.add_argument("--abi-minor", type=int, default=24)
+    ap.add_argument("--write", action="store_true",
+                    help="contract：把契约产物写回源码树（不写则只打印 digest）")
+    ap.add_argument("--out-dir", help="contract：输出目录（默认写回源码树）")
+    ap.add_argument("--aar", action="append", default=[],
+                    help="verify-aar：AAR 路径（可重复；≥2 时额外做跨 ABI 契约比对）")
     args = ap.parse_args()
 
     if args.cmd == "manifest":
@@ -1039,9 +1442,39 @@ def main() -> int:
         log("内核声明 ↔ 实现同源门禁（只读源码，不需要构建产物）")
         verified_facts()
         return 0
+    if args.cmd == "contract":
+        doc = build_contract()
+        if args.write or args.out_dir:
+            root = Path(args.out_dir).resolve() if args.out_dir else None
+            if root is not None:
+                # 写到指定目录（GN/打包在构建目录里取用），仍按 ROOT 相对路径落盘。
+                for rel, text in ((CONTRACT_JSON, _render_contract_json(doc)),
+                                  (CONTRACT_HEADER, _render_contract_header(doc)),
+                                  (CONTRACT_JAVA, _render_contract_java(doc))):
+                    p = root / rel
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(text, encoding="utf-8")
+                log(f"  契约产物已写出到 {root}: digest={doc['contractDigest'][:16]}")
+            else:
+                write_contract(WORKSPACE_ROOT / "src")
+        print(json.dumps({"schemaVersion": doc["schemaVersion"],
+                          "contractEpoch": doc["contractEpoch"],
+                          "contractDigest": doc["contractDigest"]},
+                         ensure_ascii=False))
+        return 0
+    if args.cmd == "verify-aar":
+        if not args.aar:
+            err("verify-aar 需要 --aar <路径>（可重复）")
+        expected = build_contract()
+        results = [verify_aar_contract(Path(p), expected) for p in args.aar]
+        if len(args.aar) >= 2:
+            cross = verify_cross_abi_contract([Path(p) for p in args.aar])
+            log(f"  跨 ABI 契约一致: {cross['count']} 份 · digest={cross['digest'][:16]}")
+        log(f"  AAR 内嵌契约与源码同源: {len(results)} 份（digest={expected['contractDigest'][:16]}）")
+        return 0
     # 说明走 stderr，stdout 只留 JSON（便于 `| python3 -c 'json.load(...)'` 直接用）。
     warn("内核源码事实（只读源码，不需要构建产物）；"
-         "用法：python3 scripts/kernel_capability.py [facts|gate|manifest]")
+         "用法：python3 scripts/kernel_capability.py [facts|gate|manifest|contract|verify-aar]")
     print(json.dumps(verified_facts(), indent=1, ensure_ascii=False))
     return 0
 
