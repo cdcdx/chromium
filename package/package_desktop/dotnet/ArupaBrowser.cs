@@ -1348,6 +1348,24 @@ namespace Arupa
         public static bool IsPluginInstallable(int verdict)
             => Interop.arupa_mv3_plugin_installable(verdict) != 0;
 
+        /// <summary>
+        /// 这条权限**能不能进 <c>optional_permissions</c>、能不能被
+        /// <c>chrome.permissions.request</c> 动态申请**。
+        ///
+        /// <para>🔴 这是 Chromium <c>APIPermissionInfo::supports_optional()</c> 的直通口。
+        /// 宿主的可选权限同意面板该问这里, <b>而不是自己维护一份权限名白名单</b> ——
+        /// 手写的表必漂: 内核/Chromium 改了判定, 宿主那份不会跟着改, 而且坏的时候不报错。</para>
+        /// <para>实测: <c>proxy</c> / <c>declarativeNetRequest</c> 是<b>非可选</b>权限 ⇒
+        /// <c>false</c>(清单里写了也会被 Chromium 剔掉, 动态申请该明确失败);
+        /// <c>declarativeNetRequestWithHostAccess</c> / <c>tabs</c> / <c>nativeMessaging</c> ⇒
+        /// <c>true</c>。</para>
+        /// <para>⚠ 未知 / 空名回 <c>false</c>(deny-by-default)。
+        /// ⚠ 旧 dll 上没有这个导出 ⇒ <see cref="EntryPointNotFoundException"/>。
+        /// 调用方要**如实降级**(当作"该版本无法判定可申请性"), 别猜成放行。</para>
+        /// </summary>
+        public static bool PermSupportsOptional(string permission)
+            => Interop.arupa_mv3_perm_supports_optional(permission ?? "") != 0;
+
         public static int MapPermission(string permission)
             => Interop.arupa_mv3_map_permission(permission ?? "");
 

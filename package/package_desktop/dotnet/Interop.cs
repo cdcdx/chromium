@@ -803,6 +803,19 @@ namespace Arupa
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         public static extern int arupa_mv3_plugin_installable(int verdict);
+
+        // 这条权限能不能进 optional_permissions / 能不能被 chrome.permissions.request
+        // 动态申请 (capi.h, 2026-10-14 新增)。
+        // 🔴 加它的理由: 宿主此前各自维护一份手写的"可选权限白名单", 而那份表**必漂** ——
+        //   能不能可选是 Chromium `APIPermissionInfo::supports_optional()` 的事实,
+        //   不是宿主的偏好。这个导出就是那个判据的直通口, 宿主别再抄。
+        // 反例(内核实测): proxy / declarativeNetRequest 是**非可选**权限 ⇒ 回 0;
+        //   declarativeNetRequestWithHostAccess / tabs / nativeMessaging ⇒ 回 1。
+        // ⚠ 未知 / 空名 / NULL 一律回 0(deny-by-default)。旧内核没有这个导出 ⇒
+        //   调它会 EntryPointNotFoundException, 采用条件是生产基线含它。
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int arupa_mv3_perm_supports_optional(
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string permission);
         // ── 出口路由的**档位**护栏 (capi.h:735, 2026-08-19 新增) ────────────────
         // 回答"这个插件能不能拿到**这一档作用域**的出口路由": 签名包四档全给; 未签名只给
         // global 且首次要用户点头一次, 请求更细的作用域一律拒。
