@@ -59,7 +59,7 @@
 #       vcruntime140_1.dll / vccorlib140.dll / concrt140.dll /
 #       dbgcore.dll / dbghelp.dll            → kernel\（有则带）
 #   OUT\angledata\ hyphen-data\ resources\ → kernel\同名目录（可选）
-#   OUT\locales\{en-US,zh-CN}.pak → kernel\locales\（旧构建可无；有则两者必需）
+#   OUT\arupa_locales\{en-US,zh-CN}.pak → kernel\locales\（旧构建可无；有则两者必需）
 #   <repo>\arupa_desktop\public\*.h          → include\
 #   <repo>\package\package_desktop\{docs,dotnet,…}            → 交付根同名（有则带，跟 scripts\builder\kernel.py
 #                                               的 copy_assets 同一口径；其中 dotnet\ 不带 bin\/obj\）
@@ -519,7 +519,9 @@ function Invoke-PackageArch {
     }
 
     # Copy only Nomad's two languages, excluding stale multilingual outputs.
-    $localeDir = Join-Path $OutPath 'locales'
+    # 构建期目录是 arupa_locales/（不能是 locales/：Chromium 的 //chrome:packed_resources
+    # 也生成 locales/<locale>.pak，GN 的重复输出检查是全局的），交付里仍是 kernel/locales/。
+    $localeDir = Join-Path $OutPath 'arupa_locales'
     if (Test-Path -LiteralPath $localeDir -PathType Container) {
         $localeDest = Join-Path $dest 'locales'
         New-Item -ItemType Directory -Force -Path $localeDest | Out-Null
@@ -527,7 +529,7 @@ function Invoke-PackageArch {
             $pak = Join-Path $localeDir "$locale.pak"
             if (!(Test-Path -LiteralPath $pak -PathType Leaf) -or
                 (Get-Item -LiteralPath $pak).Length -eq 0) {
-                throw "缺少或为空: locales/$locale.pak；请先构建 arupa_locales（中英文均为必需）"
+                throw "缺少或为空: arupa_locales/$locale.pak；请先构建 arupa_locales（中英文均为必需）"
             }
             Add-RequiredFile -Src $pak -DestDir $localeDest -Hint 'arupa_locales'
         }
