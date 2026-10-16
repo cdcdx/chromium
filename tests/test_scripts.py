@@ -130,7 +130,7 @@ class WorkspaceTest(unittest.TestCase):
         for target_os in ('win', 'mac', 'linux'):
             with self.subTest(target_os=target_os):
                 self.assertIn('//chrome/browser/arupa_desktop:render',
-                              build.build_targets('arupa_desktop', target_os))
+                              build.build_targets('arupa_desktop', target_os, 'x64', self.src / 'out'))
         with patch.object(build, 'exclude_generated'):
             self.quiet(build.prepare_project, 'arupa_desktop')
         graph = (self.src / 'arupa_build/arupa_desktop/BUILD.gn').read_text()

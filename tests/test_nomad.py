@@ -199,8 +199,9 @@ class NomadTest(unittest.TestCase):
 
     def test_desktop_ninja_builds_hyphen_data(self):
         for target_os in ('win', 'mac', 'linux'):
+            # arch/out 只对 arupa_android 有意义（arm64 才查 v8 快照目标），这里给了不参与。
             self.assertIn('//third_party/hyphenation-patterns:bundle_hyphen_data',
-                          build.build_targets('arupa_desktop', target_os))
+                          build.build_targets('arupa_desktop', target_os, 'x64', self.root / 'out'))
 
     def test_wrong_apk_and_changed_output_cannot_be_packaged(self):
         apk = self.root / 'bad.apk'
@@ -415,6 +416,61 @@ class NomadTest(unittest.TestCase):
         with patch.object(fetch, 'run'), self.assertRaisesRegex(RuntimeError, '没有发布出来'):
             self.quiet(nomad.publish_linux_kernelhost, repo, self.root / 'kernel', 'dotnet',
                        'Release', 'linux-x64', [])
+
+    def kernelhost_fixture(self, linux_extra=()):
+        """两个 Host 工程的最小镜像：Mac 逐条列源，Linux glob Mac 目录 + 自己那份单文件清单。"""
+        repo = self.root / 'nomad_desktop'
+        for path, text in (
+                ('NomadBrowser.Arupa/ArupaExtensionEventListeners.cs',
+                 'namespace NomadBrowser.Arupa; public static class ArupaExtensionEventListeners { }'),
+                ('Posix/KernelHostShared/KernelHostRuntimePaths.cs', 'class KernelHostRuntimePaths { }'),
+                ('Mac/NomadBrowser.Mac.KernelHost/NativeExtensionHost.cs', 'class NativeExtensionHost { }')):
+            source = repo / path
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(text)
+        mac = repo / 'Mac/NomadBrowser.Mac.KernelHost/NomadBrowser.Mac.KernelHost.csproj'
+        mac.write_text('<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>\n'
+                       '  <Compile Include="..\\..\\Posix\\KernelHostShared\\*.cs" />\n'
+                       '  <Compile Include="..\\..\\NomadBrowser.Arupa\\ArupaExtensionEventListeners.cs" />\n'
+                       '</ItemGroup></Project>', encoding='utf-8')
+        linux = repo.joinpath(*nomad.LINUX_KERNELHOST_PROJ)
+        linux.parent.mkdir(parents=True, exist_ok=True)
+        linux.write_text('<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>\n'
+                         '  <Compile Include="..\\..\\Mac\\NomadBrowser.Mac.KernelHost\\**\\*.cs" '
+                         'Exclude="..\\..\\Mac\\NomadBrowser.Mac.KernelHost\\bin\\**;'
+                         '..\\..\\Mac\\NomadBrowser.Mac.KernelHost\\obj\\**" />\n'
+                         '  <Compile Include="..\\KernelHostShared\\*.cs" />\n'
+                         + ''.join(f'  <Compile Include="{item}" />\n' for item in linux_extra)
+                         + '</ItemGroup></Project>', encoding='utf-8')
+        return repo
+
+    def test_linux_kernel_host_must_link_every_source_the_mac_host_links(self):
+        # 回归（2026-10-16）：Mac 工程收了 ArupaExtensionEventListeners.cs 而 Linux 侧漏收 ——
+        # Linux 上表现为 CS0103，报错位置却指向 Mac 目录下 glob 进来的共享源，很误导。
+        # 门禁必须在构建入口就指名这个文件，而不是等宿主 publish 才炸。
+        repo = self.kernelhost_fixture()
+        with self.assertRaisesRegex(RuntimeError, 'ArupaExtensionEventListeners.cs'):
+            self.quiet(nomad.check_kernelhost_source_parity, repo)
+        # 补齐（glob 与逐条列指同一文件）后必须放行。
+        self.kernelhost_fixture(linux_extra=[r'..\..\NomadBrowser.Arupa\ArupaExtensionEventListeners.cs'])
+        with contextlib.redirect_stdout(io.StringIO()):
+            nomad.check_kernelhost_source_parity(repo)
+
+    def test_kernel_host_parity_skips_until_both_projects_exist(self):
+        # 只取了 Windows 侧的树（没有 Host 工程）不该阻断构建：缺工程由 publish 那边拦。
+        repo = self.root / 'nomad_desktop'
+        repo.mkdir()
+        with contextlib.redirect_stdout(io.StringIO()):
+            nomad.check_kernelhost_source_parity(repo)
+
+    def test_desktop_build_gates_kernel_host_source_parity(self):
+        self.pc_fixture('linux')
+        fetch.DRY_RUN = True
+        self.addCleanup(setattr, fetch, 'DRY_RUN', False)
+        with patch.object(nomad, 'check_kernelhost_source_parity') as parity, patch.object(fetch, 'run'):
+            self.quiet(nomad.desktop_build, self.root, self.args, 'linux', 'x64', VERSION,
+                       self.root / 'out/nomad-linux-x64-1.2.3.4-release')
+        parity.assert_called_once()
 
     def test_package_prunes_superseded_deliveries_and_keeps_two(self):
         identity = {'os': 'linux', 'arch': 'x64', 'version': VERSION, 'variant': 'release'}
