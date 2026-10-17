@@ -620,7 +620,8 @@ for cpu in "${ARCHS[@]}"; do
   cp "${VERIFY_SCRIPT}" "${DIST}/tools/"
   python3 "${DIST}/tools/verify_transfer_delivery.py" \
     --library "${DIST}/kernel/$(lib_name "${OS}")" --platform "${OS}" \
-    --report "${DIST}/transfer-abi.json" || err "网盘 V5 必需 ABI 缺失；请重新编译配套内核"
+    --report "${DIST}/transfer-abi.json" \
+    || err "交付 ABI 校验未通过：原因见上面那行 [transfer-delivery]（只有报 Transfer ABI missing 才是真缺符号，才需要重编内核；超时/工具缺失不是）"
   write_sums_and_manifest "${DIST}" "${cpu}"
 
   if [[ "${DO_ZIP}" -eq 1 ]]; then
