@@ -124,11 +124,15 @@ def verify_delivery(delivery, target_os='linux'):
     return ok
 
 
-def find_payload(root, target_os='linux', depth=3):
+def find_payload(root, target_os='linux', depth=6):
     """交付目录里找到「真正被跑起来」的那一层（含内核库的那一层）。
 
     布局随平台变（linux 是 <交付>/arupa-desktop、mac 是 .app/Contents/...），所以按
     内核库文件定位，而不是硬编码路径。
+
+    mac 实际布局是 <交付>/逐风浏览器.app/Contents/Resources/arupa-mac/libarupa_kernel.dylib，
+    内核库在**第 3 层**目录里；早先 depth=3 会在走到 arupa-mac 之前就剪枝，把齐备的交付
+    误报成「找不到 libarupa_kernel.dylib」。留够余量到 6（.framework/Versions/A 也够）。
     """
     library = KERNEL_LIBRARY[target_os]
     if os.path.isfile(os.path.join(root, library)):

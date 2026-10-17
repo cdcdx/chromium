@@ -93,6 +93,14 @@ class VerifyPayloadTest(unittest.TestCase):
             write(os.path.join(nested, 'libarupa_kernel.so'), b'x')
             self.assertEqual(guard.find_payload(root), nested)
 
+    def test_find_payload_reaches_mac_kernel_subdir(self):
+        """真实 mac 布局多一层：.app/Contents/Resources/arupa-mac/（第 3 层）。"""
+        with tempfile.TemporaryDirectory() as root:
+            nested = os.path.join(root, '逐风浏览器.app', 'Contents', 'Resources', 'arupa-mac')
+            os.makedirs(nested)
+            write(os.path.join(nested, 'libarupa_kernel.so'), b'x')
+            self.assertEqual(guard.find_payload(root), nested)
+
 
 class VerdictTest(unittest.TestCase):
     """判定表：这些形态必须判 FAIL，否则校验器本身就是个摆设。"""
