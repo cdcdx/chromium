@@ -88,6 +88,42 @@ class WorkspaceTest(unittest.TestCase):
             builds = [call.args[0] for call in run.call_args_list if call.args[0][1] == 'build']
             self.assertEqual(1, len(builds), '源码未变时不该重复重建')
 
+    def test_dirty_kernel_repo_is_reported_before_a_pull_can_wipe_it(self):
+        """内核仓（overlay）的未提交改动必须被点名。
+
+        2026-10-16 事故：10-15 的 OOM 修复只存在于工作区未提交改动里，被
+        `git pull --tags origin flex/desktop` 清掉 —— 构建照旧成功、交付照旧出包，
+        只有行为静默退回「zygote 二叉树爆炸 → OOM」。
+        """
+        repo = self.root / 'arupa_desktop'
+        git = lambda *args: subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, text=True)
+        git('init', '-b', 'main')
+        git('config', 'user.name', 'Test')
+        git('config', 'user.email', 'test@example.invalid')
+        (repo / 'BUILD.gn').write_text('tracked\n')
+        git('add', 'BUILD.gn')
+        git('-c', 'commit.gpgsign=false', 'commit', '-m', 'base')
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            build.report_dirty_project('arupa_desktop')
+        self.assertNotIn('未提交', output.getvalue(), '干净的仓库不该吵')
+
+        (repo / 'BUILD.gn').write_text('local fix that a pull would wipe\n')
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            build.report_dirty_project('arupa_desktop')
+        self.assertIn('未提交', output.getvalue())
+        self.assertIn('BUILD.gn', output.getvalue())
+
+        # 未跟踪文件不算：pull 不会清掉它们，拿它们当告警只会让人习惯性忽略。
+        git('-c', 'commit.gpgsign=false', 'commit', '-am', 'keep')
+        (repo / 'scratch.txt').write_text('untracked')
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            build.report_dirty_project('arupa_desktop')
+        self.assertNotIn('未提交', output.getvalue())
+
     @unittest.skipUnless(sys.platform == 'darwin', 'macOS extended attributes')
     def test_mac_payload_copy_preserves_signature_attributes_and_symlinks(self):
         import nomad

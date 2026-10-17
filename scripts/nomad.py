@@ -19,6 +19,7 @@ import deliveries
 import fetch as F
 import gen_arupa_desktop_abi
 import kernel_facade
+import kernel_oom_guard
 import toolchains
 
 
@@ -859,6 +860,7 @@ def package(args, output, identity):
             except OSError as lock_error:
                 F.log(f'警告: lock 文件未能删除（{lock_error}）: {lock}')
     F.log(f'浏览器交付包: {final}')
+    return final
 
 
 def write_portable_zip(final, archive_path, destination):
@@ -899,4 +901,8 @@ def run(root, args, project, target_os, arches, version, actions):
                 seal(output, identity)
         if 'package' in actions:
             F.action('package', f'{project} {target_os}/{arch}')
-            package(args, output, identity)
+            final = package(args, output, identity)
+            if final and target_os in kernel_oom_guard.KERNEL_MARKERS:
+                # 出包即核：payload 里「zygote 从薄壳 arupa_render 起」的两层护栏还在不在。
+                # 两层都是 overlay 里的未提交改动，一次 pull 就会被静默清掉（真发生过）。
+                kernel_oom_guard.report_payload(final, target_os)

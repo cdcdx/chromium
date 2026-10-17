@@ -15,6 +15,7 @@ import tempfile
 
 import deliveries
 import fetch as F
+import kernel_oom_guard
 import kernel_src_patches
 import native_tools
 import publish
@@ -389,6 +390,38 @@ def prepare_project(project):
     write_if_changed(graph, "\n".join(lines + ['}', '']))
 
 
+def report_dirty_project(project):
+    """内核仓（overlay）有未提交改动时点名告警：这些改动不在 git 里，一次 pull 就没了。
+
+    为什么值得一条（2026-10-16 事故）：10-15 的「CPU 拉满 → OOM」修复（库式嵌入把
+    FILE_EXE 指到子进程薄壳 + 无用可用沙箱时降级 --no-sandbox）当时**只存在于工作区的
+    未提交改动**里，被一次 `git pull --tags origin flex/desktop` 清掉。后果是静默的：
+    构建照旧成功、交付照旧出包，只有 zygote 又变回 .NET apphost → 二叉树爆炸 → OOM，
+    事后从产物上完全看不出来。这里不拦构建（本地改内核是常态、也是唯一改法），
+    只把「本次产物含未提交改动」说出来，并给出保留手段。
+
+    只认 tracked 改动（--untracked-files=no）：未跟踪文件不会被 pull 清掉。
+    """
+    repo = ROOT / project
+    if F.DRY_RUN or not (repo / ".git").exists():
+        return
+    # 直接调 git：走 F.run 会先把这条命令本身打进日志，告警反而被淹。
+    completed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"],
+                               cwd=str(repo), capture_output=True, text=True)
+    if completed.returncode != 0:
+        return  # 仓库异常不在这里拦：补丁应用与构建各自有更严的判据
+    entries = [line for line in completed.stdout.splitlines() if line.strip()]
+    if not entries:
+        return
+    listing = "\n".join(f"  {entry}" for entry in entries[:10])
+    if len(entries) > 10:
+        listing += f"\n  …另有 {len(entries) - 10} 项"
+    F.log(f"⚠ {repo} 有 {len(entries)} 项**未提交**改动，本次产物包含它们；"
+          f"内核仓的任何 pull/checkout 都会直接清掉（OOM 修复就是这么丢的）。"
+          f"要长期保留：git -C {repo} commit，或存成 diff"
+          f"（用 `git -C {repo} diff HEAD > fix.diff` —— 别用裸 git diff，它漏掉已 staged 的改动）：\n{listing}")
+
+
 def kernel_delivery_prefix(target_os, cpu, version):
     """内核交付目录前缀，与 scripts/packaging/package-arupa_*.sh 的命名保持一致。
 
@@ -507,6 +540,8 @@ def main(argv=None):
                                               dry_run=args.dry_run)
         except kernel_src_patches.PatchError as exc:
             F.err(str(exc))
+        # 就在最容易被丢的地方喊一声：内核仓的未提交改动不在 git 里（见函数注释）。
+        report_dirty_project(project)
         if target_os == "linux":
             if args.dry_run:
                 F.log("(dry-run) 检查 V8 共享库 TLS 配置")
@@ -571,6 +606,11 @@ def main(argv=None):
                 deliveries.clean_stale_directories(dist_dir)
             F.run(package_command(args, target_os, cpu, version), ROOT)
             if not args.dry_run:
+                # 出包即核：这份内核里「zygote 从薄壳 arupa_render 起」的护栏还在不在。
+                # 护栏是 overlay 里的未提交改动，被 pull 静默清掉过一次（见 debug-nomad-cpu-oom.md）。
+                number = deliveries.newest_number(dist_dir, prefix)
+                if number and target_os in kernel_oom_guard.KERNEL_MARKERS:
+                    kernel_oom_guard.report_delivery(dist_dir / f'{prefix}{number}', target_os)
                 # 只在本次打包成功后裁剪旧交付：失败时上一份仍留着可回退。
                 deliveries.prune(dist_dir, prefix, args.keep,
                                  args.num or deliveries.newest_number(dist_dir, prefix))
