@@ -201,8 +201,14 @@ def _cpp_function_bodies(text: str) -> dict:
 
     只用于本仓自写的门禁检查（风格固定）。解析不到关键函数时宁可报错让人来修
     门禁，也不放过。"""
+    # 形参里允许嵌套括号（异步回调形参 base::OnceCallback<void(bool)> callback
+    # 曾因为里层那个 ')' 让整条签名匹配不上，函数体被整个漏掉 —— 门禁于是假报
+    # "PurgeExtensionData 没有作废代次"，而调用其实一直都在）。最多两层嵌套够用，
+    # 更深的结构（lambda 形参）本来也不该被当成函数定义。
+    _nested = r"(?:[^;{}()]|\((?:[^;{}()]|\([^;{}()]*\))*\))*"
     bodies = {}
-    for m in re.finditer(r"\n[A-Za-z_][\w:<>,\s\*&]*?\b(\w+)\s*\([^;{)]*\)\s*\{", text):
+    for m in re.finditer(r"\n[A-Za-z_][\w:<>,\s\*&]*?\b(\w+)\s*\(\s*" + _nested +
+                         r"\s*\)\s*\{", text):
         name = m.group(1)
         start = m.end() - 1
         depth = 0
@@ -1025,14 +1031,25 @@ def kernel_storage_facts() -> dict:
         "write_result_message": "StorageWriteResultMessage" in storage_h,
         "mojom_error_channel": mojom.count("=> (string error)") >= 3,
         "ipc_error_reply": "OnStorageDone(int request_id," in ipc,
-        "host_checks_result": "if (result != mv3::StorageWriteResult::kOk)" in host,
-        "host_reads_back_written":
-            "const std::string after = storage.GetValue(plugin_id, key);" in host,
+        # 写入已改为事务化批量提交（SetValuesAsync / RemoveValuesAsync /
+        # ClearAsync），host 不再逐键同步写：判定与回执一律由提交结果
+        # StorageCommitResult{status, changes} 派生。门禁跟着认新接口，
+        # 否则会把"换了写法"误报成"没接"（旧字符串已不存在于源码）。
+        "host_checks_result": (
+            host.count("result.status == mv3::StorageWriteResult::kOk") >= 2 and
+            host.count("mv3::StorageWriteResultMessage(result.status)") >= 2),
+        # newValue 必须取自**落盘后**的新状态（after），且落盘失败要把 changes
+        # 清空 —— 否则 onChanged 的 newValue 可能是根本没存进去的值。
+        "host_reads_back_written": (
+            "const base::Value* new_value = after.Find(key);" in storage_cc and
+            storage_cc.count("result.changes.clear();") >= 2),
         # onChanged 只对真实写入派发（旧实现"写前比较"先算 changes 再统一写）。
         "changed_after_real_write": (
-            "storage.SetValue(plugin_id, key, value_json)" in host),
+            host.count("DispatchStorageChanged(id, ChangesFromCommit(result))") >= 2),
         "no_prewrite_compare": "if (before == value_json) {" not in host,
-        "remove_uses_result": "if (!storage.RemoveValue(plugin_id, key)) {" in host,
+        "remove_uses_result": (
+            "PluginStorage::Get().RemoveValuesAsync(" in host and
+            "!result.changes.empty()" in host),
         # managed 只读（Chrome：由策略下发）—— Set/Remove/Clear 三个写入口都要护住。
         "managed_readonly": (host.count("kReadOnlyArea") >= 3 and
                              host.count("mv3::StorageArea::kManaged") >= 3),
@@ -1059,12 +1076,15 @@ def verify_storage_contract(facts: dict) -> int:
         "mojom_error_channel": "mojom 的 Set/Remove/Clear 没有 error 回传通道 —— "
                                "写失败根本没法告诉扩展。",
         "ipc_error_reply": "IPC 回执不带 error —— 错误到不了 JS（runtime.lastError）。",
-        "host_checks_result": "host Set 没有检查 SetValue 的返回值。",
-        "host_reads_back_written": "host Set 没有写后回读 —— onChanged 的 newValue 可能"
-                                   "是根本没存进去的值。",
-        "changed_after_real_write": "host Set 没有走真实写入路径。",
+        "host_checks_result": "host 写入没有按提交结果 StorageCommitResult 判定回执"
+                              " —— Set/Remove 都必须先看 result.status。",
+        "host_reads_back_written": "没有「写后回读」—— onChanged 的 newValue 可能是根本"
+                                   "没存进去的值（changes 必须取自落盘后的新状态，"
+                                   "落盘失败要清空）。",
+        "changed_after_real_write": "onChanged 没有走真实写入路径 —— 必须由提交结果的 "
+                                    "result.changes 派生，而不是写前比较。",
         "no_prewrite_compare": "又回到「写前比较」：被拒的键也会派发 onChanged。",
-        "remove_uses_result": "host Remove 没有按 RemoveValue 的返回值判断变更。",
+        "remove_uses_result": "host Remove 没有按提交结果（status/changes）判断变更。",
         "managed_readonly": "managed 区没有只读保护（Chrome：由策略下发）。",
         "alarms_private_area": "闹钟没有显式落在内核私有区。",
         "alarms_not_in_local": "闹钟又写回 storage.local 了 —— chrome.storage.local.get() "
