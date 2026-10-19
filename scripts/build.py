@@ -311,6 +311,16 @@ def render_args(path, target_os, arch, link):
     if target_os == "linux":
         settings["blink_heap_inside_shared_library"] = "true"
         settings["v8_tls_used_in_library"] = "true"
+        # The Linux kernel is dlopen'ed from a small helper, not linked into
+        # the executable's initial ELF scope. PA-E's malloc shim in that .so
+        # cannot reliably interpose libc's malloc_usable_size in child
+        # processes: Skia can allocate with PA and query the pointer via
+        # glibc, crashing renderer/GPU processes. Keep explicit Blink PA, but
+        # route process-wide malloc through the system allocator.
+        settings["use_partition_alloc_as_malloc"] = "false"
+        # BRP assumes PA-E owns every malloc allocation; GN rejects this
+        # combination, and leaving it on would be unsound even if accepted.
+        settings["enable_backup_ref_ptr_support"] = "false"
     for key, value in settings.items():
         # GN evaluates args sequentially: keep assignments before later uses.
         pattern = re.compile(rf"(?m)^([ \t]*){key}[ \t]*=[^\n]*")

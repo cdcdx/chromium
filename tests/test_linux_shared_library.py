@@ -42,3 +42,24 @@ class LinuxSharedLibraryTest(unittest.TestCase):
         args = build.render_args(root / "build/linux/args.gn", "linux", "x64", "static")
         self.assertIn("v8_tls_used_in_library = true", args)
         self.assertIn("blink_heap_inside_shared_library = true", args)
+        self.assertIn("use_partition_alloc_as_malloc = false", args)
+        self.assertIn("enable_backup_ref_ptr_support = false", args)
+
+    def test_allocator_workaround_does_not_change_mac_or_windows(self):
+        root = Path(__file__).resolve().parents[1]
+        for platform in ("mac", "win"):
+            with self.subTest(platform=platform):
+                args = build.render_args(root / f"build/{platform}/args.gn", platform, "x64", "static")
+                self.assertNotIn("use_partition_alloc_as_malloc = false", args)
+                self.assertNotIn("enable_backup_ref_ptr_support = false", args)
+
+    def test_linux_allocator_workaround_overrides_custom_template(self):
+        with tempfile.TemporaryDirectory() as temp:
+            template = Path(temp) / "args.gn"
+            template.write_text('target_os = "linux"\nuse_partition_alloc_as_malloc = true\n'
+                                'enable_backup_ref_ptr_support = true\n')
+            args = build.render_args(template, "linux", "x64", "static")
+            self.assertEqual(args.count("use_partition_alloc_as_malloc = false"), 1)
+            self.assertEqual(args.count("enable_backup_ref_ptr_support = false"), 1)
+            self.assertNotIn("use_partition_alloc_as_malloc = true", args)
+            self.assertNotIn("enable_backup_ref_ptr_support = true", args)

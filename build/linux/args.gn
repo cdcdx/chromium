@@ -3,6 +3,12 @@ target_os = "linux"
 target_cpu = "x64"
 is_component_build = false
 
+# Linux 的 libarupa_kernel.so 由独立薄壳 dlopen；PA-E malloc shim 无法在
+# 进程初始 ELF scope 中全局覆盖 libc。Skia malloc_usable_size 因跨分配器
+# 指针崩溃。Blink 显式 PartitionAlloc 仍保留；BRP 依赖 PA-E，需一同关闭。
+use_partition_alloc_as_malloc = false
+enable_backup_ref_ptr_support = false
+
 is_debug = false
 dcheck_always_on = false
 symbol_level = 0
