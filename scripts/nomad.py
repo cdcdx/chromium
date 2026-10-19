@@ -1,6 +1,8 @@
 """Browser build backends. GN remains the responsibility of the Arupa targets."""
 from __future__ import annotations
 
+import fnmatch
+import glob
 import hashlib
 import json
 import os
@@ -17,6 +19,7 @@ import deliveries
 import fetch as F
 import gen_arupa_desktop_abi
 import kernel_facade
+import kernel_oom_guard
 import toolchains
 
 
@@ -201,6 +204,77 @@ def desktop_project(repo, target_os, explicit):
 
 LINUX_KERNELHOST_PROJ = ('Posix', 'NomadBrowser.Linux.KernelHost', 'NomadBrowser.Linux.KernelHost.csproj')
 LINUX_KERNELHOST_EXE = 'NomadBrowser.Linux.KernelHost'
+
+# 两个 OOP 宿主工程编**同一批源码**：Mac 侧逐条列在自己的 csproj 里，Linux 侧用
+# `..\..\Mac\NomadBrowser.Mac.KernelHost\**\*.cs` 把 Mac 的业务源整目录 glob 进来 ——
+# 但 NomadBrowser.Arupa / NomadBrowser.Core 的单文件清单是两边各列各的，于是
+# 「Mac 工程收了新源、Linux 工程漏收」的漂移只在 Linux 上以 CS0103/CS0246 暴露，
+# 且往往要等整条构建跑到最后的 publish_linux_kernelhost 才炸。
+# 2026-10-16 实例：ArupaExtensionEventListeners.cs 漏收 → 共享源 NativeExtensionHost.cs:331
+# CS0103（报错位置指向 Mac 目录，很容易误判成命名空间问题），桌面 Linux 出包失败。
+# 故在构建入口先对齐两份清单：见 check_kernelhost_source_parity。
+KERNELHOST_PROJ = {
+    'mac': ('Mac', 'NomadBrowser.Mac.KernelHost', 'NomadBrowser.Mac.KernelHost.csproj'),
+    'linux': LINUX_KERNELHOST_PROJ,
+}
+
+
+def kernelhost_sources(project):
+    """宿主工程参与编译的 .cs 全路径集合（展开 glob，并补上 SDK 默认 glob 的工程内源）。"""
+    project = project.resolve()
+    root = str(project.parent)
+    sources = set()
+    for element in ET.parse(project).iter():
+        if element.tag.rsplit('}', 1)[-1] != 'Compile':
+            continue
+        include = (element.get('Include') or '').strip().replace('\\', '/')
+        if not include:
+            continue
+        if '$(' in include:
+            # 交付派生的 wrapper 源（$(ArupaManagedWrapperDir)/Interop.cs …）：两个工程取的是
+            # 同一份交付，按「交付内文件名」对齐即可，不解析 MSBuild 变量。
+            sources.add('$delivery/' + include.rsplit('/', 1)[-1])
+            continue
+        excludes = [os.path.normpath(os.path.join(root, item.strip().replace('\\', '/')))
+                    for item in (element.get('Exclude') or '').split(';') if item.strip()]
+        pattern = os.path.normpath(os.path.join(root, include))
+        for hit in glob.glob(pattern, recursive=True):
+            hit = os.path.normpath(hit)
+            if not os.path.isfile(hit) or any(fnmatch.fnmatch(hit, ex) for ex in excludes):
+                continue
+            sources.add(os.path.realpath(hit))
+    # SDK 默认 glob：工程目录下所有 .cs（bin/obj 除外）。Mac 工程自己的业务源就靠它进来、
+    # 在 csproj 里并不出现，必须显式补上，否则两边天然的差集会被误报成「漂移」。
+    for path in project.parent.rglob('*.cs'):
+        if {'bin', 'obj'}.isdisjoint(path.relative_to(project.parent).parts):
+            sources.add(str(path.resolve()))
+    return sources
+
+
+def check_kernelhost_source_parity(repo):
+    """两个内核宿主工程的编译源清单必须逐条对齐 —— 不是「差不多」，是同一批源。
+
+    Mac 侧新收一个文件而 Linux 侧没同步时，Linux 上就是 CS0103/CS0246（错误位置还指向
+    Mac 目录下的共享源）。这里提前比对并指名差异文件，省掉一次跑到收尾才失败的构建。
+    工程不在（例如只取了 Windows 侧的树）就跳过：缺工程本身由 publish_linux_kernelhost 拦。
+    """
+    sources = {}
+    for platform, parts in KERNELHOST_PROJ.items():
+        project = repo.joinpath(*parts)
+        if not project.is_file():
+            F.log(f'内核宿主源码对齐：跳过（缺少 {platform} 工程 {project}）')
+            return
+        sources[platform] = kernelhost_sources(project)
+    if sources['mac'] == sources['linux']:
+        F.log(f'内核宿主源码清单一致（{len(sources["linux"])} 个源文件）')
+        return
+    detail = []
+    for platform, other in (('mac', 'linux'), ('linux', 'mac')):
+        only = sorted(sources[other] - sources[platform])
+        if only:
+            detail.append(f'{platform} 工程漏收（{other} 收了）: ' + ', '.join(only))
+    F.err('两个内核宿主工程编同一批源码，但编译源清单不一致 —— ' + '；'.join(detail)
+          + '。请把缺的 <Compile Include=…> 补进对应 csproj（改一个必须改另一个）。')
 
 
 def publish_linux_kernelhost(repo, kernel_dir, dotnet, cfg, rid, props):
@@ -453,6 +527,10 @@ def discard_stage(stage):
 
 def desktop_build(root, args, target_os, arch, version, output):
     repo = root / 'nomad_desktop'
+    if target_os in ('mac', 'linux'):
+        # 共享源清单先对齐：Linux 侧的编译错误要到最后的宿主 publish 才冒出来，
+        # 在这里失败等于省掉一次满程构建（判据见 check_kernelhost_source_parity）。
+        check_kernelhost_source_parity(repo)
     # 上一次构建替换输出时会就地把旧输出改名搁置（`<name>.trash-*`，整份近 800MB），
     # 正常路径下它只在 package 里才被清 —— 只跑 build 的人会一路堆到盘满。
     # 构建开始时就回收：此时它是「更早那份输出」的墓碑，与本次要用的 out/<name> 无关。
@@ -782,6 +860,7 @@ def package(args, output, identity):
             except OSError as lock_error:
                 F.log(f'警告: lock 文件未能删除（{lock_error}）: {lock}')
     F.log(f'浏览器交付包: {final}')
+    return final
 
 
 def write_portable_zip(final, archive_path, destination):
@@ -822,4 +901,8 @@ def run(root, args, project, target_os, arches, version, actions):
                 seal(output, identity)
         if 'package' in actions:
             F.action('package', f'{project} {target_os}/{arch}')
-            package(args, output, identity)
+            final = package(args, output, identity)
+            if final and target_os in kernel_oom_guard.KERNEL_MARKERS:
+                # 出包即核：payload 里「zygote 从薄壳 arupa_render 起」的两层护栏还在不在。
+                # 两层都是 overlay 里的未提交改动，一次 pull 就会被静默清掉（真发生过）。
+                kernel_oom_guard.report_payload(final, target_os)

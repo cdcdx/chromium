@@ -104,6 +104,178 @@ index b0ede6d70860e8bbc9a16155b0876f3f2bbff60e..8fdaa8ae58d6feecc9f4b97dd4f4def9
  }
  
  - (void)cancelSynchronously {
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.h b/content/browser/renderer_host/render_widget_host_view_mac.h
+index 2856a74454c33d5ff05303ade39ca1260f444bc6..5a1e666efca1d6d247ec1ffece0e34cf4ade5f05 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.h
++++ b/content/browser/renderer_host/render_widget_host_view_mac.h
+@@ -12,6 +12,7 @@
+ #include <string_view>
+ #include <vector>
+ 
++#include "base/functional/callback.h"
+ #include "base/gtest_prod_util.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/scoped_refptr.h"
+@@ -128,6 +129,15 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+   CONTENT_EXPORT void SetDelegate(
+     NSObject<RenderWidgetHostViewMacDelegate>* delegate);
+ 
++  // Off-screen embedders have no NSWindow/Cocoa view hierarchy from which to
++  // observe cursor and popup widget changes. These callbacks mirror the state
++  // already owned by this view without changing normal Cocoa presentation.
++  using OffscreenCursorCallback = base::RepeatingCallback<void(int)>;
++  using OffscreenPopupCallback = base::RepeatingCallback<void(
++      RenderWidgetHostView*, bool, const gfx::Rect&)>;
++  void SetOffscreenCursorCallback(OffscreenCursorCallback callback);
++  void SetOffscreenPopupCallback(OffscreenPopupCallback callback);
++
+   // RenderWidgetHostViewBase implementation.
+   ui::Compositor* GetCompositor() override;
+   void InitAsChild(gfx::NativeView parent_view) override;
+@@ -669,6 +679,9 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+   // Our child popup host. NULL if we do not have a child popup.
+   raw_ptr<RenderWidgetHostViewMac> popup_child_host_view_;
+ 
++  OffscreenCursorCallback offscreen_cursor_callback_;
++  OffscreenPopupCallback offscreen_popup_callback_;
++
+   // Whether or not the background is opaque as determined by calls to
+   // SetBackgroundColor. The default value is opaque.
+   bool background_is_opaque_ = true;
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+index 8aee3fc94c38f68c8a453238efc85a3b4ac64948..f8f25047c916d9c1158ad632719673bfdbd765b5 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -343,12 +343,20 @@ RenderWidgetHostViewMac::RenderWidgetHostViewMac(RenderWidgetHost* widget)
+ RenderWidgetHostViewMac::~RenderWidgetHostViewMac() {
+   gesture_provider_->Shutdown();
+   if (popup_parent_host_view_) {
++    if (popup_parent_host_view_->offscreen_popup_callback_) {
++      popup_parent_host_view_->offscreen_popup_callback_.Run(
++          this, false, gfx::Rect());
++    }
+     CHECK(!popup_parent_host_view_->popup_child_host_view_ ||
+               popup_parent_host_view_->popup_child_host_view_ == this,
+           base::NotFatalUntil::M152);
+     popup_parent_host_view_->popup_child_host_view_ = nullptr;
+   }
+   if (popup_child_host_view_) {
++    if (offscreen_popup_callback_) {
++      offscreen_popup_callback_.Run(popup_child_host_view_, false,
++                                    gfx::Rect());
++    }
+     CHECK(!popup_child_host_view_->popup_parent_host_view_ ||
+               popup_child_host_view_->popup_parent_host_view_ == this,
+           base::NotFatalUntil::M152);
+@@ -489,6 +497,16 @@ void RenderWidgetHostViewMac::SetDelegate(
+   [GetInProcessNSView() setResponderDelegate:delegate];
+ }
+ 
++void RenderWidgetHostViewMac::SetOffscreenCursorCallback(
++    OffscreenCursorCallback callback) {
++  offscreen_cursor_callback_ = std::move(callback);
++}
++
++void RenderWidgetHostViewMac::SetOffscreenPopupCallback(
++    OffscreenPopupCallback callback) {
++  offscreen_popup_callback_ = std::move(callback);
++}
++
+ ui::TextInputType RenderWidgetHostViewMac::GetTextInputType() {
+   if (!GetActiveWidget())
+     return ui::TEXT_INPUT_TYPE_NONE;
+@@ -540,6 +558,10 @@ void RenderWidgetHostViewMac::InitAsPopup(
+   RenderWidgetHostViewMac* old_child =
+       popup_parent_host_view_->popup_child_host_view_;
+   if (old_child) {
++    if (popup_parent_host_view_->offscreen_popup_callback_) {
++      popup_parent_host_view_->offscreen_popup_callback_.Run(
++          old_child, false, gfx::Rect());
++    }
+     CHECK(old_child->popup_parent_host_view_ == popup_parent_host_view_,
+           base::NotFatalUntil::M152);
+     old_child->popup_parent_host_view_ = nullptr;
+@@ -560,6 +582,9 @@ void RenderWidgetHostViewMac::InitAsPopup(
+   // This path is used by the time/date picker.
+   ns_view_->InitAsPopup(pos, popup_parent_host_view_->ns_view_id_);
+   ShowWithVisibility(PageVisibilityState::kVisible);
++  if (popup_parent_host_view_->offscreen_popup_callback_) {
++    popup_parent_host_view_->offscreen_popup_callback_.Run(this, true, pos);
++  }
+ }
+ 
+ RenderWidgetHostViewBase*
+@@ -691,6 +716,11 @@ void RenderWidgetHostViewMac::SetSize(const gfx::Size& size) {
+ void RenderWidgetHostViewMac::SetBounds(const gfx::Rect& rect) {
+   ns_view_->SetBounds(rect);
+ 
++  if (popup_parent_host_view_ &&
++      popup_parent_host_view_->offscreen_popup_callback_) {
++    popup_parent_host_view_->offscreen_popup_callback_.Run(this, true, rect);
++  }
++
+   // Check if running with no associated NSWindow and force bounds change
+   // propagation. This occurs while running headless and causes problems with
+   // RenderDocument. See more details here: http://crbug.com/444226873.
+@@ -758,6 +788,9 @@ void RenderWidgetHostViewMac::UpdateCursor(const ui::Cursor& cursor) {
+ }
+ 
+ void RenderWidgetHostViewMac::DisplayCursor(const ui::Cursor& cursor) {
++  if (offscreen_cursor_callback_) {
++    offscreen_cursor_callback_.Run(static_cast<int>(cursor.type()));
++  }
+   ns_view_->DisplayCursor(cursor);
+ }
+ 
+diff --git a/content/browser/web_contents/web_contents_view_mac.h b/content/browser/web_contents/web_contents_view_mac.h
+index b9868665c8c54bac3cf8b302cb92375a326ac2b5..0c0ee06b572fbe879832b05a1caa0197fe6fd751 100644
+--- a/content/browser/web_contents/web_contents_view_mac.h
++++ b/content/browser/web_contents/web_contents_view_mac.h
+@@ -159,6 +159,11 @@ class CONTENT_EXPORT WebContentsViewMac
+   CONTENT_EXPORT static void SetReadWritePermissionsForFileForTests(
+       base::File& file);
+ 
++  // Off-screen embedders use these to expose the native AppKit drag session
++  // through their platform-neutral host API.
++  bool IsDragInProgressForEmbedder() const;
++  bool CancelDragForEmbedder();
++
+  private:
+   WebContentsViewCocoa* GetInProcessNSView() const;
+ 
+diff --git a/content/browser/web_contents/web_contents_view_mac.mm b/content/browser/web_contents/web_contents_view_mac.mm
+index 4283e1b4a1766c21901487da793d5b9f0c66913b..6c0b709d54329e639fad8aa1eba98652ea5354b6 100644
+--- a/content/browser/web_contents/web_contents_view_mac.mm
++++ b/content/browser/web_contents/web_contents_view_mac.mm
+@@ -104,6 +104,28 @@ void WebContentsViewMac::SetReadWritePermissionsForFileForTests(
+   SetReadWritePermissionsForFile(file);
+ }
+ 
++bool WebContentsViewMac::IsDragInProgressForEmbedder() const {
++  return !!drag_source_start_rwh_;
++}
++
++bool WebContentsViewMac::CancelDragForEmbedder() {
++  if (!drag_source_start_rwh_) {
++    return false;
++  }
++  NSEvent* escape = [NSEvent keyEventWithType:NSEventTypeKeyDown
++                                     location:NSZeroPoint
++                                modifierFlags:0
++                                    timestamp:NSProcessInfo.processInfo.systemUptime
++                                 windowNumber:0
++                                      context:nil
++                                   characters:@"\x1b"
++                  charactersIgnoringModifiers:@"\x1b"
++                                    isARepeat:NO
++                                      keyCode:kVK_Escape];
++  [NSApp postEvent:escape atStart:YES];
++  return true;
++}
++
+ std::unique_ptr<WebContentsView> CreateWebContentsView(
+     WebContentsImpl* web_contents,
+     std::unique_ptr<WebContentsViewDelegate> delegate,
 diff --git a/content/browser/websockets/websocket_connector_impl.cc b/content/browser/websockets/websocket_connector_impl.cc
 index c1becd05ae6176b3dda90d1c97c48958b8e2a449..4438d02bf432b03ceaa55f36e436edcd19a3e742 100644
 --- a/content/browser/websockets/websocket_connector_impl.cc
@@ -188,7 +360,7 @@ index 0000000000000000000000000000000000000000..7d70dd9be8bb343d7b21f0e32fa7c26a
 +}  // namespace content
 +#endif
 diff --git a/extensions/common/mojom/api_permission_id.mojom b/extensions/common/mojom/api_permission_id.mojom
-index 262221ecd852507cd136254725e16c53a155fc99..e77891c095ec89351e7ddf8172b590cee587a14c 100644
+index 262221ecd852507cd136254725e16c53a155fc99..d741fd21224f28c2e1b68d4124355990633842e1 100644
 --- a/extensions/common/mojom/api_permission_id.mojom
 +++ b/extensions/common/mojom/api_permission_id.mojom
 @@ -299,6 +299,10 @@ enum APIPermissionID {
