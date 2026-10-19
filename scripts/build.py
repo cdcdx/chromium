@@ -215,6 +215,11 @@ def build_targets(project, target_os, arch, out):
         return targets
     targets = [base + ":arupa_kernel", "//content/shell:pak",
                "//third_party/hyphenation-patterns:bundle_hyphen_data"]
+    if target_os == "win":
+        # The native EXE shares the kernel source set but is not pulled in by
+        # an explicit Ninja build of arupa_kernel. Windows delivery needs it
+        # for the in-process sandbox broker/child-process image contract.
+        targets.append(base + ":arupa_desktop")
     if target_os in ("win", "mac", "linux"):
         targets += [base + ":render", base + "/plugin/host:arupa_plugin_host"]
     return targets
@@ -397,7 +402,17 @@ def prepare_project(project):
                   '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop/plugin/host:arupa_plugin_host" ] }']
     else:
         lines += ['  deps = [ "//chrome/browser/arupa_android/aar:arupa_kernel_aar", "//content/shell:pak" ]']
-    write_if_changed(graph, "\n".join(lines + ['}', '']))
+    lines += ['}']
+    if project == "arupa_desktop":
+        # Separate test root: normal delivery generation remains small, while
+        # native acceptance can regenerate the same out dir with both roots.
+        lines += [
+            'group("native_acceptance") {',
+            '  testonly = true',
+            '  deps = [ ":delivery", "//chrome/browser/arupa_desktop:arupa_native_tests" ]',
+            '}',
+        ]
+    write_if_changed(graph, "\n".join(lines + ['']))
 
 
 def report_dirty_project(project):

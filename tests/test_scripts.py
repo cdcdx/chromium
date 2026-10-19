@@ -167,10 +167,17 @@ class WorkspaceTest(unittest.TestCase):
             with self.subTest(target_os=target_os):
                 self.assertIn('//chrome/browser/arupa_desktop:render',
                               build.build_targets('arupa_desktop', target_os, 'x64', self.src / 'out'))
+        self.assertIn('//chrome/browser/arupa_desktop:arupa_desktop',
+                      build.build_targets('arupa_desktop', 'win', 'x64', self.src / 'out'))
+        for target_os in ('mac', 'linux'):
+            self.assertNotIn('//chrome/browser/arupa_desktop:arupa_desktop',
+                             build.build_targets('arupa_desktop', target_os, 'x64', self.src / 'out'))
         with patch.object(build, 'exclude_generated'):
             self.quiet(build.prepare_project, 'arupa_desktop')
         graph = (self.src / 'arupa_build/arupa_desktop/BUILD.gn').read_text()
         self.assertIn('if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:render" ] }', graph)
+        self.assertIn('group("native_acceptance")', graph)
+        self.assertIn('//chrome/browser/arupa_desktop:arupa_native_tests', graph)
 
     def test_fetch_order_includes_all_four_versioned_projects(self):
         calls = []
