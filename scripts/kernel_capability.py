@@ -49,6 +49,7 @@ ROOT = Path("chrome/browser/arupa_android")
 REGISTRY_JSON = ROOT / "plugin/arupa_plugin_registry.json"
 REGISTRY_HEADER = ROOT / "plugin/arupa_plugin_registry.h"
 ROUTING_HEADER = ROOT / "plugin/arupa_ext_api_prefixes.h"
+AUDIT_EVENT_PREFIXES = ("nomad.sitePermissionAudit.", "sitePermissionAudit.")
 MV3_PERMISSION_MAP = ROOT / "mv3/arupa_mv3_permission_map.cc"
 MV3_PERMISSION_MAP_H = ROOT / "mv3/arupa_mv3_permission_map.h"
 # K-02：Java 自检门面（与 native 权限表做跨语言契约核对）。
@@ -291,7 +292,14 @@ def kernel_routing_facts() -> dict:
     protos = _registry_protocol_namespaces(reg)
     proto_suffixes = {ns + "." for ns in protos}
     netdisk_prefixes = [p for p in host if p in proto_suffixes]
-    netdisk_events = [e for e in events if any(e.startswith(s) for s in proto_suffixes)]
+    # 审计通知由内核内部派发，不能出现在宿主主动投递白名单里；尤其
+    # nomad.sitePermissionAudit.* 虽以 nomad. 开头，也不属于网盘权限面。
+    audit_host_events = [e for e in events if e.startswith(AUDIT_EVENT_PREFIXES)]
+    if audit_host_events:
+        err("独立审计事件不得由宿主主动投递: " + ", ".join(audit_host_events))
+    netdisk_events = [e for e in events
+                      if any(e.startswith(s) for s in proto_suffixes)
+                      and not e.startswith(AUDIT_EVENT_PREFIXES)]
     facts = {
         "host_owned_prefixes": host,
         "kernel_owned_bridge_prefixes": kernel,
@@ -1211,7 +1219,11 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
         if ev not in dispatched:
             err(f"事件 {ev} 可被宿主投递，但 {LISTENER_REGISTRY.name} 的 kDispatchedEvents "
                 f"没有它 —— listExtListeners 会把它判成 honored=no。")
-    for ev in [e for e in dispatched if any(e.startswith(ns + ".") for ns in protos)]:
+    # 独立审计通知由内核直接派发，保留在监听器表，但不能要求它们出现在
+    # 宿主可主动投递白名单；nomad. 前缀不等于 nomadTransfer 权限归属。
+    for ev in [e for e in dispatched
+               if any(e.startswith(ns + ".") for ns in protos)
+               and not e.startswith(AUDIT_EVENT_PREFIXES)]:
         if ev not in routing["host_fireable_events"]:
             err(f"内核分发表有 {ev}，但宿主事件白名单没有它 —— 判定说会分发、实际投不进来。")
     # 窗口预算自洽 + v2.4 契约。
