@@ -493,6 +493,19 @@ class NomadTest(unittest.TestCase):
         for path in others:
             self.assertTrue(path.is_dir(), path)                          # 内核交付/其它 variant 不受影响
 
+    def test_desktop_package_rejects_source_or_kernel_drift(self):
+        identity = {'project': 'nomad_desktop', 'os': 'linux', 'arch': 'x64',
+                    'version': VERSION, 'variant': 'release'}
+        output = self.root / 'out' / nomad.delivery_base(identity)
+        output.mkdir(parents=True)
+        (output / 'NomadBrowser').write_text('fixture')
+        nomad.seal(output, identity, {'source': 'before', 'kernelDelivery': 'before'})
+        with patch.object(nomad, 'desktop_provenance', return_value={
+                'source': 'after', 'kernelDelivery': 'before'}):
+            with self.assertRaisesRegex(RuntimeError, '源码或内核交付已变化'):
+                nomad.package(self.args, output, identity)
+        self.assertFalse(self.args.dist_dir.exists())
+
     def test_package_cleans_stale_leftovers_and_keep_zero_keeps_history(self):
         identity = {'os': 'linux', 'arch': 'x64', 'version': VERSION, 'variant': 'release'}
         output = self.root / f'out/nomad-linux-x64-{VERSION}-release'
@@ -513,6 +526,17 @@ class NomadTest(unittest.TestCase):
         self.assertTrue(history.is_dir())                                 # keep=0：只清残留，保留全部历史
         self.assertTrue((self.args.dist_dir / f'nomad-linux-x64-{VERSION}-release-2').is_dir())
         self.assertTrue(output.is_dir())                                  # 构建目录不是残留，不能被清
+
+    def test_package_checksum_index_is_utf8_with_non_ascii_paths(self):
+        identity = {'os': 'linux', 'arch': 'x64', 'version': VERSION, 'variant': 'release'}
+        output = self.root / f'out/nomad-linux-x64-{VERSION}-release'
+        output.mkdir(parents=True)
+        (output / '逐风浏览器.txt').write_text('fixture', encoding='utf-8')
+        nomad.seal(output, identity)
+        self.quiet(nomad.package, self.args, output, identity)
+        delivery = self.args.dist_dir / f'nomad-linux-x64-{VERSION}-release-1'
+        sums = (delivery / 'SHA256SUMS.txt').read_text(encoding='utf-8')
+        self.assertIn('逐风浏览器.txt', sums)
 
     def test_zip_preserves_symlinks_and_duplicate_delivery_is_rejected(self):
         output = self.root / 'browser-output'

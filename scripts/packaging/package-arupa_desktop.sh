@@ -606,6 +606,11 @@ for cpu in "${ARCHS[@]}"; do
 
   package_arch "${cpu}" "${OUT}" "${DIST}"
 
+  # Carry the verified source/build identity into the delivery before sums.
+  [[ -f "${OUT}/arupa-build.json" ]] \
+    || err "缺少内核构建溯源 ${OUT}/arupa-build.json；请用 build.sh 重新构建"
+  cp "${OUT}/arupa-build.json" "${DIST}/source-provenance.json"
+
   # 门面 ABI 面：从交付自带的 C 头现场重新生成 dotnet/ArupaAbi.g.cs，并按新源码重建门面 DLL。
   # 内核更新加了枚举值/能力（如 ARUPA_INTERCEPT_BLOCK_REQUEST=2），这一步就自动带进门面；
   # 不然宿主只能等到编译期撞 CS0117（同口径见 scripts/gen_arupa_desktop_abi.py）。

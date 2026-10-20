@@ -555,6 +555,7 @@ class WorkspaceTest(unittest.TestCase):
         (out / 'hyphen-data/hyph-en-us.hyb').write_bytes(b'fixture')
         for name in ('content_shell.pak', 'devtools_resources.pak', 'icudtl.dat', 'snapshot_blob.bin', 'arupa_render', 'arupa_plugin_host'):
             (out / name).write_bytes(b'fixture')
+        (out / 'arupa-build.json').write_text('{"schema":2,"fixture":true}\n')
         for name in ('gen/extensions/strings/extensions_strings_en-US.pak',
                      'gen/extensions/extensions_renderer_generated_resources.pak',
                      'gen/components/test resources/fixture.pak'):
@@ -640,7 +641,8 @@ class WorkspaceTest(unittest.TestCase):
             # 真实打包脚本会产出下一号交付；这里只模拟这一结果。
             (dist / f'{prefix}4').mkdir(exist_ok=True)
 
-        with patch.object(fetch, 'run', side_effect=fake_run):
+        with patch.object(fetch, 'run', side_effect=fake_run), \
+             patch.object(build.source_provenance, 'validate_kernel_stamp'):
             self.quiet(build.main, ['desktop', 'package', '--os', 'linux', '--arch', 'x64',
                                     '--ver', VERSION, '--dist-dir', str(dist)])
         names = sorted(p.name for p in dist.iterdir())
@@ -660,7 +662,8 @@ class WorkspaceTest(unittest.TestCase):
         for number in (1, 2):
             (dist / f'{prefix}{number}').mkdir(parents=True)
         with patch.object(fetch, 'run', side_effect=lambda cmd, cwd=None, **kwargs:
-                          (dist / f'{prefix}3').mkdir(exist_ok=True)):
+                          (dist / f'{prefix}3').mkdir(exist_ok=True)), \
+             patch.object(build.source_provenance, 'validate_kernel_stamp'):
             self.quiet(build.main, ['desktop', 'package', '--os', 'linux', '--arch', 'x64',
                                     '--ver', VERSION, '--dist-dir', str(dist), '--keep', '0'])
         self.assertEqual(sorted(p.name for p in dist.iterdir()),

@@ -751,6 +751,11 @@ foreach ($cpu in $Archs) {
 
     try {
         Invoke-PackageArch -Cpu $cpu -OutPath $out -DistPath $dist
+        $sourceStamp = Join-Path $out 'arupa-build.json'
+        if (-not (Test-Path -LiteralPath $sourceStamp -PathType Leaf)) {
+            Fail "缺少内核构建溯源 $sourceStamp；请用 build.bat 重新构建"
+        }
+        Copy-Item -LiteralPath $sourceStamp -Destination (Join-Path $dist 'source-provenance.json') -Force
         Write-SumsAndManifest -DistPath $dist -Cpu $cpu
 
         if ($DoZip) {

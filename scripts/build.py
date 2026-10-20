@@ -19,6 +19,7 @@ import kernel_oom_guard
 import kernel_src_patches
 import native_tools
 import publish
+import source_provenance
 from linux_shared_library import prepare_v8_tls
 from concurrency import automatic_jobs
 from apple_tools import prepare_mac_toolchain
@@ -609,13 +610,26 @@ def main(argv=None):
             elif "build" in actions and not args.dry_run:
                 # args.gn 由本脚本以 UTF-8 写出（含中文注释），必须显式按 UTF-8 回读：
                 # Windows 中文环境的默认编码是 GBK，回读时会直接抛 UnicodeDecodeError。
-                if not stamp.exists() or json.loads(stamp.read_text(encoding="utf-8")) != identity \
+                stamped = json.loads(stamp.read_text(encoding="utf-8")) if stamp.exists() else {}
+                if stamped.get("identity", stamped) != identity \
                         or (out / "args.gn").read_text(encoding="utf-8") != template:
                     F.err(f"{out} 配置不匹配；请先执行 gen")
             if "build" in actions:
                 F.action("build", f"{project} {target_os}/{cpu}（-j {args.jobs}）")
+                source_before = None
+                if project == "arupa_desktop" and not args.dry_run:
+                    source_before = source_provenance.capture(ROOT, out / "args.gn")
+                    # A failed rebuild must not leave the prior successful stamp.
+                    stamp.unlink(missing_ok=True)
                 F.run([ninja, "-C", out, "-j", str(args.jobs),
                        *[t.removeprefix('//') for t in build_targets(project, target_os, cpu, out)]], SRC)
+                if source_before is not None:
+                    source_after = source_provenance.capture(ROOT, out / "args.gn")
+                    if source_before != source_after:
+                        F.err("桌面内核构建期间源码发生变化；请重新 build")
+                    artifacts = source_provenance.build_artifacts(out, target_os)
+                    built = source_provenance.built_stamp(identity, source_after, artifacts)
+                    write_if_changed(stamp, json.dumps(built, indent=2) + "\n")
     if "package" in actions:
         # Android's packager combines both ABIs in one delivery when arch=all.
         package_arches = (arch,) if target_os == "android" else arches
@@ -629,6 +643,11 @@ def main(argv=None):
             else:
                 # 打包前清掉中断/反复重建留下的整份旁置拷贝（每个近 800MB），顺带腾出磁盘。
                 deliveries.clean_stale_directories(dist_dir)
+                if project == "arupa_desktop":
+                    out = SRC / "out" / f"arupa-{target_os}-{cpu}-{version}{'-static' if args.link == 'static' else ''}"
+                    identity = {"project": project, "os": target_os, "arch": cpu,
+                                "version": version, "link": args.link}
+                    source_provenance.validate_kernel_stamp(ROOT, out, target_os, identity)
             F.run(package_command(args, target_os, cpu, version), ROOT)
             if not args.dry_run:
                 # 出包即核：这份内核里「zygote 从薄壳 arupa_render 起」的护栏还在不在。

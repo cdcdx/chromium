@@ -6,6 +6,7 @@ import glob
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 import shutil
@@ -20,6 +21,7 @@ import fetch as F
 import gen_arupa_desktop_abi
 import kernel_facade
 import kernel_oom_guard
+import source_provenance
 import toolchains
 
 
@@ -759,9 +761,24 @@ def save_output(payload, output):
     shutil.copytree(payload, output, symlinks=True)
 
 
-def seal(output, identity):
+def seal(output, identity, provenance=None):
     files = {p.relative_to(output).as_posix(): digest(p) for p in output.rglob('*') if p.is_file()}
-    (output / 'build-manifest.json').write_text(json.dumps({'identity': identity, 'files': files}, indent=2) + '\n')
+    manifest = {'identity': identity, 'files': files}
+    if provenance is not None:
+        manifest['provenance'] = provenance
+        manifest['builtAtUtc'] = datetime.now(timezone.utc).isoformat()
+    (output / 'build-manifest.json').write_text(
+        json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+
+
+def desktop_provenance(root, args, target_os, arch, version):
+    kernel = source_provenance.kernel_delivery_provenance(
+        delivery(root, args, target_os, arch, version))
+    current = source_provenance.capture(root)
+    current['gnArgsSha256'] = kernel['source']['gnArgsSha256']
+    if current != kernel['source']:
+        F.err('浏览器与内核交付源码基线不一致；请先以当前源码重建内核交付')
+    return {'source': current, 'kernelDelivery': kernel}
 
 
 def delivery_base(identity):
@@ -783,9 +800,13 @@ def package(args, output, identity):
     stamp = output / 'build-manifest.json'
     if not stamp.is_file():
         F.err(f'缺少成功构建清单: {stamp}；请先 build')
-    manifest = json.loads(stamp.read_text())
+    manifest = json.loads(stamp.read_text(encoding='utf-8'))
     if manifest['identity'] != identity:
         F.err(f'构建配置与打包请求不符: {output}')
+    if identity.get('project') == 'nomad_desktop':
+        if manifest.get('provenance') != desktop_provenance(
+                output.parent.parent, args, identity['os'], identity['arch'], identity['version']):
+            F.err('浏览器构建后源码或内核交付已变化；请重新 build')
     actual = {p.relative_to(output).as_posix(): digest(p) for p in output.rglob('*')
               if p.is_file() and p != stamp}
     if actual != manifest['files']:
@@ -814,7 +835,9 @@ def package(args, output, identity):
         if identity['os'] == 'mac':
             for app in stage.glob('*.app'):
                 F.run(['codesign', '--verify', '--deep', '--strict', app])
-        (stage / 'SHA256SUMS.txt').write_text(''.join(f'{hash_value}  {name}\n' for name, hash_value in sorted(actual.items())))
+        (stage / 'SHA256SUMS.txt').write_text(
+            ''.join(f'{hash_value}  {name}\n' for name, hash_value in sorted(actual.items())),
+            encoding='utf-8')
         # 与 save_output 同理：Windows 上刚写完上千个文件后句柄可能延迟释放，
         # rename 偶发失败；重试原子 rename 而不是立刻让 finally 的 rmtree
         # 掩盖真实原因（rmtree 批量删除还会被删除保护拦截，报错更具误导性）。
@@ -893,12 +916,18 @@ def run(root, args, project, target_os, arches, version, actions):
                 output.parent.mkdir(parents=True, exist_ok=True)
                 # A failed rebuild must not permit packaging yesterday's output.
                 (output / 'build-manifest.json').unlink(missing_ok=True)
+            provenance_before = (desktop_provenance(root, args, target_os, arch, version)
+                                 if project == 'nomad_desktop' and not F.DRY_RUN else None)
             if project == 'nomad_desktop':
                 desktop_build(root, args, target_os, arch, version, output)
             else:
                 android_build(root, args, arch, output)
             if not F.DRY_RUN:
-                seal(output, identity)
+                provenance_after = (desktop_provenance(root, args, target_os, arch, version)
+                                    if provenance_before is not None else None)
+                if provenance_before != provenance_after:
+                    F.err('浏览器构建期间源码或内核交付发生变化；请重新 build')
+                seal(output, identity, provenance_after)
         if 'package' in actions:
             F.action('package', f'{project} {target_os}/{arch}')
             final = package(args, output, identity)

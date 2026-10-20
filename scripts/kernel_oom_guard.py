@@ -39,7 +39,8 @@ KERNEL_MARKERS = {
     # 交付件 platform -> [(字面量, 说明), ...]
     'linux': [
         (b'cannot point FILE_EXE at', 'FILE_EXE 改指薄壳（失败即拒绝启动）'),
-        (b'no usable sandbox', '无可用沙箱时自动降级 --no-sandbox（否则 ZygoteHostImpl FATAL）'),
+        (b'no usable sandbox', '无可用沙箱时给出明确诊断'),
+        (b'refusing to start. Configure user namespaces', '无可用沙箱时拒绝启动，不降级 --no-sandbox'),
     ],
     'mac': [
         (b'cannot point FILE_EXE at', 'FILE_EXE 改指薄壳（失败即拒绝启动）'),
@@ -152,13 +153,19 @@ def verify_payload(payload, target_os='linux'):
     host = os.path.join(payload, SUBPROCESS_HOST[target_os])
     print(f'UI payload {payload}')
     ok = report(scan_kernel(library, target_os), os.path.basename(library))
-    dll = next((name for name in sorted(os.listdir(payload))
-                if name.endswith('.KernelHost.dll')), None) if os.path.isdir(payload) else None
-    if dll:
-        ok = report(scan_host_dll(os.path.join(payload, dll)), dll) and ok
+    if target_os == 'win':
+        # Windows loads the kernel in the NomadBrowser.exe process; it has no OOP
+        # KernelHost.dll.  The native kernel marker and subprocess shell are
+        # the relevant guards for this packaging shape.
+        print('    ✔ Windows in-process host; *KernelHost.dll is not required')
     else:
-        print('    ✘ 找不到 *KernelHost.dll（托管护栏无从校验）')
-        ok = False
+        dll = next((name for name in sorted(os.listdir(payload))
+                    if name.endswith('.KernelHost.dll')), None) if os.path.isdir(payload) else None
+        if dll:
+            ok = report(scan_host_dll(os.path.join(payload, dll)), dll) and ok
+        else:
+            print('    ✘ 找不到 *KernelHost.dll（托管护栏无从校验）')
+            ok = False
     if os.path.isfile(host):
         print(f'    ✔ 子进程薄壳 {os.path.basename(host)} 就位 ({os.path.getsize(host)}B)')
     else:
