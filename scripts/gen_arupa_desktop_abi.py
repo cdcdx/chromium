@@ -143,6 +143,10 @@ ENUM_SPECS = (
 VALUE_ALIASES = {
     ("InterceptAction", "ARUPA_INTERCEPT_MODIFY_HEADERS"): "ContinueWithModifiedHeaders",
     ("BrowserCommand", "ARUPA_BROWSER_COMMAND_OPEN_DEVTOOLS"): "OpenDevTools",
+    ("BrowserCommand", "ARUPA_BROWSER_COMMAND_DEVTOOLS_RIGHT"): "DevToolsRight",
+    ("BrowserCommand", "ARUPA_BROWSER_COMMAND_DEVTOOLS_BOTTOM"): "DevToolsBottom",
+    ("BrowserCommand", "ARUPA_BROWSER_COMMAND_DEVTOOLS_LEFT"): "DevToolsLeft",
+    ("BrowserCommand", "ARUPA_BROWSER_COMMAND_DEVTOOLS_UNDOCKED"): "DevToolsUndocked",
 }
 
 _DEFINE_MAJOR = re.compile(r"^\s*#define\s+ARUPA_KERNEL_ABI_MAJOR\s+(\d+)\s*$", re.M)

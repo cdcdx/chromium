@@ -14,6 +14,10 @@ rem Env: BUILD_PS_SHELL - PowerShell executable to use
 rem      (default: Windows PowerShell 5.1, which build.ps1 targets)
 setlocal EnableExtensions
 
+rem Python logs include Unicode status symbols; legacy Windows code pages
+rem cannot encode them when build output is redirected (for example over SSH).
+if not defined PYTHONIOENCODING set "PYTHONIOENCODING=utf-8"
+
 rem Run from this script's directory, so relative arguments (build/win/args.gn,
 rem --delivery ...) resolve the same no matter where build.bat is invoked from.
 pushd "%~dp0"

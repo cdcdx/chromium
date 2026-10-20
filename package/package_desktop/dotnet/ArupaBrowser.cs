@@ -235,7 +235,8 @@ namespace Arupa
     public enum JsDialogKind { Alert, Confirm, Prompt, BeforeUnload }
 
     /// <summary>窗口动作；与网页 HTML 全屏的 FullscreenChanged 独立。</summary>
-    public enum BrowserCommand { ToggleFullscreen = 1, OpenDevTools = 2 }
+    public enum BrowserCommand { ToggleFullscreen = 1, OpenDevTools = 2,
+        DevToolsRight = 3, DevToolsBottom = 4, DevToolsLeft = 5, DevToolsUndocked = 6 }
 
     // ── FB-P013 第三批: 权限/认证/文件选择请求 (宿主弹原生 UI 后经 Respond* 回应) ──
     public sealed class HttpAuthEventArgs : EventArgs
@@ -1956,7 +1957,7 @@ namespace Arupa
             _onBrowserCommand = (u, command) =>
             {
                 var handler = BrowserCommandRequested;
-                if (handler == null || command < 1 || command > 2) return 0;
+                if (handler == null || command < 1 || command > 6) return 0;
                 try { handler((BrowserCommand)command); return 1; }
                 catch { return 0; } // Never unwind a managed exception through Chromium.
             };
