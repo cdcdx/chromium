@@ -44,8 +44,12 @@ namespace Arupa
         internal static extern int arupa_kernel_abi_minor();
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int arupa_kernel_set_background_request_callback(IntPtr kernel, IntPtr callback, IntPtr user);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_kernel_set_background_response_block_callback(IntPtr kernel, IntPtr callback, IntPtr user);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         internal delegate IntPtr ShouldInterceptV3Native(IntPtr user, IntPtr request);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        internal delegate int ShouldBlockResponseNative(IntPtr user, IntPtr request, IntPtr responseHeaders);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         internal delegate IntPtr ShouldInterceptV2Native(IntPtr user, IntPtr url, IntPtr method,
             IntPtr resourceType, int isMainFrame, IntPtr headers, IntPtr initiatorOrigin, int isThirdParty);
@@ -234,6 +238,7 @@ namespace Arupa
             public IntPtr on_browser_command;            // 37 OnBrowserCommandNative (ABI 1.29)
             public IntPtr should_intercept_request_v2;   // 38 ABI 1.35
             public IntPtr should_intercept_request_v3;   // 39 ABI 1.36
+            public IntPtr should_block_response;         // 40 ABI 1.38
         }
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]

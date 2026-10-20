@@ -62,17 +62,31 @@ namespace Arupa
         }
         internal IntPtr InvokeV3(Func<InterceptRequest, InterceptResponse?>? handler, IntPtr pointer)
         {
-            if (pointer == IntPtr.Zero || (nuint)Marshal.ReadIntPtr(pointer) < (nuint)Marshal.SizeOf<Interop.InterceptRequestV3Native>()) return IntPtr.Zero;
+            var request = ReadV3(pointer);
+            return request is null ? IntPtr.Zero : InvokeCore(handler, request, true);
+        }
+        internal int InvokeResponseBlock(Func<InterceptRequest, bool>? handler, IntPtr pointer, IntPtr headers)
+        {
+            if (handler is null) return 0;
+            var request = ReadV3(pointer);
+            if (request is null) return 0;
+            request.ResponseHeaders = Interop.Utf8(headers);
+            try { return handler(request) ? 1 : 0; }
+            catch { return 0; }
+        }
+        private static InterceptRequest? ReadV3(IntPtr pointer)
+        {
+            if (pointer == IntPtr.Zero || (nuint)Marshal.ReadIntPtr(pointer) < (nuint)Marshal.SizeOf<Interop.InterceptRequestV3Native>()) return null;
             var input = Marshal.PtrToStructure<Interop.InterceptRequestV3Native>(pointer);
-            if (input.version != 3) return IntPtr.Zero;
-            return InvokeCore(handler, new InterceptRequest {
+            if (input.version != 3) return null;
+            return new InterceptRequest {
                 Url = Interop.Utf8(input.url) ?? "", Method = Interop.Utf8(input.method) ?? "GET",
                 ResourceType = Interop.Utf8(input.resource_type) ?? "", IsForMainFrame = input.is_for_main_frame != 0,
                 Headers = Interop.Utf8(input.headers), InitiatorOrigin = Interop.Utf8(input.initiator_origin),
                 IsThirdParty = input.is_third_party != 0, TabId = input.tab_id, FrameId = input.frame_id,
                 ParentFrameId = input.parent_frame_id, DocumentId = Interop.Utf8(input.document_id),
                 AncestryJson = Interop.Utf8(input.ancestry_json), HasTrustedFrameContext = true,
-            }, true);
+            };
         }
         private IntPtr OwnString(string? value)
         {
@@ -178,6 +192,7 @@ namespace Arupa
         public string? AncestryJson { get; init; }
         public bool HasTrustedFrameContext { get; init; }
         public string? Headers { get; init; }   // \n 分隔 "K: V"
+        public string? ResponseHeaders { get; set; } // ABI 1.38 response-stage callback only
     }
 
     // 拦截回调的处置方式 (capi.h ArupaInterceptResponse.action)。
@@ -466,11 +481,20 @@ namespace Arupa
         // V3 回调只拿一个不透明请求指针，V2 拿 8 个展开参数：两种委托没有公共类型，
         // 所以按 Delegate 存（2026-10-12：批 11 的 wrapper 里两支都活着，而字段声明成 V2 → 编不过）。
         private Delegate? _backgroundCallback;
+        private Interop.ShouldBlockResponseNative? _backgroundResponseBlock;
         private GCHandle _backgroundRoot;
         private bool _backgroundV3;
         /// <summary>内核能否走 dnr.execution.v3（ABI 1.36）：能就用不透明 V3 请求/响应结构。</summary>
         public static bool SupportsDnrV3 {
             get { try { return Interop.arupa_kernel_supports("dnr.execution.v3") != 0; }
+                catch (EntryPointNotFoundException) { return false; } }
+        }
+        public static bool SupportsDnrResponseBlocking {
+            get { try { return SupportsDnrV3 && Interop.arupa_kernel_supports("dnr.response_block.v1") != 0; }
+                catch (EntryPointNotFoundException) { return false; } }
+        }
+        public static bool SupportsDnrWebTransportBlocking {
+            get { try { return SupportsDnrV3 && Interop.arupa_kernel_supports("dnr.webtransport_block.v1") != 0; }
                 catch (EntryPointNotFoundException) { return false; } }
         }
         public static int CheckDeclarativeRuleCondition(string conditionJson, int actionType, string managedHostsCsv)
@@ -501,6 +525,19 @@ namespace Arupa
                 ? Interop.arupa_kernel_set_background_request_callback_v3(_handle, thunk, IntPtr.Zero)
                 : Interop.arupa_kernel_set_background_request_callback(_handle, thunk, IntPtr.Zero);
             if (result != 0) throw new InvalidOperationException($"dnr_background_bind_failed:{result}");
+        }
+
+        public void SetBackgroundResponseBlockHandler(Func<InterceptRequest, bool> handler)
+        {
+            ArgumentNullException.ThrowIfNull(handler);
+            if (!SupportsDnrResponseBlocking) throw new NotSupportedException("dnr_response_block_unavailable");
+            if (_backgroundResponseBlock != null) throw new InvalidOperationException("dnr_background_response_already_bound");
+            var callback = new Interop.ShouldBlockResponseNative((u, request, headers) =>
+                _backgroundBridge.InvokeResponseBlock(handler, request, headers));
+            _backgroundResponseBlock = callback;
+            int result = Interop.arupa_kernel_set_background_response_block_callback(
+                _handle, Marshal.GetFunctionPointerForDelegate(callback), IntPtr.Zero);
+            if (result != 0) throw new InvalidOperationException($"dnr_background_response_bind_failed:{result}");
         }
 
         /// <summary>
@@ -1172,6 +1209,10 @@ namespace Arupa
         {
             if (_handle != IntPtr.Zero)
             {
+                if (_backgroundResponseBlock != null) {
+                    int result = Interop.arupa_kernel_set_background_response_block_callback(_handle, IntPtr.Zero, IntPtr.Zero);
+                    if (result == 0) _backgroundResponseBlock = null;
+                }
                 if (_backgroundCallback != null) {
                     int result = (_backgroundV3 ? Interop.arupa_kernel_set_background_request_callback_v3(_handle, IntPtr.Zero, IntPtr.Zero) : Interop.arupa_kernel_set_background_request_callback(_handle, IntPtr.Zero, IntPtr.Zero));
                     // On a stopped/unresponsive runtime keep the delegate rooted;
@@ -1701,6 +1742,7 @@ namespace Arupa
         private readonly Interop.ShouldInterceptNative _onIntercept;   // FB-P002 C2/B2
         private readonly Interop.ShouldInterceptV2Native _onInterceptV2;
         private readonly Interop.ShouldInterceptV3Native _onInterceptV3;
+        private readonly Interop.ShouldBlockResponseNative _onResponseBlock;
         private readonly Interop.ShouldInterceptExNative _onInterceptEx; // #34 (带 resource_type)
         private readonly Interop.OnDownloadNative _onDownload;         // FB-P002 B4
         // FB-P003: 高层 wiring 回调 (保活防 GC)。
@@ -1810,6 +1852,7 @@ namespace Arupa
         // PC: view.ShouldInterceptRequest = req => NomadScheme.Route(req.Url); —— nomad:// WebUI
         // 内容供应 + 请求观测共用。
         public Func<InterceptRequest, InterceptResponse?>? ShouldInterceptRequest { get; set; }
+        public Func<InterceptRequest, bool>? ShouldBlockResponse { get; set; }
         // FB-P002 B4: 下载拦截。订阅即拦截原生下载 (内核取消), 宿主接管 (aria2/IDownloadInterceptor)。
         public event EventHandler<DownloadStartedEventArgs>? DownloadStarted;
 
@@ -1923,6 +1966,7 @@ namespace Arupa
             _onInterceptV2 = (u, url, method, type, main, headers, origin, third) =>
                 _interceptBridge.Invoke(ShouldInterceptRequest, url, method, type, main, headers, origin, third != 0);
             _onInterceptV3 = (u, request) => _interceptBridge.InvokeV3(ShouldInterceptRequest, request);
+            _onResponseBlock = (u, request, headers) => _interceptBridge.InvokeResponseBlock(ShouldBlockResponse, request, headers);
             _onIntercept = OnInterceptThunk;
             _onInterceptEx = OnInterceptExThunk;   // #34: 内核优先走这条, 资源类型只在它上面
             _onDownload = OnDownloadThunk;
@@ -2094,6 +2138,7 @@ namespace Arupa
             cbs.on_browser_command = Marshal.GetFunctionPointerForDelegate(_onBrowserCommand);
             cbs.should_intercept_request_v2 = Marshal.GetFunctionPointerForDelegate(_onInterceptV2);
             cbs.should_intercept_request_v3 = Marshal.GetFunctionPointerForDelegate(_onInterceptV3);
+            cbs.should_block_response = Marshal.GetFunctionPointerForDelegate(_onResponseBlock);
             cbs.on_open_new_window = Marshal.GetFunctionPointerForDelegate(_onNewWindow);
             cbs.should_override_url_loading = Marshal.GetFunctionPointerForDelegate(_onShouldOverride);
             // FB-P013 第三批: 装配权限/认证/文件选择回调 (struct 字段已在 capi ABI, 仅填指针)。
