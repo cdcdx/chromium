@@ -13,6 +13,43 @@ namespace Arupa
         public const string Dll = "arupa_kernel";
         public const int ABI_MAJOR = 1;
 
+        // .NET does not support LPArray<LPUTF8Str> for this C ABI on every
+        // runtime. Own the UTF-8 strings and the char** table through the call.
+        internal sealed class Utf8FileChooserPaths : IDisposable
+        {
+            private readonly IntPtr[] _strings;
+            internal IntPtr Pointer { get; private set; }
+            internal int Count => _strings.Length;
+
+            internal Utf8FileChooserPaths(string[]? paths)
+            {
+                _strings = new IntPtr[paths?.Length ?? 0];
+                try
+                {
+                    for (int i = 0; i < _strings.Length; i++)
+                    {
+                        string? path = paths![i];
+                        if (path is not null) _strings[i] = Marshal.StringToCoTaskMemUTF8(path);
+                    }
+                    if (_strings.Length == 0) return;
+                    Pointer = Marshal.AllocHGlobal(checked(IntPtr.Size * _strings.Length));
+                    Marshal.Copy(_strings, 0, Pointer, _strings.Length);
+                }
+                catch { Dispose(); throw; }
+            }
+
+            public void Dispose()
+            {
+                for (int i = 0; i < _strings.Length; i++)
+                {
+                    if (_strings[i] != IntPtr.Zero) Marshal.FreeCoTaskMem(_strings[i]);
+                    _strings[i] = IntPtr.Zero;
+                }
+                if (Pointer != IntPtr.Zero) Marshal.FreeHGlobal(Pointer);
+                Pointer = IntPtr.Zero;
+            }
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         internal struct ViewportV1
         {
@@ -949,8 +986,10 @@ namespace Arupa
         public static extern void arupa_webview_respond_media_permission(IntPtr view, int permId, int granted);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         public static extern void arupa_webview_on_file_chooser_result(IntPtr view, int chooserId,
-            [MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPUTF8Str)] string[]? paths,
-            int pathCount);
+            IntPtr paths, int pathCount);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int arupa_webview_on_file_chooser_result_checked(IntPtr view, int chooserId,
+            IntPtr paths, int pathCount);
         // ── A批: 证书错误决策 + 下载控制 (配 on_certificate_error / on_download_updated) ──
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         public static extern void arupa_webview_respond_certificate_error(IntPtr view,

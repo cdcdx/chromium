@@ -2809,7 +2809,20 @@ namespace Arupa
             => Interop.arupa_webview_respond_media_permission(_handle, permId, granted ? 1 : 0);
         /// <summary>回应文件选择 (FileChooserRequested 后): paths=选中文件; 取消传 null/空数组。</summary>
         public void RespondFileChooser(int chooserId, string[]? paths)
-            => Interop.arupa_webview_on_file_chooser_result(_handle, chooserId, paths, paths?.Length ?? 0);
+            => _ = TryRespondFileChooser(chooserId, paths);
+
+        /// <summary>同步确认文件选择应答是否已被内核的有效请求接收。</summary>
+        public bool TryRespondFileChooser(int chooserId, string[]? paths)
+        {
+            using var nativePaths = new Interop.Utf8FileChooserPaths(paths);
+            try { return Interop.arupa_webview_on_file_chooser_result_checked(_handle, chooserId, nativePaths.Pointer, nativePaths.Count) != 0; }
+            catch (EntryPointNotFoundException)
+            {
+                // A host may temporarily run with an older kernel package.
+                Interop.arupa_webview_on_file_chooser_result(_handle, chooserId, nativePaths.Pointer, nativePaths.Count);
+                return true; // Legacy ABI has no acknowledgement.
+            }
+        }
 
         /// <summary>FB-P026: 回应 Web Notification 权限请求 (NotificationPermissionRequested 后)。granted=true 允许。</summary>
         public void RespondNotificationPermission(int notifId, bool granted)
