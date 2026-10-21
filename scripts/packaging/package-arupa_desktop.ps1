@@ -47,8 +47,7 @@
 # 复制映射（OUT = src\out\arupa-win-{arch}-{ver}-static）:
 #   OUT\arupa_kernel.dll        → kernel\（内核本体，必需）
 #   OUT\arupa_render.exe              → kernel\（渲染进程薄壳，必需）
-#   OUT\arupa_desktop.exe       → kernel\（**有就带**：方案 A 原生宿主，内核静态链进 EXE、
-#                                       子进程为同一 EXE。下游 builder/browser.py 按它在不在切形态）
+#   OUT\arupa_desktop.exe       不进入交付包（原生宿主测试目标，保留在 out\ 供验收）
 #   OUT\arupa_plugin_host.exe   → kernel\（插件宿主，缺失终止打包）
 #   OUT\<主 pak> + 其余 *.pak   → kernel\（原名平铺，必需至少一个）
 #   OUT\icudtl.dat              → kernel\（必需）
@@ -442,15 +441,8 @@ function Invoke-PackageArch {
     # 插件宿主：arupa_kernel 的 data_deps，三平台交付均必需
     Add-RequiredFile -Src (Join-Path $OutPath 'arupa_plugin_host.exe') -DestDir $dest
 
-    # 原生宿主形态（Windows）：内核静态链进浏览器进程 EXE，渲染/GPU 子进程
-    # 由**同一个 EXE** 拉起。这不是"多一个可选工具"—— 它决定交付走哪种形态。
-    # 只有内核仓有 chrome/browser/arupa_desktop:arupa_desktop 目标时才编得出来，
-    # 所以按"在不在"判定，不硬编进上面的必需件列表（老内核仓会直接 unknown target）。
-    $desktopHost = Join-Path $OutPath 'arupa_desktop.exe'
-    if (Test-Path -LiteralPath $desktopHost -PathType Leaf) {
-        Add-RequiredFile -Src $desktopHost -DestDir $dest -Hint 'ninja 目标 chrome/browser/arupa_desktop:arupa_desktop（原生宿主）'
-        Write-Info '  原生宿主形态: kernel\ 里同时带 arupa_desktop.exe，下游会据此改走原生宿主装配'
-    }
+    # arupa_desktop.exe 是原生宿主测试目标，保留在 out\ 供验收；正式交付只带
+    # arupa_kernel.dll 和 arupa_render.exe，不把测试 EXE 混进 kernel\。
 
     # 主 pak
     Add-RequiredFile -Src $script:PakSrc -DestDir $dest
@@ -584,6 +576,11 @@ function Invoke-PackageArch {
 
     # <repo>\package\package_desktop 下的一级文件/文件夹（docs\ dotnet\ …）
     Copy-PackageDir -DistPath $DistPath
+
+    # 附件目录也可能包含 kernel\，必须在生成清单前拦住误带的测试 EXE。
+    if (Test-Path -LiteralPath (Join-Path $dest 'arupa_desktop.exe') -PathType Leaf) {
+        throw '交付附件包含 arupa_desktop.exe；该原生宿主测试目标不得进入 Windows 内核包'
+    }
 
     # 系统垃圾文件清理
     foreach ($junk in @('Thumbs.db', '.DS_Store', 'desktop.ini')) {

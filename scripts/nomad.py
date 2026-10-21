@@ -646,7 +646,13 @@ def desktop_build(root, args, target_os, arch, version, output):
             executable = payload / ('NomadBrowser.exe' if target_os == 'win' else 'NomadBrowser')
             if not executable.is_file():
                 F.err(f'发布缺少浏览器可执行文件: {executable}')
-            shutil.copytree(kernel / 'kernel', payload / 'arupa-desktop', dirs_exist_ok=True, symlinks=True)
+            # Windows' test-only native host may exist in older kernel deliveries.
+            # Ship the DLL embedding runtime, never the acceptance executable.
+            ignore = shutil.ignore_patterns('arupa_desktop.exe') if target_os == 'win' else None
+            shutil.copytree(kernel / 'kernel', payload / 'arupa-desktop',
+                            dirs_exist_ok=True, symlinks=True, ignore=ignore)
+            if target_os == 'win' and (payload / 'arupa-desktop/arupa_desktop.exe').is_file():
+                F.err('Windows 浏览器载荷仍包含测试目标 arupa_desktop.exe')
             if target_os == 'linux':
                 # 放在 copytree 之后：交付根的 kernel/ 是内核产出方的目录，不往里写，
                 # 只写我们自己的交付暂存目录（理由见 publish_linux_kernelhost）。
