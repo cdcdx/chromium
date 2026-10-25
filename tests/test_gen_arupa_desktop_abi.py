@@ -9,10 +9,12 @@ C 头里有了，手写的 ArupaBrowser.cs 没跟上，出包又是 cp + 只覆�
     （内联的不再重复生成，但逐值核对；核不过就失败）；
   · 手工同步 wrapper 留下过 "ArupaBrowser copy.cs" → C# glob 到它就 CS0101/CS0111，要提前拦。
 """
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import gen_arupa_desktop_abi as abi
@@ -151,6 +153,13 @@ class CheckTest(unittest.TestCase):
         second = self.generated.read_text(encoding='utf-8')
         self.assertIn('public enum InterceptAction', first)
         self.assertNotIn('public enum InterceptAction', second)
+
+    def test_explicit_dotnet_is_inherited_by_the_packaging_child(self):
+        dotnet = Path(self.temp.name) / 'sdk' / 'dotnet'
+        dotnet.parent.mkdir()
+        dotnet.write_text('test SDK')
+        with patch.dict(os.environ, {'ARUPA_DOTNET': str(dotnet)}):
+            self.assertEqual(str(dotnet), abi.find_dotnet())
 
 
 class DeliveryParityTest(unittest.TestCase):

@@ -29,6 +29,14 @@ import sys
 import threading
 import time
 
+# Windows agents commonly inherit a GBK console. Diagnostic symbols must never
+# turn a successful package into a failed build just because the console cannot
+# encode them.
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(errors='replace')
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import fetch as F  # noqa: E402  （ROOT / F.log / F.err 与其它脚本同源）

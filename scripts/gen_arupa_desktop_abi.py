@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -519,6 +520,12 @@ def find_dotnet() -> Optional[str]:
     之后门面 DLL 静默建不出来、交付退化成"只带源码"，宿主只能等构建期自愈。
     口径与 scripts/toolchains.py:dotnet_executable 保持一致（单一来源）。
     """
+    explicit = os.environ.get("ARUPA_DOTNET", "").strip()
+    if explicit:
+        candidate = os.path.expanduser(explicit)
+        resolved = shutil.which(candidate) or candidate
+        if Path(resolved).is_file():
+            return resolved
     if str(WORKSPACE / "scripts") not in sys.path:
         sys.path.insert(0, str(WORKSPACE / "scripts"))
     try:

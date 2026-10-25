@@ -523,6 +523,12 @@ def main(argv=None):
     if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", version):
         p.error("版本必须是 Chromium 四段版本号 X.Y.Z.W")
     if is_browser:
+        # Nomad 的 macOS publish 也会现场编译 Swift 辅助库。此前浏览器分支在
+        # prepare_mac_toolchain() 之前提前 return，导致普通 `build.sh nomad_desktop`
+        # 沿用系统 xcode-select/CommandLineTools 的混合环境：swiftc 与 SDK 版本不一致。
+        # 在进入 Nomad 后端前统一选择完整 Xcode，并把 DEVELOPER_DIR 传给 dotnet/MSBuild。
+        if target_os == "mac" and "build" in actions:
+            prepare_mac_toolchain(F.load_config())
         import nomad
         nomad.run(ROOT, args, project, target_os, arches, version, actions)
         F.log("浏览器构建计划完成（未执行）" if args.dry_run else "浏览器构建流程完成")
@@ -638,7 +644,21 @@ def main(argv=None):
                     identity = {"project": project, "os": target_os, "arch": cpu,
                                 "version": version, "link": args.link}
                     source_provenance.validate_kernel_stamp(ROOT, out, target_os, identity)
-            F.run(package_command(args, target_os, cpu, version), ROOT)
+            # The packager starts a nested ABI-facade generator.  Keep an
+            # explicitly selected SDK available to that child as well; without
+            # this hand-off, `--dotnet` worked for Nomad but was silently
+            # ignored by Arupa packaging on hosts where dotnet is not on PATH.
+            previous_package_dotnet = os.environ.get("ARUPA_DOTNET")
+            if args.dotnet:
+                os.environ["ARUPA_DOTNET"] = os.path.expanduser(args.dotnet)
+            try:
+                F.run(package_command(args, target_os, cpu, version), ROOT)
+            finally:
+                if args.dotnet:
+                    if previous_package_dotnet is None:
+                        os.environ.pop("ARUPA_DOTNET", None)
+                    else:
+                        os.environ["ARUPA_DOTNET"] = previous_package_dotnet
             if not args.dry_run:
                 # 出包即核：这份内核里「zygote 从薄壳 arupa_render 起」的护栏还在不在。
                 # 护栏是 overlay 里的未提交改动，被 pull 静默清掉过一次（见 debug-nomad-cpu-oom.md）。

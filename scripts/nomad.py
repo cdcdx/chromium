@@ -610,6 +610,11 @@ def desktop_build(root, args, target_os, arch, version, output):
     try:
         bundle_root = stage / 'bundles'
         publish_props = props + ([f'-p:MacDistRoot={bundle_root}', f'-p:LocalDebugOutputRoot={stage / "local"}'] if target_os == 'mac' else [])
+        # Windows Debug 是日常联调产物，程序集数量多且 ABP/EF/Avalonia 冷启动会集中触发
+        # 大量 JIT。发布 ReadyToRun 保留 Debug 配置与 PDB/诊断能力，只把热点 IL 预编译，
+        # 避免用户先看到空壳后再等数秒容器扫描与首窗 XAML 编译。
+        if target_os == 'win' and args.variant == 'debug':
+            publish_props += ['-p:PublishReadyToRun=true']
         if target_os == 'linux':
             publish_props += ['-f', 'net10.0', '-p:EnableWindowsTargeting=true']
         F.run([dotnet, 'publish', project, '-c', cfg, '-r', rid, '--self-contained', 'true',
