@@ -178,9 +178,12 @@ if [[ "${DO_PACKAGE}" -eq 1 && ! -d "${PKG_DIR}" ]]; then
   err "找不到交付附件目录: ${PKG_DIR}"
 fi
 
-# 主 pak：out 根 content_shell.pak，否则体积最大的 *.pak；APP = App 仓 assets
+# 主 pak：把 Content 运行时资源与 Extensions renderer 模块合并。只复制
+# content_shell.pak 会让 contextMenus / permissions 等自定义绑定在运行时
+# 找不到 JS resource，API 虽出现在契约中却会令 Service Worker 注册失败。
+# APP 仍表示显式复用 App 仓已验收的完整 pak。
 resolve_pak() {
-  local out="$1" f
+  local out="$1" f merged ext_generated ext_renderer ext_common ext_strings
   if [[ "${PAK_SRC}" == "APP" ]]; then
     PAK_SRC="${ROOT_DIR}/../nomad_android/app/src/main/assets/arupa_kernel.pak"
     [[ -f "${PAK_SRC}" ]] || err "--pak APP 找不到: ${PAK_SRC}"
@@ -191,7 +194,29 @@ resolve_pak() {
     return
   fi
   if [[ -f "${out}/content_shell.pak" ]]; then
-    PAK_SRC="${out}/content_shell.pak"; return
+    ext_generated="${out}/gen/extensions/extensions_renderer_generated_resources.pak"
+    ext_renderer="${out}/gen/extensions/extensions_renderer_resources.pak"
+    ext_common="${out}/gen/extensions/extensions_resources.pak"
+    # Android 只加载单一 arupa_kernel.pak，没有桌面 Chrome 独立的 locales/
+    # 装载步骤。动态 content/user script 校验会通过 l10n_util 读取
+    # IDS_EXTENSION_*；漏掉这份字符串包会在注册脚本时触发 ResourceBundle
+    # CHECK，而不是返回可诊断的校验错误。
+    ext_strings="${out}/gen/extensions/strings/extensions_strings_zh-CN.pak"
+    [[ -f "${ext_generated}" ]] || err "缺 ${ext_generated}（Extensions renderer 自定义绑定资源未构建）"
+    [[ -f "${ext_renderer}" ]] || err "缺 ${ext_renderer}（Extensions renderer 资源未构建）"
+    [[ -f "${ext_common}" ]] || err "缺 ${ext_common}（Extensions 公共资源未构建）"
+    [[ -f "${ext_strings}" ]] || err "缺 ${ext_strings}（Extensions 本地化字符串资源未构建）"
+    merged="${out}/arupa_kernel.pak"
+    python3 "${SRC_DIR}/tools/grit/pak_util.py" repack \
+      "${merged}" \
+      "${out}/content_shell.pak" \
+      "${ext_generated}" \
+      "${ext_renderer}" \
+      "${ext_common}" \
+      "${ext_strings}" \
+      || err "合并 Content 与 Extensions 运行时资源失败"
+    PAK_SRC="${merged}"
+    return
   fi
   f="$(ls -1S "${out}"/*.pak 2>/dev/null | head -1 || true)"
   if [[ -n "${f}" && -f "${f}" ]]; then

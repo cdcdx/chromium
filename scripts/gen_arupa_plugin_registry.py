@@ -41,6 +41,60 @@ inline constexpr std::string_view kHostOwnedPrefixes[] = {{
 {host_owned}
 }};
 
+// 宿主可直接执行的公开 API 精确成员表。前缀仅用于分类/诊断，绝不能作为授权。
+inline constexpr std::string_view kHostOwnedMethods[] = {{
+{host_methods}
+}};
+
+// 内核校验/编排后会调用宿主的精确内部桥成员。
+inline constexpr std::string_view kKernelHostBridgeMethods[] = {{
+{kernel_host_bridge_methods}
+}};
+
+// 只有这些完全依赖宿主的公开成员才按 capability 快照动态暴露。混合实现成员
+// （例如 action.setIcon(path/imageData)）保留静态 binding，由参数决定走内核或宿主。
+inline constexpr std::string_view kRendererHostCapabilityMethods[] = {{
+{renderer_host_capability_methods}
+}};
+
+// 只有完全由宿主产生的事件才动态暴露；内核也会产生的事件保留静态 binding。
+inline constexpr std::string_view kRendererHostCapabilityEvents[] = {{
+{renderer_host_capability_events}
+}};
+
+struct RendererHostCapabilityDependency {{
+  std::string_view host_method;
+  std::string_view renderer_member;
+}};
+inline constexpr RendererHostCapabilityDependency
+    kRendererHostCapabilityDependencies[] = {{
+{renderer_host_capability_dependencies}
+}};
+inline constexpr std::string_view kRendererDerivedHostCapabilityMethods[] = {{
+{renderer_derived_host_capability_methods}
+}};
+
+// 给 FeatureProvider 生成逐成员静态描述符；参数 V 接收一个字符串字面量。
+#define ARUPA_FOR_EACH_HOST_OWNED_METHOD(V) \\
+{host_method_macro}
+#define ARUPA_FOR_EACH_KERNEL_HOST_BRIDGE_METHOD(V) \\
+{kernel_host_bridge_method_macro}
+#define ARUPA_FOR_EACH_RENDERER_HOST_CAPABILITY_METHOD(V) \\
+{renderer_host_capability_method_macro}
+#define ARUPA_FOR_EACH_RENDERER_HOST_CAPABILITY_EVENT(V) \\
+{renderer_host_capability_event_macro}
+#define ARUPA_FOR_EACH_RENDERER_DERIVED_HOST_CAPABILITY_METHOD(V) \\
+{renderer_derived_host_capability_method_macro}
+#define ARUPA_FOR_EACH_HOST_FIREABLE_EVENT(V) \\
+{host_event_macro}
+
+inline constexpr char kHostCapabilityManifestMembersKey[] =
+    "__arupa_host_capability_members";
+inline constexpr char kHostCapabilityManifestEpochKey[] =
+    "__arupa_host_capability_epoch";
+inline constexpr char kHostCapabilityManifestDigestKey[] =
+    "__arupa_host_capability_digest";
+
 // 由 routing / kernel_owned_bridge_prefixes 派生。内核直接实现的桥接入口。
 inline constexpr std::string_view kKernelOwnedBridgePrefixes[] = {{
 {kernel_owned}
@@ -75,9 +129,19 @@ def _camel(ns: str) -> str:
     return "".join(p[:1].upper() + p[1:] for p in parts if p)
 
 
+def _to_macro_calls(items: list) -> str:
+    return " \\\n".join(f'  V("{item}")' for item in items)
+
+
 def generate(registry: dict) -> str:
     routing = registry["routing"]
     protos = registry["protocol_plugins"]
+    dependencies = [
+        (host_method, renderer_member)
+        for host_method, renderer_members in
+        routing["renderer_host_capability_dependencies"].items()
+        for renderer_member in renderer_members
+    ]
     const_lines = []
     for p in protos:
         name = p["namespace"]
@@ -85,6 +149,27 @@ def generate(registry: dict) -> str:
             f'inline constexpr std::string_view k{_camel(name)}Namespace = "{name}";')
     return HEADER_TEMPLATE.format(
         host_owned=_to_string_literals(routing["host_owned_prefixes"]),
+        host_methods=_to_string_literals(routing["host_owned_methods"]),
+        kernel_host_bridge_methods=_to_string_literals(
+            routing["kernel_host_bridge_methods"]),
+        renderer_host_capability_methods=_to_string_literals(
+            routing["renderer_host_capability_methods"]),
+        renderer_host_capability_events=_to_string_literals(
+            routing["renderer_host_capability_events"]),
+        renderer_host_capability_dependencies="\n".join(
+            '    {"%s", "%s"},' % pair for pair in dependencies),
+        renderer_derived_host_capability_methods=_to_string_literals(
+            [renderer_member for _, renderer_member in dependencies]),
+        host_method_macro=_to_macro_calls(routing["host_owned_methods"]),
+        kernel_host_bridge_method_macro=_to_macro_calls(
+            routing["kernel_host_bridge_methods"]),
+        renderer_host_capability_method_macro=_to_macro_calls(
+            routing["renderer_host_capability_methods"]),
+        renderer_host_capability_event_macro=_to_macro_calls(
+            routing["renderer_host_capability_events"]),
+        renderer_derived_host_capability_method_macro=_to_macro_calls(
+            [renderer_member for _, renderer_member in dependencies]),
+        host_event_macro=_to_macro_calls(routing["host_fireable_events"]),
         kernel_owned=_to_string_literals(routing["kernel_owned_bridge_prefixes"]),
         host_fireable=_to_string_literals(routing["host_fireable_events"]),
         proto_namespaces=_to_string_literals([p["namespace"] for p in protos]),

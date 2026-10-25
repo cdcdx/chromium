@@ -76,6 +76,8 @@ JAVA_BRIDGE_FACADE = ROOT / "plugin/android/java/src/co/arupa/plugin/ArupaPlugin
 DNR_SCHEMA = ROOT / "plugin/api/declarative_net_request.json"
 DNR_RULES_HEADER = ROOT / "mv3/arupa_dnr_rules.h"
 EXT_API_HOST = ROOT / "plugin/arupa_ext_api_host.cc"
+EXT_API_MOJOM = ROOT / "plugin/mojom/arupa_ext_api.mojom"
+EXT_API_IPC = ROOT / "plugin/arupa_ipc_message_sender.cc"
 # R-03：扩展重新启用后向**既有文档**补注入内容脚本。渲染侧上游
 # ScriptInjectionManager::OnUserScriptsUpdated 只擦 pending injection、不重注入，
 # 所以"停用 → 重新启用"必须由内核自己补，否则用户得刷新页面。这四个落点缺一个，
@@ -86,6 +88,12 @@ LOADER_BRIDGE_SOURCE = ROOT / "plugin/arupa_extension_loader_bridge.cc"
 PLUGIN_BUILD_GN = ROOT / "plugin/BUILD.gn"
 SW_HOST_SOURCE = ROOT / "plugin/arupa_extension_sw_host.cc"
 SW_SERVICE_HOST_SOURCE = ROOT / "plugin/arupa_service_worker_host.cc"
+MESSAGE_CHANNEL_SOURCE = ROOT / "plugin/arupa_message_channel.cc"
+LOCAL_FRAME_HOST_SOURCE = ROOT / "plugin/arupa_local_frame_host.cc"
+PLUGIN_JNI_SOURCE = ROOT / "plugin/plugin_jni.cc"
+WEB_REQUEST_SOURCE = ROOT / "plugin/arupa_web_request_events.cc"
+INTERCEPT_LOADER_SOURCE = ROOT / "aar/native/arupa_intercept_loader.cc"
+CONTENT_BROWSER_CLIENT_SOURCE = ROOT / "aar/native/arupa_content_browser_client.cc"
 # chrome.storage.local / session / onChanged 的落点：后端 + API 分发 + 宿主 + mojom 面。
 PLUGIN_STORAGE_H = ROOT / "mv3/plugin_storage.h"
 PLUGIN_STORAGE_CC = ROOT / "mv3/plugin_storage.cc"
@@ -93,6 +101,9 @@ STORAGE_HOST = ROOT / "plugin/arupa_plugin_storage_host.cc"
 STORAGE_MOJOM = ROOT / "plugin/mojom/arupa_plugin_storage.mojom"
 STORAGE_IPC = ROOT / "plugin/arupa_ipc_message_sender.cc"
 ALARMS_SOURCE = ROOT / "plugin/arupa_alarms.cc"
+PRODUCT_CAPABILITIES = (WORKSPACE_ROOT / "nomad_android/app/src/main/java/"
+                        "com/nomadbrowser/app/pluginruntime/"
+                        "ArupaAndroidExtensionCapabilities.kt")
 
 # v2.4 协议契约（内核不得单边放大/缩小）：业务 ≤30s、最长租约 45s、一次租约一项。
 # 改了这些数字，就必须同批改 App（NetdiskProductionWorkerWindows）与 spec。
@@ -153,9 +164,57 @@ def _read_source(rel: Path) -> str:
 
 
 def _strip_comments(text: str) -> str:
-    """去掉 C++ 注释：表里/注释里都有中文说明，注释里的引号曾被当成表项。"""
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    return re.sub(r"//[^\n]*", "", text)
+    """去掉 C/C++ 注释，但保留字符串中的 ``//``、``/*`` URL pattern。
+
+    API schema/host 校验代码包含 ``https://`` 和 ``*://*/*``。正则删注释会从
+    字符串里的 ``/*`` 一直吞到源码中下一个 ``*/``，令门禁误判后半个文件根本
+    不存在。这里使用一个小型词法扫描器；它不解释 C++，只区分字符串、字符、
+    行注释和块注释，足够满足事实提取且保持换行位置稳定。
+    """
+    out: list[str] = []
+    i = 0
+    state = "code"
+    quote = ""
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if state == "code":
+            if ch in {'"', "'"}:
+                state = "quoted"
+                quote = ch
+                out.append(ch)
+                i += 1
+            elif ch == "/" and nxt == "/":
+                state = "line_comment"
+                i += 2
+            elif ch == "/" and nxt == "*":
+                state = "block_comment"
+                i += 2
+            else:
+                out.append(ch)
+                i += 1
+        elif state == "quoted":
+            out.append(ch)
+            i += 1
+            if ch == "\\" and i < len(text):
+                out.append(text[i])
+                i += 1
+            elif ch == quote:
+                state = "code"
+        elif state == "line_comment":
+            if ch == "\n":
+                out.append(ch)
+                state = "code"
+            i += 1
+        else:  # block_comment
+            if ch == "*" and nxt == "/":
+                state = "code"
+                i += 2
+            else:
+                if ch == "\n":
+                    out.append(ch)
+                i += 1
+    return "".join(out)
 
 
 def _array_body(text: str, name: str, where: Path) -> str:
@@ -263,9 +322,23 @@ def verify_registry_header_sync() -> None:
     单源原则的兜底: 谁漏跑生成器、只改了 JSON，谁的出包在这里被拒，不让
     C++ 与 json 两份不一致的"事实"悄悄混进交付。"""
     reg = _read_registry()
+    dependencies = reg["routing"]["renderer_host_capability_dependencies"]
+    dependency_strings = [item for host, members in dependencies.items()
+                          for member in members for item in (host, member)]
+    derived_methods = [member for members in dependencies.values()
+                       for member in members]
     text = _strip_comments(_read_source(REGISTRY_HEADER))
     pairs = [
         ("kHostOwnedPrefixes", reg["routing"]["host_owned_prefixes"]),
+        ("kHostOwnedMethods", reg["routing"]["host_owned_methods"]),
+        ("kKernelHostBridgeMethods",
+         reg["routing"]["kernel_host_bridge_methods"]),
+        ("kRendererHostCapabilityMethods",
+         reg["routing"]["renderer_host_capability_methods"]),
+        ("kRendererHostCapabilityEvents",
+         reg["routing"]["renderer_host_capability_events"]),
+        ("kRendererHostCapabilityDependencies", dependency_strings),
+        ("kRendererDerivedHostCapabilityMethods", derived_methods),
         ("kKernelOwnedBridgePrefixes", reg["routing"]["kernel_owned_bridge_prefixes"]),
         ("kHostFireableEvents", reg["routing"]["host_fireable_events"]),
     ]
@@ -282,11 +355,53 @@ def kernel_routing_facts() -> dict:
     reg = _read_registry()
     routing = reg["routing"]
     host = routing["host_owned_prefixes"]
+    host_methods = routing["host_owned_methods"]
+    kernel_host_methods = routing["kernel_host_bridge_methods"]
+    renderer_host_methods = routing["renderer_host_capability_methods"]
+    renderer_host_events = routing["renderer_host_capability_events"]
+    renderer_dependencies = routing["renderer_host_capability_dependencies"]
     kernel = routing["kernel_owned_bridge_prefixes"]
     events = routing["host_fireable_events"]
     _check_table("host_owned_prefixes", host, suffix=".")
+    _check_table("host_owned_methods", host_methods)
+    _check_table("kernel_host_bridge_methods", kernel_host_methods)
+    _check_table("renderer_host_capability_methods", renderer_host_methods)
+    _check_table("renderer_host_capability_events", renderer_host_events)
     _check_table("kernel_owned_bridge_prefixes", kernel)
     _check_table("host_fireable_events", events)
+    for table_name, entries in (("host_owned_methods", host_methods),
+                                ("kernel_host_bridge_methods", kernel_host_methods),
+                                ("renderer_host_capability_methods", renderer_host_methods),
+                                ("renderer_host_capability_events", renderer_host_events),
+                                ("host_fireable_events", events)):
+        if len(entries) != len(set(entries)):
+            err(f"{table_name} 含重复成员，精确合同不允许歧义。")
+    exact_methods = set(host_methods) | set(kernel_host_methods)
+    unknown_renderer_methods = sorted(set(renderer_host_methods) - exact_methods)
+    unknown_renderer_events = sorted(set(renderer_host_events) - set(events))
+    dependency_hosts = set(renderer_dependencies)
+    derived_renderer_methods = [member
+                                for members in renderer_dependencies.values()
+                                for member in members]
+    unknown_dependency_hosts = sorted(dependency_hosts - exact_methods)
+    overlapping_renderer_methods = sorted(
+        set(derived_renderer_methods) & set(renderer_host_methods))
+    if (len(derived_renderer_methods) != len(set(derived_renderer_methods)) or
+            unknown_dependency_hosts or overlapping_renderer_methods):
+        err("renderer 派生 capability 依赖含重复成员或未知宿主方法:\n  " +
+            "\n  ".join(unknown_dependency_hosts +
+                        overlapping_renderer_methods +
+                        derived_renderer_methods))
+    if unknown_renderer_methods or unknown_renderer_events:
+        err("renderer 动态可见性表不是精确宿主合同的子集:\n  " +
+            "\n  ".join(unknown_renderer_methods + unknown_renderer_events))
+    bad_host_methods = [m for m in host_methods if not _has_prefix(host, m)]
+    bad_kernel_host_methods = [m for m in kernel_host_methods
+                               if not _has_prefix(kernel, m)
+                               and not _has_prefix(host, m)]
+    if bad_host_methods or bad_kernel_host_methods:
+        err("精确宿主成员没有对应路由分类:\n  " +
+            "\n  ".join(bad_host_methods + bad_kernel_host_methods))
     if not host or not events:
         err("登记表路由解析结果为空 —— 登记表与解析器已漂移，先修登记表再出包。")
     protos = _registry_protocol_namespaces(reg)
@@ -302,6 +417,11 @@ def kernel_routing_facts() -> dict:
                       and not e.startswith(AUDIT_EVENT_PREFIXES)]
     facts = {
         "host_owned_prefixes": host,
+        "host_owned_methods": host_methods,
+        "kernel_host_bridge_methods": kernel_host_methods,
+        "renderer_host_capability_methods": renderer_host_methods,
+        "renderer_host_capability_events": renderer_host_events,
+        "renderer_host_capability_dependencies": renderer_dependencies,
         "kernel_owned_bridge_prefixes": kernel,
         "host_fireable_events": events,
         "protocol_namespaces": protos,
@@ -325,6 +445,459 @@ def kernel_mv3_permissions() -> dict:
     if not rows:
         err("MV3 权限表解析结果为空 —— 解析器与源码格式漂移。")
     return rows
+
+
+def kernel_edge_android_api_facts() -> dict:
+    """Collect browser-side members for the Edge Android MV3 target surface.
+
+    Local JSON schemas are the actual Arupa binding surface. Three upstream
+    JSON schemas are also bundled/used directly; system.cpu/memory are WebIDL
+    generated by //extensions/common and therefore listed explicitly here.
+    Renderer-only/nocompile functions (for example i18n.getMessage) are not
+    browser routes and are intentionally excluded.
+    """
+    schema_paths = sorted((SRC / ROOT / "plugin/api").glob("*.json"))
+    schema_paths += [
+        WORKSPACE_ROOT / "src/extensions/common/api/i18n.json",
+        WORKSPACE_ROOT / "src/chrome/common/extensions/api/sessions.json",
+        WORKSPACE_ROOT / "src/chrome/common/extensions/api/declarative_content.json",
+        WORKSPACE_ROOT / "src/chrome/common/extensions/api/permissions.json",
+    ]
+    methods = set()
+    namespaces = set()
+    for path in schema_paths:
+        if not path.is_file():
+            err(f"Edge Android API schema missing: {path}")
+        schema_text = re.sub(r"(?m)^\s*//.*$", "",
+                             path.read_text(encoding="utf-8"))
+        for namespace in json.loads(schema_text):
+            ns = namespace.get("namespace")
+            if not ns:
+                continue
+            namespaces.add(ns)
+            for function in namespace.get("functions", []):
+                if function.get("nocompile"):
+                    continue
+                methods.add(f"{ns}.{function['name']}")
+    # Chromium M154 把下列 API 放在 IDL/WebIDL；只扫 JSON 会把它们
+    # 整个跳过，门禁就无法证明真实 binding 面。这里只抽取 API
+    # interface/namespace 中的 static 方法，不把 event listener 的
+    # addListener/removeListener 接口当成 browser method。
+    webidl_sources = {
+        "alarms": WORKSPACE_ROOT / "src/extensions/common/api/alarms.webidl",
+        "scripting": WORKSPACE_ROOT / "src/extensions/common/api/scripting.idl",
+        "userScripts": WORKSPACE_ROOT / "src/extensions/common/api/user_scripts.webidl",
+        "system.cpu": WORKSPACE_ROOT / "src/extensions/common/api/system_cpu.webidl",
+        "system.memory": WORKSPACE_ROOT / "src/extensions/common/api/system_memory.webidl",
+    }
+    for namespace, path in webidl_sources.items():
+        if not path.is_file():
+            err(f"Edge Android WebIDL source missing: {path}")
+        text = _strip_comments(path.read_text(encoding="utf-8"))
+        declared = set(re.findall(
+            r"\bstatic\s+(?!attribute\b)[^;{}]*?\b([A-Za-z_]\w*)\s*\(",
+            text, flags=re.S))
+        # ExtensionEvent interface 也有 static add/remove/hasListener，它们不是
+        # namespace browser function。
+        declared -= {"addListener", "removeListener", "hasListener"}
+        if not declared:
+            err(f"Edge Android WebIDL parser found no methods in {path}")
+        namespaces.add(namespace)
+        methods.update(f"{namespace}.{method}" for method in declared)
+
+    # alarms/scripting/userScripts are WebIDL sources and dom is renderer-only;
+    # none adds a JSON browser route here, but each must still be accounted for
+    # in the exact Edge Android MV3 namespace baseline.
+    exact_edge_mv3_namespaces = {
+        "action", "alarms", "browsingData", "contentSettings", "cookies",
+        "declarativeContent", "declarativeNetRequest", "dom", "downloads",
+        "extension", "history", "i18n", "identity", "idle", "management",
+        "notifications", "offscreen", "permissions", "runtime", "scripting",
+        "search", "sessions", "storage", "system.cpu", "system.memory", "tabs",
+        "userScripts", "webNavigation", "webRequest",
+    }
+    declared_edge_namespaces = namespaces | {
+        "alarms", "dom", "idle", "management", "runtime", "scripting",
+        "storage", "userScripts", "webRequest",
+    }
+    missing_edge_namespaces = exact_edge_mv3_namespaces - declared_edge_namespaces
+    if missing_edge_namespaces:
+        err("Edge Android MV3 namespaces missing from the Arupa declaration surface:\n  "
+            + "\n  ".join(sorted(missing_edge_namespaces)))
+    return {"namespaces": sorted(namespaces), "methods": sorted(methods),
+            "edge_namespaces": sorted(exact_edge_mv3_namespaces)}
+
+
+def verify_edge_android_api_routes(routing: dict) -> dict:
+    """Every browser-side member in the Android binding surface must route.
+
+    This is intentionally independent of the generic host being installed:
+    build-time declarations must have either a kernel route or a host route;
+    runtime member availability is then intersected with the versioned host
+    capability contract.
+    """
+    facts = kernel_edge_android_api_facts()
+    exact_host_methods = set(routing["host_owned_methods"])
+    derived_renderer_methods = {
+        method
+        for methods in routing["renderer_host_capability_dependencies"].values()
+        for method in methods
+    }
+    # storage.sync / storage.managed 是 storage schema 中的动态子对象，
+    # 不是独立 browser method。它们仍必须作为中间 Feature 登记，
+    # 否则 storage.managed.get 会被 native bindings 误当成独立 API，
+    # Renderer 在 GetAPISchema("storage.managed.get") 处直接 FATAL。
+    storage_schema = _read_source(
+        WORKSPACE_ROOT / "src/extensions/common/api/storage.json")
+    derived_api_objects = {
+        f"storage.{area}" for area in ("sync", "managed")
+        if re.search(rf'"{area}"\s*:\s*\{{\s*"\$ref"\s*:\s*"StorageArea"',
+                     storage_schema)
+    }
+    unknown_derived_methods = sorted(
+        derived_renderer_methods - set(facts["methods"]) - derived_api_objects)
+    if unknown_derived_methods:
+        err("renderer 派生 capability 指向未声明的 browser method:\n  " +
+            "\n  ".join(unknown_derived_methods))
+    provider = _read_source(
+        SRC / ROOT / "plugin/arupa_extensions_api_provider.cc")
+    unavailable_members = set(re.findall(
+        r'ARUPA_API_UNAVAILABLE\(\s*"([^"]+)"\s*\)', provider))
+    missing = [
+        method for method in facts["methods"]
+        if method not in unavailable_members
+        if method not in exact_host_methods
+        and not _has_prefix(routing["kernel_owned_bridge_prefixes"], method)
+    ]
+    if missing:
+        err("Edge Android schema declares browser-side members with no kernel/host route:\n  "
+            + "\n  ".join(missing))
+    dispatched = kernel_dispatched_events()
+    missing_events = [event for event in routing["host_fireable_events"]
+                      if event not in dispatched]
+    if missing_events:
+        err("Host-fireable events are not honored by the listener registry:\n  "
+            + "\n  ".join(missing_events))
+    # These namespaces come from Chrome-layer feature/permission tables that
+    # the compact Android client does not install.  A schema and route alone
+    # are insufficient: without both a permission feature and an API
+    # dependency the namespace is either unreachable or exposed to an
+    # extension that did not request it.
+    permission_dependencies = {
+        "search": "kSearchPermissionDep",
+        "sessions": "kSessionsPermissionDep",
+        "declarativeContent": "kDeclarativeContentPermissionDep",
+        "system.cpu": "kSystemCpuPermissionDep",
+        "system.memory": "kSystemMemoryPermissionDep",
+    }
+    for namespace, dependency in permission_dependencies.items():
+        api_pattern = (rf'ARUPA_API_DEP\(\s*"{re.escape(namespace)}"\s*,\s*'
+                       rf'{dependency}\s*\)')
+        perm_pattern = rf'ARUPA_PERM\(\s*"{re.escape(namespace)}"\s*,'
+        if not re.search(api_pattern, provider):
+            err(f"Edge Android API {namespace} is not bound to {dependency}.")
+        if not re.search(perm_pattern, provider):
+            err(f"Edge Android permission feature {namespace} is not registered.")
+    for member in (
+            "browserAction", "pageAction", "webNavigation.onTabReplaced",
+            "permissions.addHostAccessRequest",
+            "permissions.removeHostAccessRequest"):
+        if not re.search(rf'ARUPA_API_UNAVAILABLE\(\s*"{re.escape(member)}"\s*\)',
+                         provider):
+            err(f"Unsupported Android/MV3 member must stay unavailable: {member}")
+    return facts
+
+
+def verify_round2_host_contract(routing: dict) -> dict:
+    """R2-01..14 的可机读接线门禁。
+
+    这不企图用文本扫描代替 C++/Android 测试；它的作用是防止修复后
+    某一层（精确登记表、renderer 快照、validator、取消 ACK、journal）
+    在后续重构中单边丢失。
+    """
+    host = _read_source(EXT_API_HOST)
+    host_h = _read_source(ROOT / "plugin/arupa_ext_api_host.h")
+    prefixes = _read_source(ROUTING_HEADER)
+    loader = _read_source(LOADER_BRIDGE_SOURCE)
+    provider = _read_source(ROOT / "plugin/arupa_extensions_api_provider.cc")
+    client = _read_source(ROOT / "plugin/arupa_extensions_client.cc")
+    jni = _read_source(ROOT / "plugin/plugin_jni.cc")
+    java = _read_source(JAVA_BRIDGE_FACADE)
+    tabs = _read_source(ROOT / "plugin/arupa_ext_api_tabs.cc")
+    web_navigation = _read_source(
+        ROOT / "plugin/arupa_web_navigation_events.cc")
+    webview_delegate = _read_source(
+        ROOT / "aar/native/arupa_webview_delegate.cc")
+    browsing = _read_source(ROOT / "plugin/arupa_browsing_data.cc")
+    cookies = _read_source(ROOT / "plugin/arupa_ext_api_cookies.cc")
+    tests = _read_source(ROOT / "tests/arupa_edge_api_contract_unittest.cc")
+    runtime_hooks_path = (WORKSPACE_ROOT /
+                          "src/extensions/renderer/api/runtime_hooks_delegate.cc")
+    if not runtime_hooks_path.is_file():
+        err(f"renderer runtime hook missing: {runtime_hooks_path}")
+    runtime_hooks = runtime_hooks_path.read_text(encoding="utf-8")
+
+    exact_methods = (routing["host_owned_methods"] +
+                     routing["kernel_host_bridge_methods"])
+    if len(exact_methods) != len(set(exact_methods)):
+        err("公开/内部宿主精确成员表之间有重复。")
+
+    # 每个精确成员必须落在 ValidateHostApiResult 的一个明确模型
+    # family 中；新增成员未分类时直接拒绝出包。
+    result_families = (
+        "tabs.", "action.", "contextMenus.", "downloads.", "bookmarks.",
+        "history.", "notifications.", "identity.", "i18n.", "search.",
+        "sessions.", "declarativeContent.", "system.cpu.",
+        "system.memory.", "fontSettings.", "power.", "sidePanel.",
+        "cookies.", "storage.sync.", "storage.managed.",
+        "types.ChromeSetting.",
+        "nomadTransfer.", "nomad.", "extension.", "windows.",
+        "browsingData.", "management.", "declarativeNetRequest.",
+        "contentSettings.", "permissions.", "runtime.")
+    unclassified = [m for m in exact_methods
+                    if not any(m.startswith(p) for p in result_families)]
+    if unclassified:
+        err("精确宿主成员缺结果 validator family:\n  " +
+            "\n  ".join(unclassified))
+
+    event_families = ("tabs.", "downloads.", "bookmarks.",
+                      "notifications.", "history.", "identity.", "action.",
+                      "commands.",
+                      "sidePanel.", "windows.",
+                      "management.", "sessions.", "storage.",
+                      "contentSettings.", "declarativeNetRequest.",
+                      "nomad.", "nomadTransfer.")
+    bad_events = [e for e in routing["host_fireable_events"]
+                  if not any(e.startswith(p) for p in event_families)]
+    if bad_events:
+        err("宿主事件缺参数 validator family:\n  " +
+            "\n  ".join(bad_events))
+    if ("storage.sync.onChanged" in routing["host_fireable_events"] or
+            "storage.managed.onChanged" in routing["host_fireable_events"]):
+        err("storage area 事件不得作为第二条宿主入口。")
+
+    required_markers = {
+        "exact capability method registry":
+            (prefixes, "return IsHostOwnedApi(name) || IsKernelHostBridgeApi(name)"),
+        "capability v2": (host, "*version != 2"),
+        "capability canonical digest": (host, "SHA256HashString(canonical_json)"),
+        "capability kernel delivery digest":
+            (host, "mv3::contract::kDigest"),
+        "capability scope": (host, "capability scope does not match"),
+        "renderer capability manifest":
+            (host, "RendererHostCapabilityManifestData"),
+        "renderer delegated availability":
+            (provider, "requires_delegated_availability_check = true"),
+        "renderer bridge capability checks":
+            (client, "kRendererHostCapabilityMethods"),
+        "renderer mixed member preservation":
+            (tests, "RendererCapabilityOnlyGatesHostOnlyMembers"),
+        "renderer derived host dependencies":
+            (host, "kRendererHostCapabilityDependencies"),
+        "renderer context refresh":
+            (loader, "RefreshExtensionBindingsForHostCapabilities"),
+        "member capability report":
+            (host, "ExtensionApiCapabilityReportJson"),
+        "JNI member capability report":
+            (jni, "GetExtensionApiCapabilityReport"),
+        "Java member capability report":
+            (java, "getExtensionApiCapabilityReport"),
+        "private manifest redaction":
+            (runtime_hooks, "__arupa_host_capability_members"),
+        "result fail closed":
+            (host, "no registered host result validator"),
+        "event fail closed":
+            (host, "no registered host event validator"),
+        "event v2 context": (host, "event context v2 is required"),
+        "event generation replay guard":
+            (host, "event source generation or sequence is stale"),
+        "positive install generation":
+            (host, "HOST_INSTALL_GENERATION_REQUIRED"),
+        "legacy event API rejected":
+            (jni, "legacy fireExtEventWithWake rejected"),
+        "Java event v2 facade": (java, "fireExtEventWithWakeV2"),
+        "tabs capture permission gate":
+            (tabs, "CanCaptureVisiblePage"),
+        "tabs retired book check": (tabs, "BookForRetiredTabId"),
+        "web navigation created target stable ids":
+            (tests, "WebNavigationCreatedTargetHasSchemaExactStableTabIdentity"),
+        "web navigation deferred target dispatch":
+            (web_navigation, "OnTabRegisteredForWebNavigation"),
+        "auth challenge install generation":
+            (webview_delegate, "install_generation"),
+        "auth challenge runtime identity":
+            (webview_delegate, "PendingWebRequestAuthIsCurrent"),
+        "auth challenge exact book dispatch":
+            (webview_delegate,
+             "*worker_context, listener->dispatch_event_name"),
+        "cookies CHIPS serialization":
+            (cookies, 'd.Set("partitionKey", std::move(key))'),
+        "cookies stable regular and incognito stores":
+            (cookies, "StoreIdForBook"),
+        "cookies partition-key frame identity":
+            (cookies, 'op == "getPartitionKey"'),
+        "browsingData unsupported preflight":
+            (browsing, "serverBoundCertificates"),
+        "cancellation registration contract":
+            (host, "cancel listener"),
+        "cancellation ACK":
+            (host_h, "AcknowledgeExtensionApiCancellation"),
+        "purge journal": (loader, "__arupa_extension_purge_journal_v1"),
+        "uninstall ACK": (loader, "AckUninstallUrlDelivery"),
+        "content setting ownership ledger":
+            (host, "content_settings_ownership_v2"),
+        "content setting compensation":
+            (host, "FailContentSettingSetWithCompensation"),
+        "content setting external event source":
+            (host, "NotifyExternalContentSettingChanged"),
+        "storage sync commit v2": (host, "StorageSync commit v2"),
+        "storage revision replay guard":
+            (host, "duplicate or stale storage revision"),
+        "hardware independent consent":
+            (host, "independent high-risk hardware-info consent required"),
+        "exact registry regression tests":
+            (tests, "HostCapabilityAcceptsOnlyGeneratedExactMembers"),
+    }
+    missing = [name for name, (text, marker) in required_markers.items()
+               if marker not in text]
+    if missing:
+        err("二轮宿主合同接线缺失:\n  " + "\n  ".join(missing))
+    return {"methods": len(exact_methods),
+            "events": len(routing["host_fireable_events"]),
+            "checks": len(required_markers)}
+
+
+def verify_current_android_product_contract() -> dict:
+    """CAP-02：正式 host API 的当前逐风产品合同必须达到最小成员集。"""
+    if not PRODUCT_CAPABILITIES.is_file():
+        err(f"当前 Android 产品合同不存在: {PRODUCT_CAPABILITIES}")
+    text = PRODUCT_CAPABILITIES.read_text(encoding="utf-8")
+
+    def strings_in(name: str) -> set[str]:
+        match = re.search(rf"\b{name}\s*=\s*listOf\((.*?)\n\s*\)", text, re.S)
+        if not match:
+            err(f"Android 产品合同无法解析 {name} 列表。")
+        return set(re.findall(r'"([^"]+)"', match.group(1)))
+
+    methods = strings_in("methods")
+    events = strings_in("events")
+    models_match = re.search(r"\bdataModels\s*=\s*linkedMapOf\((.*?)\n\s*\)", text, re.S)
+    if not models_match:
+        err("Android 产品合同无法解析 dataModels。")
+    models = {name: int(version) for name, version in re.findall(
+        r'"([^"]+)"\s+to\s+(\d+)', models_match.group(1))}
+
+    # 产品声明会在运行时被 SetExtApiCapabilitiesJson 按同一两张
+    # 精确表验证。这里必须先做完全相同的子集校验，不能只验“最小集合”：
+    # 否则内核自有成员被误报为 Android host 能力时，静态出包通过却会
+    # 在设备启动阶段被原生合同拒绝。
+    routing = kernel_routing_facts()
+    exact_host_methods = (set(routing["host_owned_methods"]) |
+                          set(routing["kernel_host_bridge_methods"]))
+    unknown_methods = sorted(methods - exact_host_methods)
+    unknown_events = sorted(events - set(routing["host_fireable_events"]))
+    if unknown_methods or unknown_events:
+        err("Android 产品合同声明了非精确宿主成员（CAP-02）:\n  " +
+            "\n  ".join(unknown_methods + unknown_events))
+
+    formal = {
+        "tabs": ({"tabs.query"}, set(), {"Tab": 2}),
+        "bookmarks": ({
+            "bookmarks.create", "bookmarks.get", "bookmarks.getChildren",
+            "bookmarks.getRecent", "bookmarks.getSubTree", "bookmarks.getTree",
+            "bookmarks.move", "bookmarks.remove", "bookmarks.removeTree",
+            "bookmarks.search", "bookmarks.update",
+        }, {
+            "bookmarks.onChanged", "bookmarks.onChildrenReordered",
+            "bookmarks.onCreated", "bookmarks.onMoved", "bookmarks.onRemoved",
+        }, {"BookmarkTreeNode": 1}),
+        "notifications": ({
+            "notifications.clear", "notifications.create", "notifications.getAll",
+            "notifications.getPermissionLevel", "notifications.update",
+        }, {
+            "notifications.onClicked", "notifications.onClosed",
+            "notifications.onButtonClicked",
+            "notifications.onPermissionLevelChanged", "notifications.onShowSettings",
+        }, {"Notification": 1}),
+        "downloads": ({
+            "downloads.cancel", "downloads.download", "downloads.erase",
+            "downloads.getFileIcon", "downloads.open", "downloads.pause",
+            "downloads.removeFile", "downloads.resume", "downloads.search",
+            "downloads.show", "downloads.showDefaultFolder",
+        }, {"downloads.onChanged", "downloads.onCreated", "downloads.onErased"},
+            {"DownloadItem": 1}),
+        "contentSettings": ({"contentSettings.get", "contentSettings.set"},
+            {"contentSettings.onChanged"}, {"ContentSetting": 1}),
+        "browsingData": ({
+            "browsingData.remove", "browsingData.removeDownloads",
+            "browsingData.removeFormData", "browsingData.removeHistory",
+        }, set(), {}),
+        "history": ({
+            "history.search", "history.getVisits", "history.addUrl",
+            "history.deleteUrl", "history.deleteRange", "history.deleteAll",
+        }, {"history.onVisited", "history.onVisitRemoved"}, {"HistoryItem": 1}),
+        "identity.email": ({"identity.getProfileUserInfo"},
+            {"identity.onSignInChanged"}, {"IdentityProfile": 1}),
+        "identity.webAuth": ({"identity.launchWebAuthFlow"}, set(), {}),
+        "i18n": ({"i18n.getAcceptLanguages"}, set(), {"LocaleList": 1}),
+        "windows": ({
+            "windows.get", "windows.getCurrent", "windows.getLastFocused",
+            "windows.getAll", "windows.create", "windows.update",
+            "windows.remove",
+        }, {
+            "windows.onCreated", "windows.onRemoved",
+            "windows.onFocusChanged", "windows.onBoundsChanged",
+        }, {"Window": 2}),
+        "search": ({"search.query"}, set(), {"SearchProvider": 1}),
+        "sessions": ({"sessions.getRecentlyClosed", "sessions.restore"},
+            {"sessions.onChanged"}, {"Session": 1}),
+        "storage.managed": ({
+            "storage.managed.get", "storage.managed.getKeys",
+            "storage.managed.getBytesInUse",
+        }, {"storage.onChanged"}, {"StorageManaged": 1, "StorageChange": 2}),
+        "system.cpu": ({"system.cpu.getInfo"}, set(), {"CpuInfo": 1}),
+        "system.memory": ({"system.memory.getInfo"}, set(), {"MemoryInfo": 1}),
+        "declarativeContent": ({
+            "declarativeContent.onPageChanged.addRules",
+            "declarativeContent.onPageChanged.getRules",
+            "declarativeContent.onPageChanged.removeRules",
+        }, set(), {"DeclarativeRule": 1}),
+        "management": ({
+            "management.setEnabled",
+            "management.uninstall", "management.uninstallSelf",
+        }, {
+            "management.onInstalled", "management.onUninstalled",
+            "management.onEnabled", "management.onDisabled",
+        }, {"ExtensionInfo": 1}),
+    }
+    failures = []
+    for family, (need_methods, need_events, need_models) in formal.items():
+        missing_methods = sorted(need_methods - methods)
+        missing_events = sorted(need_events - events)
+        missing_models = sorted(
+            f"{name}@{version}" for name, version in need_models.items()
+            if models.get(name, 0) < version)
+        if missing_methods or missing_events or missing_models:
+            failures.append(f"{family}: methods={missing_methods}, events={missing_events}, models={missing_models}")
+    if failures:
+        err("正式 Android host API 的产品合同不完整（CAP-02）:\n  " + "\n  ".join(failures))
+
+    # management 的查询/警告成员由内核直接实现，不属于 Android
+    # host 合同；仍要在这里固定它们的内核路由，避免“从 host 声明删掉”
+    # 被误解成“产品能力删掉”。
+    kernel_management = {
+        "management.get", "management.getAll", "management.getSelf",
+        "management.getPermissionWarningsById",
+        "management.getPermissionWarningsByManifest",
+    }
+    missing_kernel_management = sorted(
+        member for member in kernel_management
+        if not _has_prefix(routing["kernel_owned_bridge_prefixes"], member))
+    if missing_kernel_management:
+        err("management 正式内核成员缺路由（CAP-02）:\n  " +
+            "\n  ".join(missing_kernel_management))
+    return {"methods": len(methods), "events": len(events), "models": len(models),
+            "formal_families": len(formal)}
 
 
 def kernel_perm_verdict_enum() -> dict:
@@ -439,12 +1012,22 @@ def verify_permission_contract() -> dict:
     cpp_perms = kernel_mv3_permissions()
     fails = _check_perm_verdict_enum(cpp_enum, java_consts)
     fails += _check_perm_table_contract(cpp_perms, java_expects, cpp_enum, java_consts)
+    substituted = sorted(
+        permission for permission, row in cpp_perms.items()
+        if row["verdict"] == "kSubstituted"
+    )
+    if substituted:
+        fails.append(
+            "受限替代权限必须先补齐正式闭环或明确降级，当前仍有: "
+            + ", ".join(substituted)
+        )
     if fails:
         err("跨语言权限契约不一致（K-02；正是 K-01 的量产通道）：\n  · "
             + "\n  · ".join(fails))
     return {"enum_pairs": len(cpp_enum),
             "java_consts": len(java_consts),
-            "java_checked_perms": len(java_expects)}
+            "java_checked_perms": len(java_expects),
+            "substituted_permissions": 0}
 
 
 def verify_permission_contract_regression() -> None:
@@ -487,8 +1070,20 @@ def _canonical_contract() -> dict:
         ],
         "routing": {
             "hostOwnedPrefixes": sorted(routing["host_owned_prefixes"]),
+            "hostOwnedMethods": sorted(routing["host_owned_methods"]),
+            "kernelHostBridgeMethods": sorted(
+                routing["kernel_host_bridge_methods"]),
             "kernelOwnedBridgePrefixes": sorted(routing["kernel_owned_bridge_prefixes"]),
             "hostFireableEvents": sorted(routing["host_fireable_events"]),
+            "rendererHostCapabilityMethods": sorted(
+                routing["renderer_host_capability_methods"]),
+            "rendererHostCapabilityEvents": sorted(
+                routing["renderer_host_capability_events"]),
+            "rendererHostCapabilityDependencies": {
+                host: sorted(members)
+                for host, members in sorted(
+                    routing["renderer_host_capability_dependencies"].items())
+            },
         },
         "protocolNamespaces": sorted(_registry_protocol_namespaces(reg)),
     }
@@ -834,7 +1429,11 @@ def verify_no_fake_keepalive() -> None:
 #: schema 的 properties 名 ↔ 内核常量名：同一个数字写两处，必须相等
 #: （schema 自己就在注释里写着"改了一处必须改另一处"）。
 DNR_LIMIT_PARITY = {
-    "kMaxDynamicRules": "MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES",
+    "kLegacyMaxDynamicAndSessionRules": "MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES",
+    "kMaxDynamicRules": "MAX_NUMBER_OF_DYNAMIC_RULES",
+    "kMaxSessionRules": "MAX_NUMBER_OF_SESSION_RULES",
+    "kMaxUnsafeDynamicRules": "MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES",
+    "kMaxUnsafeSessionRules": "MAX_NUMBER_OF_UNSAFE_SESSION_RULES",
     "kMaxRegexRules": "MAX_NUMBER_OF_REGEX_RULES",
     "kGuaranteedMinimumStaticRules": "GUARANTEED_MINIMUM_STATIC_RULES",
     "kMaxEnabledStaticRulesets": "MAX_NUMBER_OF_ENABLED_STATIC_RULESETS",
@@ -1109,6 +1708,16 @@ def kernel_sw_facts() -> dict:
     """Service worker 的语义/自愈事实（onStartup 每会话一次、注册失败有界重试）。"""
     sw_host = _strip_comments(_read_source(SW_HOST_SOURCE))
     sw_service = _strip_comments(_read_source(SW_SERVICE_HOST_SOURCE))
+    message_channel = _strip_comments(_read_source(MESSAGE_CHANNEL_SOURCE))
+    local_frame_host = _strip_comments(_read_source(LOCAL_FRAME_HOST_SOURCE))
+    loader_bridge = _strip_comments(_read_source(LOADER_BRIDGE_SOURCE))
+    plugin_jni = _strip_comments(_read_source(PLUGIN_JNI_SOURCE))
+    java_bridge = _strip_comments(_read_source(JAVA_BRIDGE_FACADE))
+    web_request = _strip_comments(_read_source(WEB_REQUEST_SOURCE))
+    intercept_loader = _strip_comments(_read_source(INTERCEPT_LOADER_SOURCE))
+    content_browser_client = _strip_comments(
+        _read_source(CONTENT_BROWSER_CLIENT_SOURCE))
+    ext_api_host = _strip_comments(_read_source(EXT_API_HOST))
     return {
         # runtime.onStartup：Chrome 语义是每个**浏览器会话**一次，不是每次 SW 启动都发
         # （"每次启动都发"会让扩展把 idle 回收后的重启误判成浏览器启动）。
@@ -1123,8 +1732,58 @@ def kernel_sw_facts() -> dict:
         # 两处都要收回计数：注册成功归零 + 重试用尽后放弃（只查"存在"区分不了这两条路，
         # 因为它们是同一句代码；少任何一处，偶发失败会被跨轮累积成永久放弃）。
         "register_retry_reset_on_success": sw_host.count(
-            "RegisterRetries().erase(id);") >= 2,
-        "register_retry_scheduled": "ScheduleRegisterRetry(id, this_attempt);" in sw_host,
+            "RegisterRetries().erase(worker_context);") >= 2,
+        "register_retry_scheduled": (
+            "ScheduleRegisterRetry(worker_context, this_attempt);" in sw_host),
+        "incognito_context_keyed": (
+            "ExtensionWorkerContextKey, int64_t" in sw_service and
+            "ExtensionWorkerContextKey, ArupaServiceWorkerHost*" in sw_service),
+        "incognito_partition_generation": (
+            "extension-background-incognito-" in sw_host and
+            "incognito_generation" in sw_host and
+            "REMOVE_DATA_MASK_ALL" in sw_host),
+        "incognito_access_gate": (
+            "IncognitoAllowedExtensions().contains(extension_id)" in sw_host and
+            "UnloadExtensionFromIncognitoRenderers(extension_id);" in sw_host and
+            "IsExtensionIncognitoAccessAllowed(extension->id())" in loader_bridge),
+        "message_routes_by_worker_context": (
+            "GetExtensionWorkerStoragePartition(browser_context, worker_context)" in message_channel and
+            "CurrentExtensionWorkerContext(target_id, sender_book)" in local_frame_host and
+            "worker_context_.book" in sw_service),
+        "incognito_host_lease_bridge": (
+            "JNI_ArupaPluginBridge_SetExtensionIncognitoSessionActive" in plugin_jni and
+            "JNI_ArupaPluginBridge_SetExtensionIncognitoAccess" in plugin_jni and
+            "setExtensionIncognitoSessionActive" in java_bridge and
+            "setExtensionIncognitoAccess" in java_bridge and
+            "getExtensionEventContextForBook" in java_bridge),
+        "webrequest_carries_partition": (
+            'info.incognito = partition_ == "incognito";' in intercept_loader and
+            "MaybeInstallArupaServiceWorkerInterceptProxy" in intercept_loader and
+            "URLLoaderFactoryType::kServiceWorkerSubResource" in content_browser_client and
+            "MaybeInstallArupaServiceWorkerInterceptProxy(" in content_browser_client and
+            "info.incognito ? TabBook::kIncognito : TabBook::kRegular" in web_request),
+        "parallel_host_event_contexts": (
+            re.search(r"BuildHostEventContextJson\(const std::string\s*&\s*extension_id,\s*"
+                      r"bool incognito\)", ext_api_host) is not None and
+            "event target context is inactive or unauthorized" in ext_api_host and
+            '(*incognito ? "incognito" : "regular")' in ext_api_host and
+            "getExtensionEventContextForBook" in java_bridge),
+        "java_event_facade_mints_v2_context": (
+            "buildExtensionEventContextLocked(id, incognito)" in java_bridge and
+            'context.put("source", "android-host")' in java_bridge and
+            'context.put("sourceGeneration", sExtEventSourceGeneration)' in java_bridge and
+            'context.put("sequence", Long.toString(++sExtEventSequence))' in java_bridge and
+            "fireExtEventWithWakeV2(" in java_bridge and
+            "fireExtEventV2(" in java_bridge),
+        "capability_book_switch_keeps_contexts": (
+            "const bool book_only_refresh" in ext_api_host and
+            "requires_context_refresh = changed && !book_only_refresh;" in ext_api_host),
+        "current_runtime_capability_declaration": (
+            "InstallCurrentRuntimeExtApiCapabilities(" in ext_api_host and
+            "JNI_ArupaPluginBridge_InstallCurrentRuntimeExtensionHostCapabilities" in plugin_jni and
+            "installCurrentRuntimeExtensionHostCapabilities(" in java_bridge and
+            'scope.Set("profileId", ProfileIdForThisRun())' in ext_api_host and
+            "crypto::SHA256HashString(canonical_json)" in ext_api_host),
     }
 
 
@@ -1140,12 +1799,60 @@ def verify_sw_contract(facts: dict) -> int:
             "注册成功后没有把重试计数归零 —— 计数会跨轮累积，最终把偶发失败变成永久放弃。",
         "register_retry_scheduled":
             "注册失败没有真的安排重试（只打了日志）。",
+        "incognito_context_keyed":
+            "普通与无痕 Worker 仍只按 extensionId 寻址，两个后台会互相覆盖。",
+        "incognito_partition_generation":
+            "无痕 Worker 没有会话代次内存分区或结束清理，旧会话状态可能复用。",
+        "incognito_access_gate":
+            "无痕授权没有同时约束 Renderer 下发、撤权卸载与 Worker 注册。",
+        "message_routes_by_worker_context":
+            "runtime/tabs 消息没有按调用方册选择对应 Worker 上下文。",
+        "incognito_host_lease_bridge":
+            "Android 宿主缺少无痕授权与首末租约的同步 JNI 边界。",
+        "webrequest_carries_partition":
+            "webRequest 未携带真实网络分区，无 tabId 的无痕请求会误投普通后台。",
+        "parallel_host_event_contexts":
+            "宿主事件上下文仍只能跟随全局无痕状态，不能同时投普通与无痕后台。",
+        "java_event_facade_mints_v2_context":
+            "Android 事件门面仍调用已禁用的旧入口，通知/书签/后台唤醒会被内核拒绝。",
+        "capability_book_switch_keeps_contexts":
+            "宿主 capability 仅切换普通/无痕册时仍会销毁另一册上下文。",
+        "current_runtime_capability_declaration":
+            "Android 宿主能力声明仍要求 Java 自报 profile/scope/digest，或缺少 JNI 安装入口。",
     }
     bad = [n for n, ok in facts.items() if n in failures and not ok]
     if bad:
         err("Service worker 接线不成立：\n"
             + "\n".join(f"  · {failures[n]}" for n in bad))
     return len(failures)
+
+
+def verify_user_gesture_contract() -> int:
+    """Privileged UI APIs must receive the binding's trusted gesture bit."""
+    mojom = _read_source(EXT_API_MOJOM)
+    ipc = _read_source(EXT_API_IPC)
+    host = _read_source(EXT_API_HOST)
+    checks = {
+        "mojom_carries_gesture":
+            "string args_json, bool user_gesture" in mojom,
+        "renderer_forwards_gesture":
+            ipc.count("args_json, params.user_gesture") >= 2,
+        "browser_receives_gesture":
+            "const std::string &args_json,\n                           bool user_gesture," in host,
+        "permissions_request_requires_gesture":
+            'name == "permissions.request"' in host and
+            'name + ": requires a user gesture"' in host,
+        "action_popup_requires_gesture":
+            'name == "action.openPopup"' in host and
+            "!user_gesture" in host,
+        "side_panel_open_reserved_gate":
+            'name == "sidePanel.open"' in host and
+            "!user_gesture" in host,
+    }
+    failed = [name for name, ok in checks.items() if not ok]
+    if failed:
+        err("可信 user gesture 接线不完整：\n  " + "\n  ".join(failed))
+    return len(checks)
 
 
 def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
@@ -1156,6 +1863,11 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
       · 实现有（内核表）      → 声明必须有（schema / 事件白名单）
     任一条不成立就 err() 直接拒绝出包，绝不写一份"看起来通过"的清单。
     """
+    # Edge Android browser-side schemas must never exceed the union of kernel
+    # and versioned-host routes.
+    edge_api = verify_edge_android_api_routes(routing)
+    round2 = verify_round2_host_contract(routing)
+    product = verify_current_android_product_contract()
     # declarativeNetRequest 面与网盘无关，先核 —— 老内核没有网盘面也不能跳过它。
     dnr = kernel_dnr_facts()
     verify_dnr_surface(dnr)
@@ -1168,6 +1880,7 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
     # Service worker：onStartup 每会话一次 + 注册失败有界自愈。
     sw = kernel_sw_facts()
     verify_sw_contract(sw)
+    gesture_checks = verify_user_gesture_contract()
     # K-06 结构化自检结果（与网盘无关，先于早退）。
     selftest = kernel_selftest_facts()
     verify_selftest_contract(selftest)
@@ -1198,16 +1911,24 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
         if f"{ns}." not in routing["host_owned_prefixes"]:
             err(f"网盘别名不完整：路由表缺 {ns}.（另一条在、这条不在，两条写法行为会不一致）。")
     # schema ↔ 路由。
+    provider_source = _read_source(
+        SRC / ROOT / "plugin/arupa_extensions_api_provider.cc")
+    unavailable_protocol_members = set(re.findall(
+        r'ARUPA_API_UNAVAILABLE\(\s*"([^"]+)"\s*\)', provider_source))
     for ns, fact in schemas.items():
         if f"{ns}." not in routing["host_owned_prefixes"]:
             err(f"schema 声明了命名空间 {ns}，但路由表没有 {ns}. —— 能声明却调不通。")
         for fn in fact["functions"]:
             qualified = f"{ns}.{fn}"
+            if qualified in unavailable_protocol_members:
+                continue
             if not _has_prefix(routing["host_owned_prefixes"], qualified) and \
                not _has_prefix(routing["kernel_owned_bridge_prefixes"], qualified):
                 err(f"schema 声明了 {qualified}，但内核既不等价转宿主也不桥接 —— 声明与路由不同源。")
         for ev in fact["events"]:
             qualified = f"{ns}.{ev}"
+            if qualified in unavailable_protocol_members:
+                continue
             if qualified not in routing["host_fireable_events"]:
                 err(f"schema 声明了事件 {qualified}，但宿主事件白名单没有它 —— 声明了却发不出去。")
     for ev in routing["netdisk"]["permission_gated_events"]:
@@ -1273,11 +1994,19 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
         f" + 跨语言码 {len(pairs)} 条 + 运行期入口 {len(facade['runtime_entrypoints'])} 个"
         f" + DNR {len(dnr['supported_methods'])} 方法(schema↔支持表↔分发，"
         f"错误码 {len(dnr['error_codes'])} 个全部可达)"
+        f" + Edge Android MV3 命名空间门禁({len(edge_api['edge_namespaces'])} exact)"
+        f" + 已声明浏览器路由门禁({len(edge_api['namespaces'])} namespaces / "
+        f"{len(edge_api['methods'])} browser methods)"
+        f" + R2 宿主合同({round2['methods']} exact methods / "
+        f"{round2['events']} events / {round2['checks']} wiring checks)"
+        f" + 当前产品合同({product['methods']} methods / {product['events']} events / "
+        f"{product['models']} models，{product['formal_families']} 个正式族最小集完整)"
         f" + R-03 补注入({len(kernel_reinject_facts())} 项接线契约全成立："
         f"启用跳变才补 / 代次判活 / 逐帧判权 / 机读回执 / 编译不成环)"
         f" + chrome.storage({len(kernel_storage_facts())} 项接线契约全成立："
         f"session 内存态 / 配额回报 / onChanged 真实写入 / 内部键隔离)"
         f" + SW({len(kernel_sw_facts())} 项：onStartup 每会话一次 / 注册失败有界自愈)"
+        f" + user gesture({gesture_checks} 项：renderer→mojom→browser 强制门禁)"
         f" + 混淆契约 {keep_count} 条 + 无假保活"
         f" + 跨语言权限契约(C++ PermVerdict {perm_stats['enum_pairs']} ↔ Java PERM_* "
         f"{perm_stats['java_consts']} 数值 1:1；Java 自校验权限 {perm_stats['java_checked_perms']} "
