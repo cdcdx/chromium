@@ -554,6 +554,12 @@ def desktop_build(root, args, target_os, arch, version, output):
     if target_os == 'linux' and arch == 'x86':
         F.log('Linux x86 发布要求项目提供 linux-x86 运行时及原生依赖；官方 .NET SDK 无法保证支持')
     cfg = args.variant.capitalize()
+    if target_os == 'linux':
+        # .NET 10/Roslyn 在连续 publish 后复用旧 MSBuild 节点，偶发在写 PE 元数据时
+        # 触发 AccessViolationException。Linux 发布包含主程序和独立 KernelHost 两次
+        # publish，禁用节点/编译服务器复用可隔离两次编译，也避免失败节点污染下次构建。
+        os.environ.setdefault('MSBUILDDISABLENODEREUSE', '1')
+        os.environ.setdefault('DOTNET_CLI_USE_MSBUILD_SERVER', '0')
     dotnet = prepare_dotnet(args, repo, project)
     # 顺序要紧：先把交付自带的门面按源码现场重建，再决定 props 引用哪一份门面。
     # 反过来的话，引用的还是那份「旧/空」门面 —— 表现就是一堆 CS0117/CS1061/CS0246。
