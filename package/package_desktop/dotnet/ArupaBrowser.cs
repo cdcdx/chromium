@@ -612,6 +612,22 @@ namespace Arupa
             if (result != 0) throw new InvalidOperationException($"Kernel cookie flush failed: {result}");
         }
 
+        /// <summary>
+        /// Calls the kernel-owned website-permission audit ledger for the
+        /// browser's authenticated Native Messaging adapter. The native side
+        /// revalidates the loaded extension and its declared authority.
+        /// </summary>
+        public Task<SitePermissionAuditReply> CallSitePermissionAuditAsync(
+            string extensionId, bool privateContext, string method,
+            string argumentsJson, CancellationToken cancellationToken = default)
+        {
+            if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(ArupaKernel));
+            if (!Supports("permissions.site_audit_proxy.v1"))
+                throw new NotSupportedException("permissions.site_audit_proxy.v1");
+            return SitePermissionAuditRequests.CallAsync(_handle, extensionId,
+                privateContext, method, argumentsJson, cancellationToken);
+        }
+
         private IntPtr _handle;
         public ArupaKernel(ArupaKernelOptions? opts = null)
         {
@@ -1617,6 +1633,76 @@ namespace Arupa
         {
             var error = ArupaKernel.LastErrorJson();
             if (!string.IsNullOrEmpty(error)) throw new InvalidOperationException(error);
+        }
+    }
+
+    public sealed record SitePermissionAuditReply(string ResultJson, string ErrorCode);
+
+    internal static class SitePermissionAuditRequests
+    {
+        private static readonly object Gate = new();
+        private static readonly Dictionary<long, TaskCompletionSource<SitePermissionAuditReply>> Pending = [];
+        private static readonly Interop.SitePermissionAuditReplyNative Callback = Complete;
+        private static long _nextToken;
+
+        internal static Task<SitePermissionAuditReply> CallAsync(IntPtr kernel,
+            string extensionId, bool privateContext, string method,
+            string argumentsJson, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var completion = new TaskCompletionSource<SitePermissionAuditReply>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            long token;
+            lock (Gate)
+            {
+                if (Pending.Count >= 128) throw new InvalidOperationException("audit_host_busy");
+                do token = checked(++_nextToken); while (token == 0 || Pending.ContainsKey(token));
+                Pending.Add(token, completion);
+            }
+            try
+            {
+                int result = Interop.arupa_kernel_call_site_permission_audit(
+                    kernel, extensionId, privateContext ? 1 : 0, method,
+                    argumentsJson, Callback, new IntPtr(token));
+                if (result != 0)
+                {
+                    lock (Gate) Pending.Remove(token);
+                    throw new InvalidOperationException("audit_proxy_call_failed:" + result);
+                }
+            }
+            catch
+            {
+                lock (Gate) Pending.Remove(token);
+                throw;
+            }
+            CancellationTokenRegistration registration = default;
+            if (cancellationToken.CanBeCanceled)
+            {
+                registration = cancellationToken.Register(static state =>
+                {
+                    var (token, cancellation) = ((long, CancellationToken))state!;
+                    TaskCompletionSource<SitePermissionAuditReply>? completion;
+                    lock (Gate) Pending.Remove(token, out completion);
+                    completion?.TrySetCanceled(cancellation);
+                }, (token, cancellationToken));
+            }
+            return AwaitAndDisposeAsync(completion.Task, registration);
+        }
+
+        private static async Task<SitePermissionAuditReply> AwaitAndDisposeAsync(
+            Task<SitePermissionAuditReply> task, CancellationTokenRegistration registration)
+        {
+            try { return await task.ConfigureAwait(false); }
+            finally { registration.Dispose(); }
+        }
+
+        private static void Complete(IntPtr user, IntPtr resultJson, IntPtr errorCode)
+        {
+            TaskCompletionSource<SitePermissionAuditReply>? completion;
+            lock (Gate) Pending.Remove(user.ToInt64(), out completion);
+            completion?.TrySetResult(new(
+                Interop.Utf8(resultJson) ?? "",
+                Interop.Utf8(errorCode) ?? ""));
         }
     }
 

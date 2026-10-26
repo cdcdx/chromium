@@ -79,6 +79,18 @@ namespace Arupa
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int arupa_kernel_abi_minor();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        internal delegate void SitePermissionAuditReplyNative(
+            IntPtr user, IntPtr resultJson, IntPtr errorCode);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int arupa_kernel_call_site_permission_audit(
+            IntPtr kernel,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string extensionId,
+            int privateContext,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string method,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string argumentsJson,
+            SitePermissionAuditReplyNative callback,
+            IntPtr user);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int arupa_kernel_set_background_request_callback(IntPtr kernel, IntPtr callback, IntPtr user);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
