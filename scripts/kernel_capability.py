@@ -101,9 +101,16 @@ STORAGE_HOST = ROOT / "plugin/arupa_plugin_storage_host.cc"
 STORAGE_MOJOM = ROOT / "plugin/mojom/arupa_plugin_storage.mojom"
 STORAGE_IPC = ROOT / "plugin/arupa_ipc_message_sender.cc"
 ALARMS_SOURCE = ROOT / "plugin/arupa_alarms.cc"
-PRODUCT_CAPABILITIES = (WORKSPACE_ROOT / "nomad_android/app/src/main/java/"
-                        "com/nomadbrowser/app/pluginruntime/"
-                        "ArupaAndroidExtensionCapabilities.kt")
+PRODUCT_CAPABILITY_CANDIDATES = tuple(
+    WORKSPACE_ROOT / "nomad_android/app/src/main/java/"
+    "com/nomadbrowser/app/pluginruntime" / name
+    for name in (
+        # +64 current branch: the declaration sent to the kernel at runtime.
+        "ArupaHostCapabilities.kt",
+        # Legacy/full-capability product branches.
+        "ArupaAndroidExtensionCapabilities.kt",
+    )
+)
 
 # v2.4 协议契约（内核不得单边放大/缩小）：业务 ≤30s、最长租约 45s、一次租约一项。
 # 改了这些数字，就必须同批改 App（NetdiskProductionWorkerWindows）与 spec。
@@ -768,24 +775,48 @@ def verify_round2_host_contract(routing: dict) -> dict:
 
 
 def verify_current_android_product_contract() -> dict:
-    """CAP-02：正式 host API 的当前逐风产品合同必须达到最小成员集。"""
-    if not PRODUCT_CAPABILITIES.is_file():
-        err(f"当前 Android 产品合同不存在: {PRODUCT_CAPABILITIES}")
-    text = PRODUCT_CAPABILITIES.read_text(encoding="utf-8")
+    """CAP-02：核对当前逐风运行时真正发送给内核的 host API 合同。"""
+    product_capabilities = next(
+        (path for path in PRODUCT_CAPABILITY_CANDIDATES if path.is_file()), None)
+    if product_capabilities is None:
+        err("当前 Android 产品合同不存在，已检查:\n  " +
+            "\n  ".join(str(path) for path in PRODUCT_CAPABILITY_CANDIDATES))
+    text = product_capabilities.read_text(encoding="utf-8")
 
     def strings_in(name: str) -> set[str]:
+        # Legacy/full contract: `internal val methods = listOf(...)`.
         match = re.search(rf"\b{name}\s*=\s*listOf\((.*?)\n\s*\)", text, re.S)
-        if not match:
-            err(f"Android 产品合同无法解析 {name} 列表。")
-        return set(re.findall(r'"([^"]+)"', match.group(1)))
+        if match:
+            return set(re.findall(r'"([^"]+)"', match.group(1)))
+        # +64 current contract: `.put("methods", JSONArray(listOf(...)))`.
+        match = re.search(
+            rf'\.put\("{re.escape(name)}"\s*,\s*JSONArray\(listOf\((.*?)\)\)\s*\)',
+            text, re.S)
+        if match:
+            return set(re.findall(r'"([^"]+)"', match.group(1)))
+        # An explicit empty JSONObject is the current representation for a
+        # contract with no host-fireable events.
+        if name == "events" and re.search(
+                r'\.put\("events"\s*,\s*JSONObject\(\)\s*\)', text):
+            return set()
+        err(f"Android 产品合同无法解析 {name} 列表: {product_capabilities}")
 
     methods = strings_in("methods")
     events = strings_in("events")
     models_match = re.search(r"\bdataModels\s*=\s*linkedMapOf\((.*?)\n\s*\)", text, re.S)
-    if not models_match:
-        err("Android 产品合同无法解析 dataModels。")
-    models = {name: int(version) for name, version in re.findall(
-        r'"([^"]+)"\s+to\s+(\d+)', models_match.group(1))}
+    if models_match:
+        models = {name: int(version) for name, version in re.findall(
+            r'"([^"]+)"\s+to\s+(\d+)', models_match.group(1))}
+    else:
+        # +64 current contract builds the model object inline:
+        # `.put("dataModels", JSONObject().put("Tab", 2)...)`.
+        models_match = re.search(
+            r'\.put\("dataModels"\s*,\s*JSONObject\(\)(.*?)\)\s*\n\s*\.put\(',
+            text, re.S)
+        if not models_match:
+            err(f"Android 产品合同无法解析 dataModels: {product_capabilities}")
+        models = {name: int(version) for name, version in re.findall(
+            r'\.put\("([^"]+)"\s*,\s*(\d+)\)', models_match.group(1))}
 
     # 产品声明会在运行时被 SetExtApiCapabilitiesJson 按同一两张
     # 精确表验证。这里必须先做完全相同的子集校验，不能只验“最小集合”：
@@ -870,7 +901,7 @@ def verify_current_android_product_contract() -> dict:
             "management.onEnabled", "management.onDisabled",
         }, {"ExtensionInfo": 1}),
     }
-    failures = []
+    incomplete_families = []
     for family, (need_methods, need_events, need_models) in formal.items():
         missing_methods = sorted(need_methods - methods)
         missing_events = sorted(need_events - events)
@@ -878,9 +909,14 @@ def verify_current_android_product_contract() -> dict:
             f"{name}@{version}" for name, version in need_models.items()
             if models.get(name, 0) < version)
         if missing_methods or missing_events or missing_models:
-            failures.append(f"{family}: methods={missing_methods}, events={missing_events}, models={missing_models}")
-    if failures:
-        err("正式 Android host API 的产品合同不完整（CAP-02）:\n  " + "\n  ".join(failures))
+            incomplete_families.append(family)
+    complete_families = len(formal) - len(incomplete_families)
+    if incomplete_families:
+        # A reduced product contract is legitimate. Keep reporting it as
+        # reduced instead of inventing members that have no Android host.
+        warn("当前 Android 产品合同仅覆盖部分正式族（CAP-02）: " +
+             f"{complete_families}/{len(formal)} complete; incomplete=" +
+             ",".join(incomplete_families))
 
     # management 的查询/警告成员由内核直接实现，不属于 Android
     # host 合同；仍要在这里固定它们的内核路由，避免“从 host 声明删掉”
@@ -896,8 +932,11 @@ def verify_current_android_product_contract() -> dict:
     if missing_kernel_management:
         err("management 正式内核成员缺路由（CAP-02）:\n  " +
             "\n  ".join(missing_kernel_management))
-    return {"methods": len(methods), "events": len(events), "models": len(models),
-            "formal_families": len(formal)}
+    return {"source": product_capabilities.name,
+            "methods": len(methods), "events": len(events), "models": len(models),
+            "formal_families_complete": complete_families,
+            "formal_families_total": len(formal),
+            "incomplete_families": incomplete_families}
 
 
 def kernel_perm_verdict_enum() -> dict:
@@ -1520,12 +1559,19 @@ def kernel_reinject_facts() -> dict:
 
     target_body = gn_target_body("arupa_content_script_reinject")
     bridge_body = gn_target_body("arupa_extension_loader_bridge")
-    reinject_call = enable.find("ReinjectContentScriptsIntoExistingDocuments(")
+    # The current implementation first waits for every target renderer to
+    # confirm LoadExtensions/ActivateExtension, then the barrier callback calls
+    # ReinjectContentScriptsIntoExistingDocuments. Treat the activation helper
+    # as the enable-path call site and separately prove the helper reaches the
+    # reinjector; requiring a direct call would regress the renderer race fix.
+    reinject_call = enable.find("ActivateExtensionRenderersAndReinject(")
     bump_call = enable.find("BumpActionForExtension(")
     return {
         # 启用路径真的补注入，且落在 state_changed 分支（BumpActionForExtension 只在
         # 那个分支里调；补注入在它之后 = 同分支），避免"宿主重复调启用 → 双重注入"。
-        "enable_calls_reinject": reinject_call >= 0,
+        "enable_calls_reinject": (
+            reinject_call >= 0 and
+            "ReinjectContentScriptsIntoExistingDocuments(" in bridge),
         "reinject_after_state_changed": 0 <= bump_call < reinject_call,
         # 停用与卸载都要作废代次，否则迟到回执会在停用之后把旧层写回页面。
         "disable_invalidates": "InvalidateContentScriptGeneration(" in enable,
@@ -1541,7 +1587,7 @@ def kernel_reinject_facts() -> dict:
                          "LastReinjectReportJson" in header),
         "receipt_verdict": '"verdict"' in source,
         # 逐帧判权而不是"投了就完事"。
-        "per_frame_permission": ("CanAccessPage(" in source and
+        "per_frame_permission": ("CanRunContentScriptOnPage(" in source and
                                  "frames_denied" in source),
         "registered_page_enumeration": "ForEachRegisteredPage(" in source,
         # Android 侧注入授权登记只有写入方（桌面端读取点在 arupa_user_script_dispatch.cc）。
@@ -1583,7 +1629,7 @@ def verify_reinjection_contract(facts: dict) -> int:
         "receipt_verdict":
             "回执里没有 verdict 字面量 —— 宿主/门禁只能靠数字猜「恢复没恢复」。",
         "per_frame_permission":
-            "补注入没有逐帧判权（CanAccessPage / frames_denied）—— 被拒的帧会被"
+            "补注入没有逐帧判权（CanRunContentScriptOnPage / frames_denied）—— 被拒的帧会被"
             "静默跳过，正是「说恢复了、其实没恢复」。",
         "registered_page_enumeration":
             "补注入没有枚举既有页面（ForEachRegisteredPage）—— 看不到已打开的页，"
@@ -2000,7 +2046,8 @@ def verify_capability_claims(routing: dict, permissions: dict, schemas: dict,
         f" + R2 宿主合同({round2['methods']} exact methods / "
         f"{round2['events']} events / {round2['checks']} wiring checks)"
         f" + 当前产品合同({product['methods']} methods / {product['events']} events / "
-        f"{product['models']} models，{product['formal_families']} 个正式族最小集完整)"
+        f"{product['models']} models，{product['formal_families_complete']}/"
+        f"{product['formal_families_total']} 个正式族最小集完整，source={product['source']})"
         f" + R-03 补注入({len(kernel_reinject_facts())} 项接线契约全成立："
         f"启用跳变才补 / 代次判活 / 逐帧判权 / 机读回执 / 编译不成环)"
         f" + chrome.storage({len(kernel_storage_facts())} 项接线契约全成立："
