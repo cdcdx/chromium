@@ -45,6 +45,8 @@
 # 复制映射（OUT = src/out/arupa-{os}-{arch}-{ver}-static）:
 #   OUT/libarupa_kernel.dylib | .so              → kernel/（内核本体，必需）
 #   OUT/arupa_render                             → kernel/arupa_render（渲染进程薄壳，必需/仅告警）
+#   OUT/chrome_sandbox                           → kernel/chrome-sandbox（Linux 必需；安装阶段需
+#                                                  root:root + 4755，供 userns 受限系统使用）
 #   OUT/<主 pak>                                  → kernel/arupa_kernel.pak 之外的原名保留：
 #                                                  content_shell.pak 等 *.pak 按原名平铺
 #   OUT/icudtl.dat                               → kernel/icudtl.dat（必需）
@@ -324,6 +326,18 @@ package_arch() {
     want "${out}/$(helper_name)" "${dest}" ""
   else
     err "缺 ${out}/arupa_render（ninja 目标 chrome/browser/arupa_desktop:render，产物名 output_name=arupa_render，少了它没有渲染进程）"
+  fi
+
+  # Ubuntu 24.04 may restrict unprivileged user namespaces. Chromium then
+  # resolves a SUID fallback by the canonical hyphenated name next to the host
+  # executable. Packaging cannot safely grant root ownership, so carry the
+  # verified helper as 0755 and leave root:root/4755 to the installer.
+  if [[ "${OS}" == "linux" ]]; then
+    [[ -f "${out}/chrome_sandbox" ]] \
+      || err "缺 ${out}/chrome_sandbox（ninja 目标 //sandbox/linux:chrome_sandbox；user namespace 受限的 Linux 无法安全启动）"
+    cp -f "${out}/chrome_sandbox" "${dest}/chrome-sandbox"
+    chmod 0755 "${dest}/chrome-sandbox"
+    log "  chrome-sandbox  $(du -h "${out}/chrome_sandbox" | cut -f1)（安装阶段必须 root:root/4755）"
   fi
 
   # 主 pak

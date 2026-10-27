@@ -222,6 +222,11 @@ def build_targets(project, target_os, arch, out):
         targets.append(base + ":arupa_desktop")
     if target_os in ("win", "mac", "linux"):
         targets += [base + ":render", base + "/plugin/host:arupa_plugin_host"]
+    if target_os == "linux":
+        # Ubuntu 24.04 commonly restricts unprivileged user namespaces through
+        # AppArmor.  Keep Chromium's SUID sandbox helper in every Linux build so
+        # the installer can provision the supported root:root/4755 fallback.
+        targets.append("//sandbox/linux:chrome_sandbox")
     return targets
 
 
@@ -390,7 +395,8 @@ def prepare_project(project):
                   # 显式加入依赖闭包，避免普通 build 后测试目标缺失。
                   '  if (is_win) { deps += [ "//chrome/browser/arupa_desktop:arupa_desktop" ] }',
                   '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:render" ] }',
-                  '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop/plugin/host:arupa_plugin_host" ] }']
+                  '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop/plugin/host:arupa_plugin_host" ] }',
+                  '  if (is_linux) { deps += [ "//sandbox/linux:chrome_sandbox" ] }']
     else:
         lines += ['  deps = [ "//chrome/browser/arupa_android/aar:arupa_kernel_aar", "//content/shell:pak" ]']
     lines += ['}']

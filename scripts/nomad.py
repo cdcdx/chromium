@@ -353,6 +353,38 @@ echo "启动器里应出现「逐风浏览器」；设为默认浏览器请在�
 """
 
 
+LINUX_SANDBOX_INSTALLER = r"""#!/usr/bin/env bash
+# Provision Chromium's supported SUID sandbox fallback for Linux hosts where
+# AppArmor restricts unprivileged user namespaces. Run once after extracting
+# or moving the portable bundle. This script deliberately never weakens the
+# browser with --no-sandbox.
+set -euo pipefail
+
+APP_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+HELPER="$APP_DIR/arupa-desktop/chrome-sandbox"
+
+if [ "${EUID}" -ne 0 ]; then
+  echo "[ERROR] 需要 root 设置 SUID sandbox；请执行: sudo \"$0\"" >&2
+  exit 1
+fi
+if [ ! -f "$HELPER" ] || [ ! -x "$HELPER" ]; then
+  echo "[ERROR] 找不到 Chromium sandbox helper: $HELPER" >&2
+  exit 1
+fi
+
+chown root:root "$HELPER"
+chmod 4755 "$HELPER"
+
+owner="$(stat -c '%U:%G' "$HELPER")"
+mode="$(stat -c '%a' "$HELPER")"
+if [ "$owner" != "root:root" ] || [ "$mode" != "4755" ]; then
+  echo "[ERROR] sandbox helper 校验失败: owner=$owner mode=$mode" >&2
+  exit 1
+fi
+echo "Linux SUID sandbox 已启用: $HELPER ($owner $mode)"
+"""
+
+
 def write_linux_desktop_integration(repo, payload):
     """写 Linux 桌面集成件到便携包根：.desktop 模板 + 安装脚本 + 图标。
 
@@ -396,7 +428,10 @@ def write_linux_desktop_integration(repo, payload):
     installer = payload / 'install-desktop.sh'
     installer.write_text(LINUX_DESKTOP_INSTALLER, encoding='utf-8')
     installer.chmod(0o755)
-    F.log('桌面集成: nomadbrowser.desktop.in + install-desktop.sh + nomadbrowser.png')
+    sandbox_installer = payload / 'install-linux-sandbox.sh'
+    sandbox_installer.write_text(LINUX_SANDBOX_INSTALLER, encoding='utf-8')
+    sandbox_installer.chmod(0o755)
+    F.log('桌面集成: nomadbrowser.desktop.in + install-desktop.sh + install-linux-sandbox.sh + nomadbrowser.png')
 
 
 def prune_foreign_native_runtimes(payload, rid):
@@ -621,10 +656,17 @@ def desktop_build(root, args, target_os, arch, version, output):
         # 避免用户先看到空壳后再等数秒容器扫描与首窗 XAML 编译。
         if target_os == 'win' and args.variant == 'debug':
             publish_props += ['-p:PublishReadyToRun=true']
+        publish_scheduler = []
         if target_os == 'linux':
             publish_props += ['-f', 'net10.0', '-p:EnableWindowsTargeting=true']
+            # Avalonia's Cecil-based XAML compiler is not safe when this graph builds
+            # duplicate project references concurrently. Node reuse is already off
+            # above, but each fresh MSBuild process can still create several nodes and
+            # occasionally abort with AccessViolationException. Keep the Linux UI
+            # publish single-node; KernelHost is published independently afterwards.
+            publish_scheduler = ['-m:1']
         F.run([dotnet, 'publish', project, '-c', cfg, '-r', rid, '--self-contained', 'true',
-               '-o', stage / 'payload', *publish_props], repo)
+               '-o', stage / 'payload', *publish_scheduler, *publish_props], repo)
         if target_os == 'win':
             for folder, subdir in (('NomadBrowser.Updater', ''), ('NomadBrowser.Windows.Updater', 'Helpers/WindowsUpdater')):
                 updater = repo / folder / (folder + '.csproj')

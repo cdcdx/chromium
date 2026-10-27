@@ -172,10 +172,16 @@ class WorkspaceTest(unittest.TestCase):
         for target_os in ('mac', 'linux'):
             self.assertNotIn('//chrome/browser/arupa_desktop:arupa_desktop',
                              build.build_targets('arupa_desktop', target_os, 'x64', self.src / 'out'))
+        self.assertIn('//sandbox/linux:chrome_sandbox',
+                      build.build_targets('arupa_desktop', 'linux', 'x64', self.src / 'out'))
+        for target_os in ('win', 'mac'):
+            self.assertNotIn('//sandbox/linux:chrome_sandbox',
+                             build.build_targets('arupa_desktop', target_os, 'x64', self.src / 'out'))
         with patch.object(build, 'exclude_generated'):
             self.quiet(build.prepare_project, 'arupa_desktop')
         graph = (self.src / 'arupa_build/arupa_desktop/BUILD.gn').read_text()
         self.assertIn('if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:render" ] }', graph)
+        self.assertIn('if (is_linux) { deps += [ "//sandbox/linux:chrome_sandbox" ] }', graph)
         self.assertIn('group("native_acceptance")', graph)
         self.assertIn('//chrome/browser/arupa_desktop:arupa_native_tests', graph)
 
@@ -553,7 +559,8 @@ class WorkspaceTest(unittest.TestCase):
         (out / 'hyphen-data').mkdir()
         (out / 'hyphen-data/manifest.json').write_text('{"manifest_version":2}')
         (out / 'hyphen-data/hyph-en-us.hyb').write_bytes(b'fixture')
-        for name in ('content_shell.pak', 'devtools_resources.pak', 'icudtl.dat', 'snapshot_blob.bin', 'arupa_render', 'arupa_plugin_host'):
+        for name in ('content_shell.pak', 'devtools_resources.pak', 'icudtl.dat', 'snapshot_blob.bin',
+                     'arupa_render', 'arupa_plugin_host', 'chrome_sandbox'):
             (out / name).write_bytes(b'fixture')
         (out / 'arupa-build.json').write_text('{"schema":2,"fixture":true}\n')
         for name in ('gen/extensions/strings/extensions_strings_en-US.pak',
@@ -575,6 +582,19 @@ class WorkspaceTest(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('arupa_render', result.stderr + result.stdout)
+        self.assertFalse((self.root / f'dist/arupa-linux-x64-{VERSION}-static-1').exists())
+
+    @unittest.skipUnless(sys.platform == 'darwin' or sys.platform.startswith('linux'),
+                         'POSIX package integration')
+    def test_linux_package_rejects_missing_suid_sandbox_helper(self):
+        out = self.package_fixture()
+        (out / 'libarupa_kernel.so').write_bytes(b'fixture')
+        (out / 'chrome_sandbox').unlink()
+        result = subprocess.run(['bash', str(self.root / 'scripts/packaging/package-arupa_desktop.sh'),
+                                 '--os', 'linux', '--arch', 'x64', '--ver', VERSION, '--out', str(out)],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('chrome_sandbox', result.stderr + result.stdout)
         self.assertFalse((self.root / f'dist/arupa-linux-x64-{VERSION}-static-1').exists())
 
     @unittest.skipUnless(sys.platform == 'darwin' or sys.platform.startswith('linux'),

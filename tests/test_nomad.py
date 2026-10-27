@@ -36,6 +36,13 @@ class NomadTest(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return fn(*args)
 
+    def test_linux_sandbox_installer_is_fail_closed(self):
+        script = nomad.LINUX_SANDBOX_INSTALLER
+        self.assertIn('chown root:root "$HELPER"', script)
+        self.assertIn('chmod 4755 "$HELPER"', script)
+        self.assertIn('owner=$owner mode=$mode', script)
+        self.assertNotIn('ARUPA_UNSAFE_DISABLE_SANDBOX=1', script)
+
     def pc_fixture(self, target_os):
         folder = {'win': 'NomadBrowser.Avalonia', 'linux': 'NomadBrowser.Avalonia.Linux', 'mac': 'NomadBrowser.Avalonia.Mac'}[target_os]
         repo = self.root / 'nomad_desktop'
@@ -83,6 +90,10 @@ class NomadTest(unittest.TestCase):
                 main = next(cmd for cmd in commands if 'publish' in cmd)
                 self.assertIn(f'{"osx" if target_os == "mac" else target_os}-{arch}', main)
                 self.assertIn(f'-p:Platform={arch}', main)
+                if target_os == 'linux':
+                    self.assertIn('-m:1', main)
+                else:
+                    self.assertNotIn('-m:1', main)
                 expected = Path(nomad.__file__).resolve().parent.parent / 'build/nuget.config'
                 for command in commands:
                     if 'publish' in command:
