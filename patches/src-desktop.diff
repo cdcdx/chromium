@@ -359,6 +359,117 @@ index 0000000000000000000000000000000000000000..7d70dd9be8bb343d7b21f0e32fa7c26a
 +CONTENT_EXPORT const WebSocketConnectContext* GetWebSocketConnectContext();
 +}  // namespace content
 +#endif
+diff --git a/extensions/browser/api/webstore_private/webstore_private_api.cc b/extensions/browser/api/webstore_private/webstore_private_api.cc
+index ad5ac45ba49b5fcd3fe313c28fcc3c536b4825ea..7a1d0209a41ccea8ac46051dbffd92cf254a2742 100644
+--- a/extensions/browser/api/webstore_private/webstore_private_api.cc
++++ b/extensions/browser/api/webstore_private/webstore_private_api.cc
+@@ -1598,6 +1598,18 @@ void WebstorePrivateGetExtensionStatusFunction::OnInstallStatusCheckDone(
+   Respond(ArgumentList(GetExtensionStatus::Results::Create(api_status)));
+ }
+ 
++WebstorePrivateCheckUpdateFunction::WebstorePrivateCheckUpdateFunction() = default;
++WebstorePrivateCheckUpdateFunction::~WebstorePrivateCheckUpdateFunction() = default;
++ExtensionFunction::ResponseAction WebstorePrivateCheckUpdateFunction::Run() {
++  return RespondNow(Error("Nomad demo store only"));
++}
++
++WebstorePrivateApplyUpdateFunction::WebstorePrivateApplyUpdateFunction() = default;
++WebstorePrivateApplyUpdateFunction::~WebstorePrivateApplyUpdateFunction() = default;
++ExtensionFunction::ResponseAction WebstorePrivateApplyUpdateFunction::Run() {
++  return RespondNow(Error("Nomad demo store only"));
++}
++
+ WebstorePrivateGetFullChromeVersionFunction::
+     WebstorePrivateGetFullChromeVersionFunction() = default;
+ WebstorePrivateGetFullChromeVersionFunction::
+diff --git a/extensions/browser/api/webstore_private/webstore_private_api.h b/extensions/browser/api/webstore_private/webstore_private_api.h
+index 2600fb5fa81e0aa7092739727a8f03746f65c77d..41ce9b661c8204f2188144df7a53ffedddfb5f51 100644
+--- a/extensions/browser/api/webstore_private/webstore_private_api.h
++++ b/extensions/browser/api/webstore_private/webstore_private_api.h
+@@ -372,6 +372,31 @@ class WebstorePrivateGetExtensionStatusFunction : public ExtensionFunction {
+   ExtensionFunction::ResponseAction Run() override;
+ };
+ 
++// These entries exist only so Chromium's generated API registry can compile.
++// Nomad's embedded kernel handles the demo calls in ArupaExtApiHost; ordinary
++// Chromium dispatch must fail closed.
++class WebstorePrivateCheckUpdateFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("webstorePrivate.checkUpdate",
++                             WEBSTOREPRIVATE_CHECKUPDATE)
++  WebstorePrivateCheckUpdateFunction();
++
++ private:
++  ~WebstorePrivateCheckUpdateFunction() override;
++  ResponseAction Run() override;
++};
++
++class WebstorePrivateApplyUpdateFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("webstorePrivate.applyUpdate",
++                             WEBSTOREPRIVATE_APPLYUPDATE)
++  WebstorePrivateApplyUpdateFunction();
++
++ private:
++  ~WebstorePrivateApplyUpdateFunction() override;
++  ResponseAction Run() override;
++};
++
+ class WebstorePrivateGetFullChromeVersionFunction : public ExtensionFunction {
+  public:
+   DECLARE_EXTENSION_FUNCTION("webstorePrivate.getFullChromeVersion",
+diff --git a/extensions/browser/extension_function_histogram_value.h b/extensions/browser/extension_function_histogram_value.h
+index 4e2c0d6e50729713ad5739a36fa5476eb5e39245..8b7f2739324ffe7eac8f8c7aabb82be64ed5e93e 100644
+--- a/extensions/browser/extension_function_histogram_value.h
++++ b/extensions/browser/extension_function_histogram_value.h
+@@ -2046,6 +2046,8 @@ enum HistogramValue {
+   AUTOFILLPRIVATE_FETCHUSERDATAPROCESSINGCONSENT = 1981,
+   DEVELOPERPRIVATE_OPENREVIEWPAGE = 1982,
+   TABS_CREATESPLIT = 1983,
++  WEBSTOREPRIVATE_CHECKUPDATE = 1984,
++  WEBSTOREPRIVATE_APPLYUPDATE = 1985,
+   // Last entry: Add new entries above, then run:
+   // tools/metrics/histograms/update_extension_histograms.py
+   ENUM_BOUNDARY
+diff --git a/extensions/common/api/webstore_private.json b/extensions/common/api/webstore_private.json
+index 7ee45703bd92883aa21ab6116175dfddf84c0bac..837f13846cdb31b6852db66c41dbfb2357836b47 100644
+--- a/extensions/common/api/webstore_private.json
++++ b/extensions/common/api/webstore_private.json
+@@ -248,6 +248,34 @@
+           "parameters": []
+         }
+       },
++      {
++        "name": "checkUpdate",
++        "description": "Nomad demo store: checks the installed extension for an update.",
++        "parameters": [{ "name": "id", "type": "string" }],
++        "returns_async": {
++          "name": "callback",
++          "optional": true,
++          "parameters": [{
++            "name": "status",
++            "type": "object",
++            "properties": {
++              "state": { "type": "string" },
++              "version": { "type": "string", "optional": true },
++              "errorCode": { "type": "string", "optional": true }
++            }
++          }]
++        }
++      },
++      {
++        "name": "applyUpdate",
++        "description": "Nomad demo store: applies an approved update after a user gesture.",
++        "parameters": [{ "name": "id", "type": "string" }],
++        "returns_async": {
++          "name": "callback",
++          "optional": true,
++          "parameters": [{ "name": "updated", "type": "boolean" }]
++        }
++      },
+       {
+         "name": "enableAppLauncher",
+         "description": "",
 diff --git a/extensions/common/mojom/api_permission_id.mojom b/extensions/common/mojom/api_permission_id.mojom
 index 262221ecd852507cd136254725e16c53a155fc99..d741fd21224f28c2e1b68d4124355990633842e1 100644
 --- a/extensions/common/mojom/api_permission_id.mojom
@@ -852,6 +963,19 @@ index fa11cd094122725e015f817c28e62a666110a906..191bf1fed602b1dbace1b2ffd9562796
              output_file.seek(0)
              if output_file.read() != contents:
                  output_file.truncate(0)
+diff --git a/tools/metrics/histograms/metadata/extensions/enums.xml b/tools/metrics/histograms/metadata/extensions/enums.xml
+index 9758d77fb4061c2a4164b1b687aaeaef2406c9a8..2844b9fcade4f573856bc58560d8d519de96378f 100644
+--- a/tools/metrics/histograms/metadata/extensions/enums.xml
++++ b/tools/metrics/histograms/metadata/extensions/enums.xml
+@@ -2913,6 +2913,8 @@ Called by update_extension_histograms.py.-->
+   <int value="1981" label="AUTOFILLPRIVATE_FETCHUSERDATAPROCESSINGCONSENT"/>
+   <int value="1982" label="DEVELOPERPRIVATE_OPENREVIEWPAGE"/>
+   <int value="1983" label="TABS_CREATESPLIT"/>
++  <int value="1984" label="WEBSTOREPRIVATE_CHECKUPDATE"/>
++  <int value="1985" label="WEBSTOREPRIVATE_APPLYUPDATE"/>
+ </enum>
+ 
+ <!-- LINT.ThenChange(//extensions/browser/extension_function_histogram_value.h:HistogramValue) -->
 diff --git a/ui/display/mac/screen_mac_headless.h b/ui/display/mac/screen_mac_headless.h
 index 651c4a00022857ae5c6532bc8355254e0c2f7265..01031917e2472e24d3a3be5a5f4ddf253205bb50 100644
 --- a/ui/display/mac/screen_mac_headless.h
