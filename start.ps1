@@ -1,48 +1,47 @@
 ﻿#!/usr/bin/env pwsh
-# 编译入口（Windows）—— 与 start.sh 功能一一对应，仅转发到 build.ps1
-# （Windows 上没有 bash，build.sh 不适用）
+# 编译入口（Windows）—— 与 start.sh 功能一一对应，转发到 one.ps1（build 子命令）
 # 用法: .\start.ps1 [arupa|nomad|publish|all] [release|debug]
-#
-# 不用 param() 声明命令参数：与 start.sh 一样按位置取词，这样 -h / --help
-# 这类以 '-' 开头的词不会被 PowerShell 当成参数名而绑定失败（同 build.ps1）。
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$BuildScript = Join-Path $Root 'build.ps1'
+$One = Join-Path $Root 'one.ps1'
 $Jobs = 8
 
-$Command = if ($args.Count -ge 1 -and -not [string]::IsNullOrEmpty($args[0])) { [string] $args[0] } else { 'all' }
-$Variant = if ($args.Count -ge 2 -and -not [string]::IsNullOrEmpty($args[1])) { [string] $args[1] } else { 'release' }
+# 全部参数先转字符串：$args 里的裸数字可能是数值类型；命令与配置按小写解析，
+# 与 start.sh 的 lower() 归一化一致
+$AllArgs = @($args | ForEach-Object { [string] $_ })
+$Command = if ($AllArgs.Count -ge 1 -and $AllArgs[0] -ne '') { $AllArgs[0].ToLowerInvariant() } else { 'all' }
+$Variant = if ($AllArgs.Count -ge 2 -and $AllArgs[1] -ne '') { $AllArgs[1].ToLowerInvariant() } else { 'release' }
 
-# 单步执行：标题 + build.py 参数。失败即中止，退出码透传。
-# 原生命令的 stderr 在 build.ps1 内已降级为 Continue（见其顶部注释），
+# 单步执行：标题 + one.ps1 参数。失败即中止，退出码透传（对应 bash 的 set -e）。
+# 原生命令的 stderr 在 one.ps1 内已降级为 Continue（见其顶部注释），
 # 这里保持 Stop，只捕获脚本级错误。
 function Invoke-Step {
     param(
         [string] $Title,
-        [string[]] $BuildArgs
+        [string[]] $OneArgs
     )
 
     Write-Host ''
     Write-Host ''
     Write-Host "=======> $Title" -ForegroundColor Cyan
-    & $BuildScript @BuildArgs
+    & $One @OneArgs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 function Invoke-ArupaBuild {
-    Invoke-Step 'arupa gen build' @('arupa_desktop', 'gen', 'build', '--jobs', "$Jobs")
-    Invoke-Step 'arupa package' @('arupa_desktop', 'package', '--zip')
+    Invoke-Step 'arupa gen build' @('build', 'arupa_desktop', 'gen', 'build', '--jobs', "$Jobs")
+    Invoke-Step 'arupa package' @('build', 'arupa_desktop', 'package', '--zip')
 }
 
 function Invoke-ArupaPublish {
-    Invoke-Step 'arupa publish' @('arupa_desktop', 'publish')
+    Invoke-Step 'arupa publish' @('build', 'arupa_desktop', 'publish')
 }
 
 function Invoke-NomadBuild {
     param([string] $Variant)
 
-    Invoke-Step "nomad build ($Variant)" @('nomad_desktop', 'build', '--variant', $Variant)
-    Invoke-Step "nomad package ($Variant)" @('nomad_desktop', 'package', '--variant', $Variant)
+    Invoke-Step "nomad build ($Variant)" @('build', 'nomad_desktop', 'build', '--variant', $Variant)
+    Invoke-Step "nomad package ($Variant)" @('build', 'nomad_desktop', 'package', '--variant', $Variant)
 }
 
 function Show-Usage {
@@ -57,7 +56,7 @@ function Show-Usage {
 '@
 }
 
-# PowerShell 的 switch 与 -in / -notin 本身大小写不敏感，与 start.sh 的小写归一化一致
+# switch 与 -in / -notin 本身大小写不敏感，与 start.sh 的小写归一化行为一致
 switch ($Command) {
     'arupa' {
         Invoke-ArupaBuild
