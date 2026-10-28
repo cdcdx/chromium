@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD="$ROOT/build.sh"
+ONE="$ROOT/one.sh"
 JOBS=8
 
 # 单步执行：标题 + build.py 参数。失败即中止（set -e），退出码透传。
@@ -12,7 +12,7 @@ step() {
     local title="$1"
     shift
     printf '\n\n=======> %s\n' "$title"
-    bash "$BUILD" "$@"
+    bash "$ONE" build "$@"
 }
 
 build_arupa() {
@@ -43,15 +43,18 @@ EOF
 }
 
 # 命令 / 配置均按小写解析，与 start.ps1 的大小写不敏感行为保持一致
-cmd="${1:-all}"
-cmd="${cmd,,}"
+# 注意：使用 tr 而非 ${var,,}，macOS 自带 bash 3.2 不支持后者的扩展语法
+lower() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+cmd="$(lower "${1:-all}")"
 case "$cmd" in
     arupa)
         build_arupa
         ;;
     nomad)
-        variant="${2:-release}"
-        variant="${variant,,}"
+        variant="$(lower "${2:-release}")"
         case "$variant" in
             release|debug)
                 build_nomad "$variant"
