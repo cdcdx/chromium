@@ -41,7 +41,14 @@ def repository(path: Path) -> dict:
     digest = hashlib.sha256()
     # The default abbreviated blob IDs depend on each machine's Git config
     # (and repository object count), so identical edits can hash differently.
-    diff = _git(path, "diff", "--binary", "--full-index", "HEAD", "--")
+    # These workspaces contain nested checkouts whose `git diff` command can
+    # fail with "this operation must be run in a work tree" even though
+    # status, diff-files, and the index are available.  Compose the same
+    # HEAD-to-worktree change as HEAD-to-index plus index-to-worktree so both
+    # staged and unstaged edits remain part of the provenance hash.
+    diff = (_git(path, "diff-index", "--cached", "--binary", "--full-index",
+                 "HEAD", "--") +
+            _git(path, "diff-files", "--binary", "--full-index"))
     digest.update(diff)
     untracked = _git(path, "ls-files", "--others", "--exclude-standard", "-z")
     names = sorted(name for name in untracked.split(b"\0") if name)

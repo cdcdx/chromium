@@ -29,3 +29,6 @@ enable_platform_dts_audio = true
 
 # 启用siso需把源码真实放进src目录 或 改用siso支持的布局
 use_siso = false
+
+# MiVPN product resources are present and pass the six-file build inventory.
+mivpn_has_product_resources = true

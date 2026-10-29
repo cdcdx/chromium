@@ -145,14 +145,15 @@ def heartbeat(state):
 
     gclient/vpython/CIPD 这类步骤会把子进程输出缓存到自己结束才打印；没有心跳时，
     静默的慢速下载（例如 vpython 从 Google Artifact Registry 拉 wheel）看起来就像卡死。"""
-    while not state["done"].wait(HEARTBEAT_SECONDS):
+    interval = state.get("heartbeat_seconds", HEARTBEAT_SECONDS)
+    while not state["done"].wait(interval):
         idle = time.time() - state["last"]
-        if idle >= HEARTBEAT_SECONDS:
+        if idle >= interval:
             log(f"…仍在运行（已 {int((time.time() - state['start']) / 60)} 分钟，"
                 f"最近 {int(idle)}s 无输出）：{state['label']}")
 
 
-def execute(cmd, cwd, capture, tee):
+def execute(cmd, cwd, capture, tee, heartbeat_seconds=HEARTBEAT_SECONDS):
     """执行命令，返回 (stdout, returncode, stderr)。
 
     tee 为真时 stdout/stderr 都一边实时转发一边留档：既可读输出判断失败是否属于可重试
@@ -169,6 +170,7 @@ def execute(cmd, cwd, capture, tee):
     with subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
         stdout_chunks, stderr_chunks = [], []
         state = {"start": time.time(), "last": time.time(), "done": threading.Event(),
+                 "heartbeat_seconds": heartbeat_seconds,
                  "label": shlex.join(cmd)[:160]}
         threads = [threading.Thread(target=pump, args=(process.stdout, sys.stdout, stdout_chunks, state), daemon=True),
                    threading.Thread(target=pump, args=(process.stderr, sys.stderr, stderr_chunks, state), daemon=True),
@@ -225,7 +227,8 @@ def run_quiet(cmd, cwd=None, label=""):
     return output
 
 
-def run(cmd, cwd=None, capture=False, retry=False, tee=False, retries=None):
+def run(cmd, cwd=None, capture=False, retry=False, tee=False, retries=None,
+        heartbeat_seconds=HEARTBEAT_SECONDS):
     """执行命令；retry 为真时对瞬时网络错误（含 googlesource 429 限流）退避重试。
 
     retries 可覆盖默认重试次数（大仓补拉这类一次要下几百 MB 的操作用得着）。
@@ -237,7 +240,8 @@ def run(cmd, cwd=None, capture=False, retry=False, tee=False, retries=None):
         return ""
     attempts = max(0, int(RETRIES if retries is None else retries)) if retry else 0
     for attempt in range(attempts + 1):
-        stdout, code, message = execute(cmd, cwd, capture, tee=tee or attempts > 0)
+        stdout, code, message = execute(cmd, cwd, capture, tee=tee or attempts > 0,
+                                        heartbeat_seconds=heartbeat_seconds)
         if code == 0:
             return stdout if capture else ""
         output = "\n".join(part for part in (message, stdout) if part)

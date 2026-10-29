@@ -624,7 +624,8 @@ def main(argv=None):
                     # A failed rebuild must not leave the prior successful stamp.
                     stamp.unlink(missing_ok=True)
                 F.run([ninja, "-C", out, "-j", str(args.jobs),
-                       *[t.removeprefix('//') for t in build_targets(project, target_os, cpu, out)]], SRC)
+                       *[t.removeprefix('//') for t in build_targets(project, target_os, cpu, out)]],
+                      SRC, tee=True, heartbeat_seconds=10)
                 if source_before is not None:
                     source_after = source_provenance.capture(ROOT, out / "args.gn")
                     # if source_before != source_after:
