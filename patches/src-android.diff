@@ -17486,6 +17486,66 @@ index 0000000000000000000000000000000000000000..7d70dd9be8bb343d7b21f0e32fa7c26a
 +CONTENT_EXPORT const WebSocketConnectContext* GetWebSocketConnectContext();
 +}  // namespace content
 +#endif
+diff --git a/content/renderer/mhtml_handle_writer.cc b/content/renderer/mhtml_handle_writer.cc
+index 9c38721628cfb2465c327d1490c5f95e6ae41a4d..20c555792d828ea18ea998eb4a387545185d3345 100644
+--- a/content/renderer/mhtml_handle_writer.cc
++++ b/content/renderer/mhtml_handle_writer.cc
+@@ -181,7 +181,7 @@ void MHTMLProducerHandleWriter::WriteContentsImpl(
+ 
+   task_runner->PostTask(FROM_HERE,
+                         base::BindOnce(&MHTMLProducerHandleWriter::BeginWriting,
+-                                       base::Unretained(this), std::move(self),
++                                       std::move(self),
+                                        std::move(mhtml_contents)));
+ }
+ 
+@@ -194,11 +194,13 @@ void MHTMLProducerHandleWriter::Close() {
+ void MHTMLProducerHandleWriter::BeginWriting(
+     std::unique_ptr<MHTMLHandleWriter> self,
+     std::vector<blink::WebThreadSafeData> mhtml_contents) {
++  auto* writer = static_cast<MHTMLProducerHandleWriter*>(self.get());
+   auto data_source =
+       std::make_unique<MHTMLDataSource>(std::move(mhtml_contents));
+-  producer_->Write(std::move(data_source),
+-                   base::BindOnce(&MHTMLProducerHandleWriter::OnWriteComplete,
+-                                  base::Unretained(this), std::move(self)));
++  writer->producer_->Write(
++      std::move(data_source),
++      base::BindOnce(&MHTMLProducerHandleWriter::OnWriteComplete,
++                     std::move(self)));
+ }
+ 
+ void MHTMLProducerHandleWriter::OnWriteComplete(
+@@ -208,7 +210,8 @@ void MHTMLProducerHandleWriter::OnWriteComplete(
+   if (result != MOJO_RESULT_OK) {
+     status = mojom::MhtmlSaveStatus::kStreamingError;
+   }
+-  Finish(std::move(self), status);
++  static_cast<MHTMLProducerHandleWriter*>(self.get())
++      ->Finish(std::move(self), status);
+ }
+ 
+ }  // namespace content
+diff --git a/content/renderer/mhtml_handle_writer.h b/content/renderer/mhtml_handle_writer.h
+index b6512081c4110945abfa644f1cd0187fe5cd15e2..5296d21cd8d6622f6379a3345fe2897f277609b7 100644
+--- a/content/renderer/mhtml_handle_writer.h
++++ b/content/renderer/mhtml_handle_writer.h
+@@ -121,10 +121,11 @@ class MHTMLProducerHandleWriter : public MHTMLHandleWriter {
+   void Close() override;
+ 
+  private:
+-  void BeginWriting(std::unique_ptr<MHTMLHandleWriter> self,
+-                    std::vector<blink::WebThreadSafeData> mhtml_contents);
+-  void OnWriteComplete(std::unique_ptr<MHTMLHandleWriter> self,
+-                       MojoResult result);
++  static void BeginWriting(
++      std::unique_ptr<MHTMLHandleWriter> self,
++      std::vector<blink::WebThreadSafeData> mhtml_contents);
++  static void OnWriteComplete(std::unique_ptr<MHTMLHandleWriter> self,
++                              MojoResult result);
+ 
+   std::unique_ptr<mojo::DataPipeProducer> producer_;
+ };
 diff --git a/extensions/BUILD.gn b/extensions/BUILD.gn
 index 2800d3598299a64e1abe584d162827f6d2fa8cab..0864af900fc558f2fa1ad18789cf435ee79f3dc3 100644
 --- a/extensions/BUILD.gn

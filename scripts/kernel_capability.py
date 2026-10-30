@@ -799,6 +799,24 @@ def verify_current_android_product_contract() -> dict:
         if name == "events" and re.search(
                 r'\.put\("events"\s*,\s*JSONObject\(\)\s*\)', text):
             return set()
+        if name == "events":
+            # Product contracts may build the event object with Kotlin apply.
+            # Limit parsing to this object, then expand only literal list/put
+            # expressions; unknown computed entries must fail the package gate.
+            block_match = re.search(
+                r'\.put\("events"\s*,\s*JSONObject\(\)\.apply\s*\{(.*?)\}\)\s*'
+                r'\.put\("dataModels"', text, re.S)
+            if block_match:
+                block = block_match.group(1)
+                events = set(re.findall(r'\bput\("([A-Za-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*)"', block))
+                loops = re.findall(
+                    r'listOf\((.*?)\)\s*\.forEach\s*\{\s*put\("([A-Za-z][A-Za-z0-9]*)\.\$it"',
+                    block, re.S)
+                for members, namespace in loops:
+                    events.update(f"{namespace}.{member}" for member in
+                                  re.findall(r'"([A-Za-z][A-Za-z0-9]*)"', members))
+                if events and block.count('forEach') == len(loops):
+                    return events
         err(f"Android 产品合同无法解析 {name} 列表: {product_capabilities}")
 
     methods = strings_in("methods")
