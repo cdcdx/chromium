@@ -21,6 +21,13 @@ def _git(path: Path, *args: str) -> bytes:
     return result.stdout.strip() if args[:1] == ("rev-parse",) else result.stdout
 
 
+def _git_optional(path: Path, *args: str) -> bytes | None:
+    try:
+        return _git(path, *args)
+    except subprocess.CalledProcessError:
+        return None
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -70,9 +77,13 @@ def capture(root: Path, gn_args: Path | None = None) -> dict:
         ("build", root), ("chromium", root / "src"),
         ("arupa", root / "arupa_desktop"), ("nomad", root / "nomad_desktop"),
         ("devtools", root / "src/third_party/devtools-frontend/src"))}
-    patch = _git(root / "arupa_desktop", "rev-parse",
-                 "HEAD:patches/chromium-devtools-external-dock-154.patch").decode("ascii")
-    return {"schema": 1, "repositories": repos, "devtoolsPatchGitBlob": patch,
+    # Integration branches (e.g. integration/mivpn) do not carry the overlay
+    # patches directory that the release branch tracks; absence is recorded as
+    # null rather than failing the build.
+    patch = _git_optional(root / "arupa_desktop", "rev-parse",
+                          "HEAD:patches/chromium-devtools-external-dock-154.patch")
+    return {"schema": 1, "repositories": repos,
+            "devtoolsPatchGitBlob": patch.decode("ascii") if patch else None,
             "abi": abi_version(root),
             "gnArgsSha256": file_sha256(gn_args) if gn_args is not None else None}
 
