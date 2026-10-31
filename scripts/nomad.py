@@ -589,12 +589,12 @@ def desktop_build(root, args, target_os, arch, version, output):
     if target_os == 'linux' and arch == 'x86':
         F.log('Linux x86 发布要求项目提供 linux-x86 运行时及原生依赖；官方 .NET SDK 无法保证支持')
     cfg = args.variant.capitalize()
-    if target_os == 'linux':
-        # .NET 10/Roslyn 在连续 publish 后复用旧 MSBuild 节点，偶发在写 PE 元数据时
-        # 触发 AccessViolationException。Linux 发布包含主程序和独立 KernelHost 两次
-        # publish，禁用节点/编译服务器复用可隔离两次编译，也避免失败节点污染下次构建。
-        os.environ.setdefault('MSBUILDDISABLENODEREUSE', '1')
-        os.environ.setdefault('DOTNET_CLI_USE_MSBUILD_SERVER', '0')
+    # nodeReuse:true 的 MSBuild 节点会跨构建存活，并把 obj 里的中间产物一直
+    # 攥在手里：下一次并行编译写同一个 dll 就报 IOException / CS2012（Windows 上还会
+    # 被安全软件的实时扫描放大）。Linux 连续 publish 复用节点更会触发
+    # AccessViolationException。三端统一禁用节点/编译服务器复用，把每次编译隔离开。
+    os.environ.setdefault('MSBUILDDISABLENODEREUSE', '1')
+    os.environ.setdefault('DOTNET_CLI_USE_MSBUILD_SERVER', '0')
     dotnet = prepare_dotnet(args, repo, project)
     # 顺序要紧：先把交付自带的门面按源码现场重建，再决定 props 引用哪一份门面。
     # 反过来的话，引用的还是那份「旧/空」门面 —— 表现就是一堆 CS0117/CS1061/CS0246。
@@ -831,8 +831,14 @@ def seal(output, identity, provenance=None):
 
 
 def desktop_provenance(root, args, target_os, arch, version):
-    kernel = source_provenance.kernel_delivery_provenance(
-        delivery(root, args, target_os, arch, version))
+    path = delivery(root, args, target_os, arch, version)
+    # 门面工程就在交付里，IDE/设计时构建可能在这里丢下 dotnet/bin、dotnet/obj（Debug
+    # 中间产物）。它们不属于交付内容，先清掉；校验侧也容忍这类新增（见
+    # source_provenance.BUILD_INTERMEDIATE_DIRS），删除失败也不会拦住打包。
+    dropped = kernel_facade.drop_intermediates(path / 'dotnet')
+    if dropped:
+        F.log(f'已清理交付内的构建中间产物（不属于交付内容）: {", ".join(dropped)}')
+    kernel = source_provenance.kernel_delivery_provenance(path)
     current = source_provenance.capture(root)
     current['gnArgsSha256'] = kernel['source']['gnArgsSha256']
     # if current != kernel['source']:

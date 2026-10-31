@@ -74,6 +74,26 @@ class SourceProvenanceTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "file list changed"):
                 provenance.verify_delivery_checksums(root)
 
+    def test_delivery_hash_gate_tolerates_dotnet_build_intermediates(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "dotnet").mkdir()
+            file = root / "dotnet/ArupaKernel.dll"
+            file.write_bytes(b"sealed")
+            sums = root / "SHA256SUMS.txt"
+            sums.write_text(f"{provenance.file_sha256(file)}  dotnet/ArupaKernel.dll\n")
+            # IDE/设计时构建留在交付里的中间产物不属于交付内容，不该被算成新增文件。
+            intermediate = root / "dotnet/obj/Debug/net10.0/ArupaKernel.AssemblyInfo.cs"
+            intermediate.parent.mkdir(parents=True)
+            intermediate.write_text("// generated\n")
+            (root / "dotnet/bin/Debug/net10.0").mkdir(parents=True)
+            self.assertEqual(provenance.file_sha256(sums),
+                             provenance.verify_delivery_checksums(root))
+            # 中间产物路径之外的任何新增文件仍然拒绝。
+            (root / "dotnet/ArupaExtra.cs").write_text("// extra\n")
+            with self.assertRaisesRegex(RuntimeError, "file list changed"):
+                provenance.verify_delivery_checksums(root)
+
 
 if __name__ == "__main__":
     unittest.main()

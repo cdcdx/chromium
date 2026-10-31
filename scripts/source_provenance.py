@@ -132,6 +132,14 @@ def kernel_delivery_provenance(path: Path) -> dict:
             "source": value["source"], "kernelArtifacts": value["artifacts"]}
 
 
+# dotnet 门面工程就在交付根里，IDE/设计时构建（以及任何少一条 --no-restore 的
+# `dotnet build`）会在 dotnet/bin、dotnet/obj 下留中间产物。它们不是交付内容 ——
+# 内核出包时明确排除（见 package-arupa_desktop.sh），也从不进 SHA256SUMS.txt，
+# 但落在交付目录里会被逐文件校验算成"密封后新增"。只有这两棵子树容忍新增；
+# 其他任何新增文件仍然拒绝，已登记文件的 SHA 校验也不放宽。
+BUILD_INTERMEDIATE_DIRS = ("dotnet/bin/", "dotnet/obj/")
+
+
 def verify_delivery_checksums(path: Path) -> str:
     """Check every shipped regular file, including files added after sealing."""
     sums = path / "SHA256SUMS.txt"
@@ -152,10 +160,11 @@ def verify_delivery_checksums(path: Path) -> str:
     actual = {p.relative_to(path).as_posix() for p in path.rglob("*")
               if p.is_file() and not p.is_symlink() and
               p.relative_to(path).as_posix() not in ("SHA256SUMS.txt", "MANIFEST.md")}
-    if set(listed) != actual:
-        added = sorted(actual - set(listed))[:5]
-        missing = sorted(set(listed) - actual)[:5]
-        raise RuntimeError(f"kernel delivery file list changed after sealing: added={added}, missing={missing}")
+    added = sorted(set(actual) - set(listed))
+    added = [name for name in added if not name.startswith(BUILD_INTERMEDIATE_DIRS)]
+    missing = sorted(set(listed) - actual)
+    if added or missing:
+        raise RuntimeError(f"kernel delivery file list changed after sealing: added={added[:5]}, missing={missing[:5]}")
     for name, expected in listed.items():
         if file_sha256(path / name) != expected:
             raise RuntimeError(f"kernel delivery SHA256 mismatch after sealing: {name}")
