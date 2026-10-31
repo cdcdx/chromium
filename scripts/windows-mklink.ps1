@@ -1,4 +1,4 @@
-cd D:\workplace\chromium_new;
+cd D:\workplace\chromium_android;
 $t=(Resolve-Path .\src\out).Path; Write-Output "target = $t"; 
 if (Test-Path .\src_out) { 
     Write-Output "existed: SymbolicLink:"; 

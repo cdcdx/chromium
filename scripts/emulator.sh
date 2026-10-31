@@ -25,7 +25,7 @@
 # =============================================================================
 set -uo pipefail
 
-WORKSPACE=${WORKSPACE:-/home/ural/chromium_new}
+WORKSPACE=${WORKSPACE:-/home/ural/chromium_android}
 # SDK 根解析顺序：显式 SDK > ANDROID_SDK_ROOT > ANDROID_HOME > 约定相邻目录。
 # 此前只认 $WORKSPACE/../android-sdk，SDK 装在别处（或换过目录）就只能看到
 # "emulator 不存在" 却不知该改哪里。

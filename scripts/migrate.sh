@@ -47,7 +47,7 @@
 # =============================================================================
 set -uo pipefail
 
-WORKSPACE=${WORKSPACE:-/home/ural/chromium_new}
+WORKSPACE=${WORKSPACE:-/home/ural/chromium_android}
 DIST=${DIST:-$WORKSPACE/dist}
 APP=${APP:-$WORKSPACE/nomad_android}
 PKG=com.nomadbrowser.app
@@ -489,7 +489,7 @@ export APP
 export OPTIONAL_STR=$(printf '%s\n' ${OPTIONAL_RELS[@]+"${OPTIONAL_RELS[@]}"})
 python3 - <<'PY'
 import hashlib, json, os, pathlib, zipfile
-APP = pathlib.Path(os.environ.get('APP', '/home/ural/chromium_new/nomad_android'))
+APP = pathlib.Path(os.environ.get('APP', '/home/ural/chromium_android/nomad_android'))
 mf = APP / 'tools/ci/runtime-manifest.json'
 if not mf.is_file():
     print("  无清单，跳过")
