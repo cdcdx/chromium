@@ -471,24 +471,23 @@ function Invoke-PackageArch {
     }
     if ($pakCount -eq 0) { throw "out 里没有任何 *.pak: $OutPath" }
 
-    # gen/ 下的运行时资源 pak：内核资源加载（arupa_content_main_delegate.cc）先找
-    # <dir>/xxx.pak，再回退 <dir>/gen/.../xxx.pak。只收 out 根那几个 pak 的话
-    # extensions_strings_* / extensions_renderer_generated_resources 全都不在包里：
-    #   · 缺 extensions_strings_en-US.pak  → 扩展层一报本地化错误就 CHECK 崩（FB-P095）
-    #   · 缺 extensions_renderer_generated_resources.pak → 扩展 renderer 绑定 JS 不在，
-    #     一碰 chrome.contextMenus 等就崩 SW（FB-P104）
+    # Keep the exact gen/ fallback paths used by arupa_content_main_delegate.cc.
+    # Mirroring all gen/**/*.pak also ships thousands of intermediate locale,
+    # gender and test packs, each of which the Windows bootstrap must ACL-check.
+    # Root packs and the separate en-US/zh-CN locale policy remain unchanged.
     $genPakCount = 0
-    $genDir = Join-Path $OutPath 'gen'
-    if (Test-Path -LiteralPath $genDir -PathType Container) {
-        foreach ($f in (Get-ChildItem -LiteralPath $genDir -Recurse -File -Filter '*.pak' -ErrorAction SilentlyContinue)) {
-            $relative = $f.FullName.Substring($genDir.Length).TrimStart('\')
-            $target = Join-Path (Join-Path $dest 'gen') $relative
-            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
-            Copy-Item -LiteralPath $f.FullName -Destination $target -Force
-            $genPakCount++
-        }
+    foreach ($relative in @('gen\chrome\renderer_resources_resources.pak',
+                            'gen\components\strings\components_strings_en-US.pak',
+                            'gen\extensions\strings\extensions_strings_en-US.pak',
+                            'gen\extensions\extensions_renderer_generated_resources.pak')) {
+        $source = Join-Path $OutPath $relative
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
+        $target = Join-Path $dest $relative
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+        Copy-Item -LiteralPath $source -Destination $target -Force
+        $genPakCount++
     }
-    Write-Step ("  gen/**/*.pak {0} 个（保留运行时相对路径）" -f $genPakCount)
+    Write-Step ("  gen runtime fallback pak {0} 个（保留运行时相对路径）" -f $genPakCount)
     foreach ($rel in @('gen\extensions\strings\extensions_strings_en-US.pak',
                        'gen\extensions\extensions_renderer_generated_resources.pak')) {
         if (-not (Test-Path -LiteralPath (Join-Path $dest $rel) -PathType Leaf)) {

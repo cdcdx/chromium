@@ -369,18 +369,20 @@ package_arch() {
   done
   [[ ${any_pak} -eq 1 ]] || err "out 里没有任何 *.pak: ${out}"
 
-  # Chromium leaves extension/component packs under gen/. The runtime uses the
-  # same relative paths as a fallback, so root-only pak collection is incomplete.
+  # Keep the exact gen/ fallback paths used by arupa_content_main_delegate.cc.
+  # Mirroring all gen/**/*.pak also ships thousands of intermediate locale,
+  # gender and test packs. Root packs and the en-US/zh-CN policy stay unchanged.
   local relative gen_paks=0
-  if [[ -d "${out}/gen" ]]; then
-    while IFS= read -r -d '' f; do
-      relative="${f#"${out}/"}"
-      mkdir -p "${dest}/$(dirname "${relative}")"
-      cp -f "${f}" "${dest}/${relative}"
-      gen_paks=$((gen_paks+1))
-    done < <(find "${out}/gen" -type f -name '*.pak' -print0)
-  fi
-  log "  gen/**/*.pak: ${gen_paks} 个（保留运行时相对路径）"
+  for relative in gen/chrome/renderer_resources_resources.pak \
+                  gen/components/strings/components_strings_en-US.pak \
+                  gen/extensions/strings/extensions_strings_en-US.pak \
+                  gen/extensions/extensions_renderer_generated_resources.pak; do
+    [[ -f "${out}/${relative}" ]] || continue
+    mkdir -p "${dest}/$(dirname "${relative}")"
+    cp -f "${out}/${relative}" "${dest}/${relative}"
+    gen_paks=$((gen_paks+1))
+  done
+  log "  gen runtime fallback pak: ${gen_paks} 个（保留运行时相对路径）"
   for relative in gen/extensions/strings/extensions_strings_en-US.pak \
                   gen/extensions/extensions_renderer_generated_resources.pak; do
     [[ -f "${dest}/${relative}" || -f "${dest}/$(basename "${relative}")" ]] \

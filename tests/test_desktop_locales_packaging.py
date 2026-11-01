@@ -17,6 +17,19 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGER = ROOT / "scripts/packaging/package-arupa_desktop.sh"
 HAVE_SRC = (ROOT / "src").is_dir()
 
+RUNTIME_GEN_PAKS = (
+    "gen/chrome/renderer_resources_resources.pak",
+    "gen/components/strings/components_strings_en-US.pak",
+    "gen/extensions/strings/extensions_strings_en-US.pak",
+    "gen/extensions/extensions_renderer_generated_resources.pak",
+)
+INTERMEDIATE_GEN_PAKS = (
+    "gen/components/test resources/fixture.pak",
+    "gen/components/strings/components_strings_fr.pak",
+    "gen/components/strings/components_strings_en-US_MASCULINE.pak",
+    "gen/extensions/extensions_browser_resources.pak",
+)
+
 # 内核仓 tools/verify_transfer_delivery.py 的测试替身：只保留"必需符号不得缺失"这条契约。
 VERIFIER = '''#!/usr/bin/env python3
 import argparse
@@ -51,7 +64,7 @@ raise SystemExit(main())
 @unittest.skipUnless(platform.system() in ("Darwin", "Linux"), "POSIX packager")
 @unittest.skipUnless(HAVE_SRC, "需要工作区已 fetch src 源码树")
 class LocalePackagingTest(unittest.TestCase):
-    def package(self, target_os, locale_files, check, symbols=None):
+    def package(self, target_os, locale_files, check, symbols=None, missing_gen_pak=None):
         with tempfile.TemporaryDirectory(prefix="arupa-package-test-") as tmp:
             root = Path(tmp)
             # These tests isolate resource packaging, not native ABI behavior.
@@ -74,9 +87,7 @@ class LocalePackagingTest(unittest.TestCase):
             files = ["arupa_render", "arupa_plugin_host", "content_shell.pak",
                      "devtools_resources.pak", "icudtl.dat", "snapshot_blob.bin",
                      "vk_swiftshader_icd.json", "hyphen-data/manifest.json",
-                     "hyphen-data/en-us.hyb",
-                     "gen/extensions/strings/extensions_strings_en-US.pak",
-                     "gen/extensions/extensions_renderer_generated_resources.pak"]
+                     "hyphen-data/en-us.hyb", "custom_root.pak"]
             if target_os == "mac":
                 files += ["libEGL.dylib", "libGLESv2.dylib", "libvk_swiftshader.dylib",
                           "libvulkan.dylib", "libVkICD_mock_icd.dylib",
@@ -90,7 +101,7 @@ class LocalePackagingTest(unittest.TestCase):
             else:
                 files += ["libEGL.so", "libGLESv2.so", "libvk_swiftshader.so",
                           "libvulkan.so.1", "libvulkan.so", "libVkICD_mock_icd.so",
-                          "libVkLayer_khronos_validation.so"]
+                          "libVkLayer_khronos_validation.so", "chrome_sandbox"]
                 (out / "libarupa_kernel.so").write_bytes(
                     b"\x7fELF\x02\x01\x01" + bytes(9) +
                     struct.pack("<HHIQQQIHHHHHH", 3, 62, 1, 0, 0, 0, 0,
@@ -100,6 +111,12 @@ class LocalePackagingTest(unittest.TestCase):
                 path = out / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"fixture")
+            for name in RUNTIME_GEN_PAKS + INTERMEDIATE_GEN_PAKS:
+                if name == missing_gen_pak:
+                    continue
+                path = out / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(name.encode("utf-8"))
             for name in ("angledata", "resources"):
                 (out / name).mkdir()
             if locale_files is not None:
@@ -147,6 +164,35 @@ class LocalePackagingTest(unittest.TestCase):
         for os_name in ("mac", "linux"):
             with self.subTest(os=os_name):
                 self.package(os_name, packs, check)
+
+    def test_only_runtime_gen_paks_are_delivered(self):
+        def check(result, delivery):
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            kernel = delivery / "kernel"
+            delivered = sorted(p.relative_to(kernel).as_posix()
+                               for p in (kernel / "gen").rglob("*.pak"))
+            self.assertEqual(delivered, sorted(RUNTIME_GEN_PAKS))
+            for relative in RUNTIME_GEN_PAKS:
+                self.assertEqual((kernel / relative).read_bytes(), relative.encode("utf-8"))
+            self.assertEqual((kernel / "custom_root.pak").read_bytes(), b"fixture")
+            sums = (delivery / "SHA256SUMS.txt").read_text(encoding="utf-8")
+            for relative in RUNTIME_GEN_PAKS:
+                self.assertIn("kernel/" + relative, sums)
+            for relative in INTERMEDIATE_GEN_PAKS:
+                self.assertNotIn(relative, sums)
+        for os_name in ("mac", "linux"):
+            with self.subTest(os=os_name):
+                self.package(os_name, None, check)
+
+    def test_missing_required_extension_pak_rejects_partial_delivery(self):
+        def check(result, delivery):
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("缺必需的扩展资源", result.stderr)
+            self.assertFalse(delivery.exists(), "failed package must be removed")
+        for os_name in ("mac", "linux"):
+            for relative in RUNTIME_GEN_PAKS[2:]:
+                with self.subTest(os=os_name, resource=relative):
+                    self.package(os_name, None, check, missing_gen_pak=relative)
 
     def test_missing_or_empty_supported_language_rejects_partial_delivery(self):
         def check(result, delivery):
