@@ -438,7 +438,7 @@ def report_static(target, target_os='linux', what='payload'):
         F.log(f'✔ 内核护栏就位（zygote→{SUBPROCESS_HOST[target_os]}）：{target}')
     else:
         F.log(f'⚠ {target} 里没找到完整的内核护栏标志 —— 若这份内核的 zygote 会被 NomadBrowser '
-              f'宿主接过，就是 2026-10-15 那次 CPU/OOM 的形态（见 debug-nomad-cpu-oom.md）。'
+              f'宿主接过，就是 2026-10-15 那次 CPU/OOM 的形态。'
               f'用 python3 scripts/kernel_oom_guard.py run --payload <UI payload> 实测确认。')
 
 

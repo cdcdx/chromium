@@ -213,12 +213,17 @@ def pascal(stem: str) -> str:
     return "".join(part.capitalize() for part in stem.split("_") if part)
 
 
-def spec_members(spec: EnumSpec, facts: Facts) -> list:
-    """[(托管成员名, 值, C 名, 文档)]；缺源或缺成员都当生成源不同步，直接失败。"""
+def spec_members(spec: EnumSpec, facts: Facts) -> list | None:
+    """[(托管成员名, 值, C 名, 文档)]；缺源或缺成员都当生成源不同步，直接失败。
+
+    唯一的例外由调用方处理：老内核的 C 头可能根本没有该枚举（例如
+    integration/mivpn 的 ABI 1.33 头里没有 ArupaInterceptAction），此时返回 None，
+    由 render() 决定是跳过（门面已内联）还是报错（两边都没有）。
+    """
     if spec.source == "enum":
         raw = facts.enums.get(spec.c_name)
         if raw is None:
-            raise GenError(f"{facts.source_name}: 找不到 enum {spec.c_name}（{spec.cs_name} 的生成源）")
+            return None
         pool = list(raw)
     else:
         pool = sorted((m for name, m in facts.defines.items() if name.startswith(spec.prefix)),
@@ -275,13 +280,32 @@ def render(facts: Facts, wrapper_text: Optional[str] = None) -> str:
             "    }",
             "",
         ]
+    skipped = []
     for spec in ENUM_SPECS:
         expected = spec_members(spec, facts)
         declared = inline.get(spec.cs_name)
+        if expected is None:
+            if declared is None:
+                raise GenError(
+                    f"{facts.source_name}: 找不到 enum {spec.c_name}"
+                    f"（{spec.cs_name} 的生成源，wrapper 也没有内联）")
+            # 老内核头里没有该枚举（例: ABI 1.33 没有 ArupaInterceptAction）：
+            # 门面自备内联定义，这里既不生成也不核对，只记一笔。
+            skipped.append(spec.cs_name)
+            continue
         if declared is not None:
             wanted = {name: value for name, value, _c_name, _doc in expected}
-            if declared != wanted:
+            # 门面缺值/值不符 = 内核加了或改了 ABI 面而门面没跟上，必须拦。
+            if (any(name not in declared for name in wanted) or
+                    any(declared[name] != value for name, value in wanted.items()
+                        if name in declared)):
                 raise GenError(enum_drift(facts.source_name, spec.cs_name, declared, expected))
+            # 门面比内核多出来的值只可能是「门面比内核新」（本内核根本不发送），
+            # 对宿主无害；记一条警告，不阻断出包。
+            extra = sorted(name for name in declared if name not in wanted)
+            if extra:
+                warn(f"{facts.source_name}: 门面内联的 {spec.cs_name} 多出 {', '.join(extra)}，"
+                     "本内核不发送这些值，按旧内核忽略")
             continue                       # wrapper 自己声明了：不重复生成（值已核对）
         body.append(f"    /// <summary>{xml_escape(spec.summary)}</summary>")
         body.append(f"    public enum {spec.cs_name}")
@@ -292,6 +316,9 @@ def render(facts: Facts, wrapper_text: Optional[str] = None) -> str:
             body.append(f"        {cs_name} = {value},")
         body.append("    }")
         body.append("")
+    if skipped:
+        preamble.append("//   内核头未声明、由门面内联的枚举（不生成也不核对）: "
+                        + ", ".join(skipped))
     if not (wrapper_text and "bool Supports(" in wrapper_text):
         if wrapper_text and "partial class ArupaKernel" not in wrapper_text:
             raise GenError(

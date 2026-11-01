@@ -12,6 +12,21 @@ import source_provenance as provenance
 
 
 class SourceProvenanceTest(unittest.TestCase):
+    def test_windows_build_provenance_requires_and_hashes_native_host(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)
+            for name in ('arupa_kernel.dll', 'arupa_render.exe', 'content_shell.pak',
+                         'devtools_resources.pak', 'icudtl.dat'):
+                (out / name).write_bytes(b'fixture')
+            with self.assertRaisesRegex(RuntimeError, 'arupa_desktop.exe'):
+                provenance.build_artifacts(out, 'win')
+            host = out / 'arupa_desktop.exe'
+            host.write_bytes(b'compiled native host')
+            artifacts = provenance.build_artifacts(out, 'win')
+            self.assertEqual(artifacts['arupa_desktop.exe'], provenance.file_sha256(host))
+            host.write_bytes(b'replaced host')
+            self.assertNotEqual(artifacts, provenance.build_artifacts(out, 'win'))
+
     def test_repository_records_tracked_and_untracked_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

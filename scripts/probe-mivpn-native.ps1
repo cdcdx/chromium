@@ -1,0 +1,73 @@
+param(
+    [Parameter(Mandatory = $true)][string]$PayloadRoot,
+    [Parameter(Mandatory = $true)][string]$ProbeRoot,
+    [Parameter(Mandatory = $true)][string]$PluginZip,
+    [int]$TimeoutSeconds = 180
+)
+
+$ErrorActionPreference = 'Stop'
+$payload = (Resolve-Path -LiteralPath $PayloadRoot).Path
+$archive = (Resolve-Path -LiteralPath $PluginZip).Path
+$probe = [IO.Path]::GetFullPath($ProbeRoot)
+$executable = Join-Path $payload 'NomadBrowser.exe'
+if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'Native NomadBrowser.exe is required.' }
+if (Test-Path -LiteralPath $probe) { throw 'ProbeRoot must be a new disposable directory.' }
+$normalProfile = Join-Path $env:LOCALAPPDATA 'NomadBrowser.Avalonia'
+if ($probe.StartsWith($normalProfile, [StringComparison]::OrdinalIgnoreCase)) { throw 'The normal user profile cannot be used.' }
+New-Item -ItemType Directory -Path $probe | Out-Null
+Set-Content -LiteralPath (Join-Path $probe '.nomad-mivpn-probe') -Value 'Disposable MiVPN native launch probe.'
+$extensionRoot = Join-Path $probe 'extensions'
+$installed = Join-Path $extensionRoot 'objojdkhlcekcnhaeoebojmffolmafll'
+Expand-Archive -LiteralPath $archive -DestinationPath $installed
+$output = Join-Path $probe 'checks.json'
+$environmentValues = @{
+    NOMAD_MIVPN_TEST = '1'
+    NOMAD_PLUGIN_STORAGE_TEST = 'mivpn'
+    NOMAD_PROFILE_DIR = $probe
+    NOMAD_EXTENSION_ROOT = $extensionRoot
+    ARUPA_DESKTOP_DIR = (Join-Path $payload 'arupa-desktop')
+    ARUPA_UNSAFE_DISABLE_SANDBOX = '0'
+}
+$previous = @{}
+$process = $null
+try {
+    foreach ($key in $environmentValues.Keys) {
+        $previous[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+        [Environment]::SetEnvironmentVariable($key, $environmentValues[$key], 'Process')
+    }
+    $process = Start-Process -FilePath $executable -WorkingDirectory $payload -WindowStyle Hidden -PassThru `
+        -ArgumentList @('--incognito', '--nativeextensiontest', ('"' + $output + '"')) `
+        -RedirectStandardOutput (Join-Path $probe 'stdout.log') -RedirectStandardError (Join-Path $probe 'stderr.log')
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while (-not $process.WaitForExit(1000)) {
+        if ([DateTime]::UtcNow -gt $deadline) { throw 'MiVPN native launch probe timed out.' }
+    }
+    if (-not (Test-Path -LiteralPath $output -PathType Leaf)) { throw ('Probe did not produce checks.json; process exit=' + $process.ExitCode) }
+    $checks = @(Get-Content -LiteralPath $output -Raw | ConvertFrom-Json)
+    $checks | Format-Table name, pass, detail -Wrap
+    if ($checks.Count -lt 5 -or @($checks | Where-Object { -not $_.pass }).Count -gt 0) { throw 'MiVPN API checks failed.' }
+    $nativeLogs = @(Get-ChildItem -LiteralPath (Join-Path $probe 'userdata/diagnostics') -Filter 'native-r6-*.log' -ErrorAction SilentlyContinue)
+    $logText = ($nativeLogs | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+    $sandbox = $logText -match 'stage=admission.protection phase=end reason=app_container_win32k'
+    $mappedProcess = $logText -match 'stage=browser.process_mapping phase=end reason=browser_generation_to_child_pid'
+    $apiV2 = $logText -match 'stage=utility.get_version phase=end reason=adapter_available [^\r\n]* code=2(?: |$)'
+    $evidence = [ordered]@{
+        exitCode = $process.ExitCode
+        apiChecksPassed = $true
+        appContainerAndWin32kConfirmed = $sandbox
+        childProcessMapped = $mappedProcess
+        sdkApiVersion = $(if ($apiV2) { 2 } else { $null })
+    }
+    $evidence | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $probe 'sandbox-evidence.json')
+    if (-not $sandbox -or -not $mappedProcess -or -not $apiV2) { throw 'MiVPN product API passed but native sandbox/process/API v2 evidence is missing.' }
+    Write-Output ('MiVPN native SDK/sandbox probe passed: ' + $probe)
+}
+finally {
+    if ($null -ne $process) {
+        # Kill only this owned process object. Its sandbox jobs close with the
+        # broker; avoid PID searches and the .NET-only Kill(entireProcessTree).
+        if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit(5000) | Out-Null }
+        $process.Dispose()
+    }
+    foreach ($key in $previous.Keys) { [Environment]::SetEnvironmentVariable($key, $previous[$key], 'Process') }
+}

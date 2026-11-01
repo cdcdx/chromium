@@ -4,6 +4,8 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
+import struct
 import sys
 import subprocess
 import tempfile
@@ -55,7 +57,106 @@ class NomadTest(unittest.TestCase):
         library = {'win': 'arupa_kernel.dll', 'mac': 'libarupa_kernel.dylib', 'linux': 'libarupa_kernel.so'}[target_os]
         (delivery / 'kernel' / library).touch()
         (delivery / 'kernel/.arupa-version').write_text(VERSION)
+        if target_os == 'win':
+            (delivery / 'kernel/arupa_desktop.exe').touch()
+            (delivery / 'tools').mkdir(exist_ok=True)
+            shutil.copy2(Path(nomad.__file__).resolve().parents[1] /
+                         'arupa_desktop/tools/verify_transfer_delivery.py', delivery / 'tools')
         self.args.delivery = delivery
+
+    @staticmethod
+    def native_pe_fixture(names):
+        """A PE export table sufficient for the delivery's static ABI gate."""
+        data = bytearray(8192)
+        data[:2] = b'MZ'
+        struct.pack_into('<I', data, 0x3c, 0x80)
+        data[0x80:0x84] = b'PE\0\0'
+        struct.pack_into('<HH', data, 0x84, 0x8664, 1)
+        struct.pack_into('<H', data, 0x94, 240)
+        struct.pack_into('<H', data, 0x96, 0x0022)  # Executable image, not a DLL.
+        struct.pack_into('<H', data, 0x98, 0x20b)
+        struct.pack_into('<I', data, 0x98+16, 0x1800)
+        struct.pack_into('<H', data, 0x98+68, 2)  # Windows GUI.
+        struct.pack_into('<II', data, 0x98+112, 0x1000, 0x80)
+        struct.pack_into('<IIII', data, 0x98+240+8, 4096, 0x1000, 4096, 0x200)
+        struct.pack_into('<IIIII', data, 0x214, len(names), len(names), 0x1200, 0x1100, 0x1300)
+        cursor = 0x600
+        for i, name in enumerate(names):
+            struct.pack_into('<I', data, 0x300+i*4, cursor-0x200+0x1000)
+            struct.pack_into('<I', data, 0x400+i*4, 0x1800+i*16)
+            struct.pack_into('<H', data, 0x500+i*2, i)
+            encoded = name.encode()+b'\0'
+            data[cursor:cursor+len(encoded)] = encoded
+            cursor += len(encoded)
+        return data
+
+    def native_delivery_fixture(self):
+        self.pc_fixture('win')
+        required = ['arupa_kernel_transfer_runtime', 'arupa_kernel_set_ext_api_handler_ctx',
+                    'arupa_kernel_respond_ext_api', 'arupa_free', 'arupa_kernel_abi_minor',
+                    'arupa_kernel_create', 'arupa_subprocess_main']
+        binary = self.native_pe_fixture(required)
+        for name in ('arupa_kernel.dll', 'arupa_desktop.exe'):
+            (self.args.delivery / 'kernel' / name).write_bytes(binary)
+        return binary
+
+    def test_windows_delivery_without_native_host_stops_before_managed_build(self):
+        self.pc_fixture('win')
+        (self.args.delivery / 'kernel/arupa_desktop.exe').unlink()
+        with patch.object(nomad, 'prepare_dotnet') as dotnet:
+            with self.assertRaisesRegex(RuntimeError, '原生主镜像宿主'):
+                self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION,
+                           self.root / 'output')
+        dotnet.assert_not_called()
+
+    def test_windows_renamed_apphost_fails_static_gate_before_managed_build(self):
+        self.native_delivery_fixture()
+        # The file name alone must never establish main-image kernel identity.
+        (self.args.delivery / 'kernel/arupa_desktop.exe').write_bytes(self.native_pe_fixture([]))
+        with patch.object(nomad, 'prepare_dotnet') as dotnet:
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION,
+                           self.root / 'output')
+        dotnet.assert_not_called()
+
+    def test_windows_publish_replaces_apphost_with_native_kernel_and_runtime_dependencies(self):
+        native_binary = self.native_delivery_fixture()
+        kernel = self.args.delivery / 'kernel'
+        (kernel / 'vcruntime140.dll').write_bytes(b'CRT dependency')
+        (kernel / 'libEGL.dll').write_bytes(b'GPU dependency')
+        sdk = self.args.delivery / 'mivpn-sdk' / nomad.MIVPN_SDK_DIR_NAME
+        sdk.mkdir(parents=True)
+        for name in nomad.MIVPN_SDK_FILES:
+            (sdk / name).write_bytes(b'SDK fixture')
+        repo = self.root / 'nomad_desktop'
+        resources = repo / 'dist/Release/Resources'
+        resources.mkdir(parents=True)
+        (resources / 'index.html').write_text('WebUI')
+        facade = repo / 'facade.dll'
+        facade.write_bytes(b'x' * nomad.MIN_FACADE_BYTES)
+        actual_run = fetch.run
+        def fake_publish(command, cwd=None):
+            if str(command[0]) == sys.executable:
+                return actual_run(command, cwd, capture=True)
+            target = Path(command[command.index('-o')+1])
+            target.mkdir(parents=True, exist_ok=True)
+            if Path(command[2]).name == 'NomadBrowser.Avalonia.csproj':
+                for name in ('NomadBrowser.exe', 'NomadBrowser.dll', 'NomadBrowser.runtimeconfig.json',
+                             'NomadBrowser.deps.json', 'hostfxr.dll', 'hostpolicy.dll', 'coreclr.dll'):
+                    (target / name).write_bytes(b'managed publish fixture')
+        output = self.root / 'output'
+        with patch.object(nomad, 'prepare_dotnet', return_value='dotnet'), \
+             patch.object(nomad, 'refresh_kernel_facade', return_value=facade), \
+             patch.object(fetch, 'run', side_effect=fake_publish):
+            self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION, output)
+        self.assertEqual((output / 'NomadBrowser.exe').read_bytes(), native_binary)
+        self.assertEqual((output / 'vcruntime140.dll').read_bytes(), b'CRT dependency')
+        self.assertEqual((output / 'libEGL.dll').read_bytes(), b'GPU dependency')
+        self.assertFalse((output / 'arupa_kernel.dll').exists())
+        self.assertFalse((output / 'arupa-desktop/arupa_desktop.exe').exists())
+        self.assertTrue((output / 'NomadBrowser.runtimeconfig.json').is_file())
+        self.assertTrue((output / 'arupa-desktop/arupa_kernel.dll').is_file())
+        self.assertTrue((output / 'mivpn-sdk' / nomad.MIVPN_SDK_DIR_NAME / 'mivpn-browser.dll').is_file())
 
     def android_fixture(self):
         repo = self.root / 'nomad_android'
@@ -237,8 +338,9 @@ class NomadTest(unittest.TestCase):
             run.return_value = subprocess.CompletedProcess([], 0, '10.0.100\n', '')
             self.assertEqual(self.quiet(nomad.prepare_dotnet, self.args, repo), '/custom/dotnet')
             self.assertEqual(run.call_args.kwargs['cwd'], repo)
-            self.assertEqual(os.environ['DOTNET_ROOT'], '/custom')
-            self.assertTrue(os.environ['PATH'].startswith('/custom' + os.pathsep))
+            sdk_root = str(Path('/custom/dotnet').resolve().parent)
+            self.assertEqual(os.environ['DOTNET_ROOT'], sdk_root)
+            self.assertTrue(os.environ['PATH'].startswith(sdk_root + os.pathsep))
             run.return_value = subprocess.CompletedProcess([], 1, '', 'SDK missing')
             with self.assertRaisesRegex(RuntimeError, 'Runtime'):
                 nomad.prepare_dotnet(self.args, repo)
@@ -516,6 +618,30 @@ class NomadTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '源码或内核交付已变化'):
                 nomad.package(self.args, output, identity)
         self.assertFalse(self.args.dist_dir.exists())
+
+    def test_desktop_package_nested_output_uses_explicit_source_root(self):
+        identity = {'project': 'nomad_desktop', 'os': 'win', 'arch': 'x64',
+                    'version': VERSION, 'variant': 'release'}
+        isolated = self.root / 'out/hotfix/task'
+        output = isolated / 'build/output'
+        output.mkdir(parents=True)
+        (output / 'NomadBrowser.exe').write_bytes(b'isolated browser fixture')
+        provenance = {'source': 'current', 'kernelDelivery': 'current'}
+        nomad.seal(output, identity, provenance)
+        self.args.dist_dir = isolated / 'private-dist'
+        self.args.zip = True
+        with patch.object(nomad, 'desktop_provenance',
+                          side_effect=lambda root, *_: provenance if root == self.root else {}) as capture, \
+             contextlib.redirect_stdout(io.StringIO()):
+            final = nomad.package(self.args, output, identity, source_root=self.root)
+        capture.assert_called_once_with(self.root, self.args, 'win', 'x64', VERSION)
+        self.assertTrue((final / 'NomadBrowser.exe').is_file())
+        with zipfile.ZipFile(str(final) + '.zip') as archive:
+            self.assertEqual(archive.read(final.name + '/NomadBrowser.exe'), b'isolated browser fixture')
+        self.assertTrue(output.is_dir())
+        with patch.object(nomad, 'desktop_provenance', return_value={'source': 'changed'}):
+            with self.assertRaisesRegex(RuntimeError, '源码或内核交付已变化'):
+                nomad.package(self.args, output, identity, source_root=self.root)
 
     def test_package_cleans_stale_leftovers_and_keep_zero_keeps_history(self):
         identity = {'os': 'linux', 'arch': 'x64', 'version': VERSION, 'variant': 'release'}

@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import zipfile
@@ -192,6 +193,37 @@ def delivery(root, args, target_os, arch, version):
     return path
 
 
+def validate_windows_native_host(delivery_root):
+    """Reject DLL-only deliveries before publishing a Windows browser."""
+    host = delivery_root / 'kernel/arupa_desktop.exe'
+    gate = delivery_root / 'tools/verify_transfer_delivery.py'
+    if not host.is_file():
+        F.err(f'Windows 浏览器需要原生主镜像宿主: {host}；请重新构建配套内核交付包')
+    if not gate.is_file():
+        F.err(f'内核交付缺少原生主镜像校验工具: {gate}')
+    if F.DRY_RUN:
+        F.log(f'(dry-run) 校验 Windows 原生主镜像导出: {host}')
+        return
+    F.run([sys.executable, gate, '--library', delivery_root / 'kernel/arupa_kernel.dll',
+           '--platform', 'win', '--require-native-host'])
+
+
+def install_windows_native_host(delivery_root, payload):
+    """Use the kernel's real static host for both browser and child processes."""
+    required = ('NomadBrowser.dll', 'NomadBrowser.runtimeconfig.json',
+                'NomadBrowser.deps.json', 'hostfxr.dll', 'hostpolicy.dll', 'coreclr.dll')
+    missing = [name for name in required if not (payload / name).is_file()]
+    if missing:
+        F.err('原生浏览器宿主缺少托管运行文件: ' + ', '.join(missing))
+    shutil.copy2(delivery_root / 'kernel/arupa_desktop.exe', payload / 'NomadBrowser.exe')
+    # Windows resolves static imports before wWinMain/managed SetDllDirectory.
+    # Child processes also enter the native host directly, before managed code.
+    for dependency in (delivery_root / 'kernel').glob('*.dll'):
+        if dependency.name.lower() != 'arupa_kernel.dll':
+            shutil.copy2(dependency, payload / dependency.name)
+    F.log('Windows 浏览器入口 → 原生主镜像 NomadBrowser.exe（同镜像启动沙箱子进程）')
+
+
 def desktop_project(repo, target_os, explicit):
     if explicit:
         path = explicit.expanduser().resolve()
@@ -206,6 +238,35 @@ def desktop_project(repo, target_os, explicit):
 
 LINUX_KERNELHOST_PROJ = ('Posix', 'NomadBrowser.Linux.KernelHost', 'NomadBrowser.Linux.KernelHost.csproj')
 LINUX_KERNELHOST_EXE = 'NomadBrowser.Linux.KernelHost'
+
+# Must match arupa_desktop/app/arupa_mivpn_sdk_admission.h kMivpnSdkRelativePath:
+# the utility process resolves the DLL from its own image directory, i.e.
+# <install root>/mivpn-sdk/<name>/mivpn-browser.dll.
+MIVPN_SDK_DIR_NAME = 'hy2-20261022-coF8no'
+MIVPN_SDK_FILES = ('mivpn-browser.dll', 'mivpn-browser.h', 'mivpn-browser.lib')
+
+
+def install_mivpn_sdk(root, delivery_root, payload):
+    """Place the Windows MiVPN SDK beside NomadBrowser.exe.
+
+    It belongs at the payload root, never under arupa-desktop/: the browser
+    derives the SDK path from its own image location. Prefer the kernel
+    delivery's copy so a release stays reproducible from the same inputs; fall
+    back to the workspace SDK build directory.
+    """
+    source = delivery_root / 'mivpn-sdk' / MIVPN_SDK_DIR_NAME
+    if not source.is_dir():
+        source = root / 'dist' / 'mivpn-sdk' / MIVPN_SDK_DIR_NAME
+    missing = [name for name in MIVPN_SDK_FILES if not (source / name).is_file()]
+    if missing:
+        F.err('缺少 MiVPN Browser SDK: ' + ', '.join(missing)
+              + f'（{source}）；先运行 mivpn-client/build_browser_dll_windows.ps1')
+    destination = payload / 'mivpn-sdk' / MIVPN_SDK_DIR_NAME
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in MIVPN_SDK_FILES:
+        shutil.copy2(source / name, destination / name)
+    F.log(f'MiVPN Browser SDK → mivpn-sdk/{MIVPN_SDK_DIR_NAME}')
+
 
 # 两个 OOP 宿主工程编**同一批源码**：Mac 侧逐条列在自己的 csproj 里，Linux 侧用
 # `..\..\Mac\NomadBrowser.Mac.KernelHost\**\*.cs` 把 Mac 的业务源整目录 glob 进来 ——
@@ -585,6 +646,8 @@ def desktop_build(root, args, target_os, arch, version, output):
     restore_props = [f'-p:RestoreConfigFile={nuget_config}']
     F.log(f'NuGet 配置: {nuget_config}')
     kernel = delivery(root, args, target_os, arch, version)
+    if target_os == 'win':
+        validate_windows_native_host(kernel)
     rid = f'{"osx" if target_os == "mac" else target_os}-{arch}'
     if target_os == 'linux' and arch == 'x86':
         F.log('Linux x86 发布要求项目提供 linux-x86 运行时及原生依赖；官方 .NET SDK 无法保证支持')
@@ -699,13 +762,14 @@ def desktop_build(root, args, target_os, arch, version, output):
             executable = payload / ('NomadBrowser.exe' if target_os == 'win' else 'NomadBrowser')
             if not executable.is_file():
                 F.err(f'发布缺少浏览器可执行文件: {executable}')
-            # Windows' test-only native host may exist in older kernel deliveries.
-            # Ship the DLL embedding runtime, never the acceptance executable.
+            # Windows starts the actual native host at the payload root. Keep
+            # its assets under arupa-desktop/ and avoid a second launch entry.
             ignore = shutil.ignore_patterns('arupa_desktop.exe') if target_os == 'win' else None
             shutil.copytree(kernel / 'kernel', payload / 'arupa-desktop',
                             dirs_exist_ok=True, symlinks=True, ignore=ignore)
-            if target_os == 'win' and (payload / 'arupa-desktop/arupa_desktop.exe').is_file():
-                F.err('Windows 浏览器载荷仍包含测试目标 arupa_desktop.exe')
+            if target_os == 'win':
+                install_windows_native_host(kernel, payload)
+                install_mivpn_sdk(root, kernel, payload)
             if target_os == 'linux':
                 # 放在 copytree 之后：交付根的 kernel/ 是内核产出方的目录，不往里写，
                 # 只写我们自己的交付暂存目录（理由见 publish_linux_kernelhost）。
@@ -849,7 +913,7 @@ def delivery_base(identity):
             f"{identity['version']}-{identity['variant']}")
 
 
-def package(args, output, identity):
+def package(args, output, identity, *, source_root=None):
     keep = max(0, args.keep)
     if F.DRY_RUN:
         F.log(f'(dry-run) 校验并打包 {output} -> {args.dist_dir}/{delivery_base(identity)}-<n>')
@@ -864,7 +928,8 @@ def package(args, output, identity):
         F.err(f'构建配置与打包请求不符: {output}')
     if identity.get('project') == 'nomad_desktop':
         if manifest.get('provenance') != desktop_provenance(
-                output.parent.parent, args, identity['os'], identity['arch'], identity['version']):
+                source_root if source_root is not None else output.parent.parent,
+                args, identity['os'], identity['arch'], identity['version']):
             F.err('浏览器构建后源码或内核交付已变化；请重新 build')
     actual = {p.relative_to(output).as_posix(): digest(p) for p in output.rglob('*')
               if p.is_file() and p != stamp}

@@ -7,13 +7,15 @@
 #
 # 输出目录（目录自带 arch，所以 kernel\ 是平铺的，不再按架构分层）：
 #   dist\arupa-win-x64-154.0.8037.21-static-1\
-#     kernel\{arupa_kernel.dll, arupa_render.exe, arupa_plugin_host.exe, *.pak, icudtl.dat,
+#     kernel\{arupa_desktop.exe, arupa_kernel.dll, arupa_render.exe, arupa_plugin_host.exe, *.pak, icudtl.dat,
 #            snapshot_blob.bin, v8_context_snapshot.bin, libEGL.dll, libGLESv2.dll,
 #            vk_swiftshader.dll, vulkan-1.dll, d3dcompiler_47.dll, dxcompiler.dll,
 #            msvcp140*.dll, vcruntime140*.dll, …, angledata\, hyphen-data\,
 #            resources\, plugin-runtime\,
 #            .arupa-version, .arupa-delivery-id}
 #     include\{arupa_kernel_capi.h, arupa_kernel_capi_nomad.h}
+#     mivpn-sdk\hy2-20261022-coF8no\{mivpn-browser.dll, mivpn-browser.h, mivpn-browser.lib}
+#                            ← MiVPN 浏览器 SDK（运行期按「安装根\mivpn-sdk\<name>\…」加载）
 #     docs\ dotnet\ …        ← <repo>\package\package_desktop 下的一级文件/文件夹整份搬过来（有则带）
 #     SHA256SUMS.txt / MANIFEST.md
 #
@@ -32,6 +34,7 @@
 #       --pak FILE      主 pak 来源，默认 out\content_shell.pak，
 #                       没有时取 out 根体积最大的 *.pak
 #       --include-dir DIR      默认 <repo>\arupa_desktop\public（里面的 *.h 拷进 include\）
+#       --mivpn-sdk DIR         MiVPN 浏览器 SDK 目录（默认 <repo>\dist\mivpn-sdk\hy2-20261022-coF8no）
 #       --verify-script FILE   交付 ABI 校验脚本（默认 <repo>\arupa_desktop\tools\verify_transfer_delivery.py）；
 #                              会被拷进交付根 tools\ 并执行，非零退出即判定交付不合格
 #       --package-dir DIR       把该目录下的一级文件/文件夹整份拷进交付根
@@ -47,7 +50,7 @@
 # 复制映射（OUT = src\out\arupa-win-{arch}-{ver}-static）:
 #   OUT\arupa_kernel.dll        → kernel\（内核本体，必需）
 #   OUT\arupa_render.exe              → kernel\（渲染进程薄壳，必需）
-#   OUT\arupa_desktop.exe       不进入交付包（原生宿主测试目标，保留在 out\ 供验收）
+#   OUT\arupa_desktop.exe       → kernel\（正式原生宿主，必须静态导出内核 ABI）
 #   OUT\arupa_plugin_host.exe   → kernel\（插件宿主，缺失终止打包）
 #   OUT\<主 pak> + 其余 *.pak   → kernel\（原名平铺，必需至少一个）
 #   OUT\icudtl.dat              → kernel\（必需）
@@ -60,6 +63,8 @@
 #   OUT\angledata\ hyphen-data\ resources\ → kernel\同名目录（可选）
 #   OUT\arupa_locales\{en-US,zh-CN}.pak → kernel\locales\（旧构建可无；有则两者必需）
 #   <repo>\arupa_desktop\public\*.h          → include\
+#   <repo>\dist\mivpn-sdk\hy2-20261022-coF8no\{mivpn-browser.dll,.h,.lib}
+#                                            → mivpn-sdk\hy2-20261022-coF8no\（必需）
 #   <repo>\package\package_desktop\{docs,dotnet,…}            → 交付根同名（有则带，跟 scripts\builder\kernel.py
 #                                               的 copy_assets 同一口径；其中 dotnet\ 不带 bin\/obj\）
 #   <repo>\package\package_desktop\plugin-runtime\            → kernel\plugin-runtime\（运行期按「内核目录/
@@ -138,6 +143,10 @@ $DistDir   = Join-Path $Root 'dist'
 $DistName  = ''
 $PakSrc    = ''
 $IncDir    = ''
+# Keep in sync with arupa_desktop/app/arupa_mivpn_sdk_admission.h
+# (kMivpnSdkRelativePath): the browser loads the SDK from its install root.
+$MivpnSdkName = 'hy2-20261022-coF8no'
+$MivpnSdkDir  = Join-Path $Root "dist\mivpn-sdk\$MivpnSdkName"
 $VerifyScript = ''
 $PackageDir = ''
 $NoPackage = $false
@@ -168,6 +177,7 @@ try {
             'dist-name' { $DistName = (Read-Value $key); break }
             'pak' { $PakSrc = (Read-Value $key); break }
             'include-dir' { $IncDir = (Read-Value $key); break }
+            'mivpn-sdk' { $MivpnSdkDir = (Read-Value $key); break }
             'verify-script' { $VerifyScript = (Read-Value $key); break }
             'package-dir' { $PackageDir = (Read-Value $key); break }
             'no-package' { $NoPackage = $true; break }
@@ -441,8 +451,12 @@ function Invoke-PackageArch {
     # 插件宿主：arupa_kernel 的 data_deps，三平台交付均必需
     Add-RequiredFile -Src (Join-Path $OutPath 'arupa_plugin_host.exe') -DestDir $dest
 
-    # arupa_desktop.exe 是原生宿主测试目标，保留在 out\ 供验收；正式交付只带
-    # arupa_kernel.dll 和 arupa_render.exe，不把测试 EXE 混进 kernel\。
+    # Windows 正式入口由浏览器打包器重命名为 NomadBrowser.exe；broker 和
+    # Chromium 子进程共用这个主镜像，MiVPN 不允许退回 DLL broker/no-sandbox。
+    # DLL/薄壳继续交付给现有嵌入消费者，不能替代正式主镜像宿主。
+    Add-RequiredFile -Src (Join-Path $OutPath 'arupa_desktop.exe') -DestDir $dest `
+        -Hint 'ninja 目标 chrome/browser/arupa_desktop:arupa_desktop，Windows MiVPN 需要主镜像沙箱 broker'
+    $nativeHostHash = Get-FileSha256 -Path (Join-Path $dest 'arupa_desktop.exe')
 
     # 主 pak
     Add-RequiredFile -Src $script:PakSrc -DestDir $dest
@@ -531,7 +545,7 @@ function Invoke-PackageArch {
 
     # 调试符号（可选开关）
     if ($WithPdb) {
-        foreach ($pattern in @('arupa_kernel.dll.pdb', 'arupa_render.exe.pdb', 'arupa_plugin_host.exe.pdb')) {
+        foreach ($pattern in @('arupa_desktop.exe.pdb', 'arupa_kernel.dll.pdb', 'arupa_render.exe.pdb', 'arupa_plugin_host.exe.pdb')) {
             Add-OptionalFile -Src (Join-Path $OutPath $pattern) -DestDir $dest
         }
     }
@@ -550,6 +564,16 @@ function Invoke-PackageArch {
         if ($headerCount -eq 0) { Write-Warn "--include-dir 下没有 *.h: $IncDir" }
     } else {
         Write-Warn "找不到 C API 头文件目录: $IncDir（可用 --include-dir 指定）"
+    }
+
+    # MiVPN 浏览器 SDK：运行期按「安装根\mivpn-sdk\<name>\mivpn-browser.dll」加载
+    # （arupa_mivpn_sdk_admission.h 的 kMivpnSdkRelativePath）。镜像随包带上，
+    # 交给浏览器外壳在发布载荷里平铺到 NomadBrowser.exe 同级。
+    $sdkDest = Join-Path $DistPath "mivpn-sdk\$MivpnSdkName"
+    New-Item -ItemType Directory -Force -Path $sdkDest | Out-Null
+    foreach ($name in @('mivpn-browser.dll', 'mivpn-browser.h', 'mivpn-browser.lib')) {
+        Add-RequiredFile -Src (Join-Path $MivpnSdkDir $name) -DestDir $sdkDest `
+            -Hint "MiVPN Browser SDK（先运行 mivpn-client\build_browser_dll_windows.ps1，或用 --mivpn-sdk 指定目录）:$MivpnSdkDir"
     }
 
     # 版本标记
@@ -577,9 +601,9 @@ function Invoke-PackageArch {
     # <repo>\package\package_desktop 下的一级文件/文件夹（docs\ dotnet\ …）
     Copy-PackageDir -DistPath $DistPath
 
-    # 附件目录也可能包含 kernel\，必须在生成清单前拦住误带的测试 EXE。
-    if (Test-Path -LiteralPath (Join-Path $dest 'arupa_desktop.exe') -PathType Leaf) {
-        throw '交付附件包含 arupa_desktop.exe；该原生宿主测试目标不得进入 Windows 内核包'
+    # 附件可以并入 kernel\，但不能替换本次构建的正式入口。
+    if ((Get-FileSha256 -Path (Join-Path $dest 'arupa_desktop.exe')) -ne $nativeHostHash) {
+        throw '交付附件替换了 arupa_desktop.exe；正式入口必须来自本次内核构建'
     }
 
     # 系统垃圾文件清理
@@ -590,6 +614,7 @@ function Invoke-PackageArch {
 
     # 架构核对：内核库必须就是本次打包的 arch
     Assert-LibArch -LibPath (Join-Path $dest (Get-LibName)) -WantCpu $Cpu
+    Assert-LibArch -LibPath (Join-Path $dest 'arupa_desktop.exe') -WantCpu $Cpu
 
     . (Join-Path $Root 'scripts\_find_python.ps1')
     $python = Find-Python3
@@ -616,7 +641,7 @@ function Invoke-PackageArch {
     New-Item -ItemType Directory -Force -Path $gateDir | Out-Null
     $gate = Join-Path $gateDir 'verify_transfer_delivery.py'
     Copy-Item -LiteralPath $VerifyScript -Destination $gate -Force
-    $gateArgs = @($python.Pre) + @($gate, '--library', (Join-Path $dest (Get-LibName)), '--platform', 'win', '--report', (Join-Path $DistPath 'transfer-abi.json'))
+    $gateArgs = @($python.Pre) + @($gate, '--library', (Join-Path $dest (Get-LibName)), '--platform', 'win', '--require-native-host', '--report', (Join-Path $DistPath 'transfer-abi.json'))
     & $python.Exe @gateArgs
     if ($LASTEXITCODE -ne 0) { throw '网盘 V5 必需 ABI 缺失；请重新编译配套内核' }
 
