@@ -476,6 +476,14 @@ def duplicate_wrappers(dotnet_dir) -> list:
         if path.name in (WRAPPER_NAME, GENERATED_NAME):
             continue
         text = read_text(path)
+        # The readiness API is a separately maintained partial extension. Keep
+        # accidental full wrapper copies blocked; the stage build checks its
+        # members together with the primary wrapper and generated ABI surface.
+        if path.name == "MivpnWorkerReadiness.cs":
+            declarations = re.findall(r"\b((?:\w+\s+)*)class\s+(ArupaWebView|ArupaKernel)\b", text)
+            if declarations and all(name == "ArupaKernel" and "partial" in modifiers.split()
+                                    for modifiers, name in declarations):
+                continue
         if "class ArupaWebView" in text or "class ArupaKernel" in text:
             problems.append(
                 f"dotnet/{path.name} 又定义了一份门面类型（ArupaWebView/ArupaKernel）—— "

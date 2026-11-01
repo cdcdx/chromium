@@ -18,6 +18,19 @@ static int mode, sends, freed, legacy_offset, proxy_mode, legacy_selected;
 static int64_t pending;
 static ProxyCb late_proxy;
 static void* late_proxy_user;
+static StringCb readiness_callback;
+static void* readiness_user;
+API void probe_emit_readiness(void) {
+  if(readiness_callback) readiness_callback(readiness_user,"{\"event\":\"ready\",\"sequence\":2.0,\"generation\":\"fresh\"}");
+}
+#ifndef LEGACY_READINESS
+API void arupa_kernel_set_mivpn_worker_readiness_observer(StringCb cb,void* user) {
+  readiness_callback=cb; readiness_user=user;
+}
+API void* arupa_kernel_get_mivpn_worker_readiness(void) {
+  return strdup("{\"event\":\"idle\",\"sequence\":1.0}");
+}
+#endif
 API void probe_mode(int value) { mode=value; sends=0; }
 API int probe_sends(void) { return sends; }
 API int probe_freed(void) { return freed; }

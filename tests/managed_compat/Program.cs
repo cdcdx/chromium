@@ -72,6 +72,30 @@ try { using var rejected=new ArupaWebView((IntPtr)1,new(){LegacyExtensionPartiti
 catch(ArgumentException) { Check(true,"private view cannot select the persistent legacy partition"); }
 Console.WriteLine($"PASS {passed} managed ABI/compatibility checks");
 
+if (args.Contains("--legacy-readiness"))
+{
+    Check(!ArupaKernel.TrySetMivpnWorkerReadinessObserver(_ => { }), "old kernel cannot register readiness observer");
+    Check(ArupaKernel.GetMivpnWorkerReadiness() is null, "old kernel has no readiness snapshot");
+}
+else
+{
+    freed = Probe.Freed();
+    Check(ArupaKernel.GetMivpnWorkerReadiness()!.Contains("idle"), "readiness snapshot preserved");
+    Check(Probe.Freed() == freed + 1, "readiness owned JSON freed exactly once");
+    int records = 0;
+    Check(ArupaKernel.TrySetMivpnWorkerReadinessObserver(json => { if (json.Contains("fresh")) records++; }), "readiness observer registered");
+    GC.Collect(); GC.WaitForPendingFinalizers();
+    Probe.EmitReadiness();
+    Check(records == 1, "readiness delegate survives garbage collection");
+    Check(ArupaKernel.TrySetMivpnWorkerReadinessObserver(_ => throw new Exception("observer test")), "throwing readiness observer registered");
+    Probe.EmitReadiness();
+    Check(true, "readiness observer exceptions do not cross native ABI");
+    Check(ArupaKernel.TrySetMivpnWorkerReadinessObserver(null), "readiness observer removed");
+    Probe.EmitReadiness();
+    Check(records == 1, "removed readiness observer is not invoked");
+}
+Console.WriteLine($"PASS {passed} total managed ABI/compatibility checks");
+
 static class Probe {
  const string Dll="compat_shim";
  [DllImport(Dll,EntryPoint="probe_mode")] internal static extern void Mode(int value);
@@ -82,4 +106,5 @@ static class Probe {
  [DllImport(Dll,EntryPoint="probe_late_proxy")] internal static extern void LateProxy();
  [DllImport(Dll,EntryPoint="probe_open")] internal static extern void Open(IntPtr view);
  [DllImport(Dll,EntryPoint="probe_legacy_selected")] internal static extern int LegacySelected();
+ [DllImport(Dll,EntryPoint="probe_emit_readiness")] internal static extern void EmitReadiness();
 }

@@ -219,6 +219,19 @@ class DeliveryParityTest(unittest.TestCase):
         self.assertEqual([], abi.parity_refusals(self.root))
         self.assertEqual([], abi.parity_warnings(self.root))
 
+    def test_readiness_partial_is_allowed_but_copies_remain_blocked(self):
+        partial = 'public sealed partial class ArupaKernel { }\n'
+        helper = self.dotnet / 'MivpnWorkerReadiness.cs'
+        helper.write_text(partial)
+        self.assertEqual([], abi.duplicate_wrappers(self.dotnet))
+        helper.write_text(partial.replace('partial ', ''))
+        self.assertEqual(1, len(abi.duplicate_wrappers(self.dotnet)))
+        helper.write_text(partial)
+        (self.dotnet / 'MivpnWorkerReadiness copy.cs').write_text(partial)
+        self.assertEqual(1, len(abi.duplicate_wrappers(self.dotnet)))
+        helper.write_text(partial + 'public sealed class ArupaWebView { }\n')
+        self.assertEqual(2, len(abi.duplicate_wrappers(self.dotnet)))
+
     def test_stage_regenerates_the_delivery_copy(self):
         self.write_wrapper(GENERATED_LAYOUT_WRAPPER)
         self.assertEqual(0, abi.main(['--stage', str(self.root), '--no-build']))

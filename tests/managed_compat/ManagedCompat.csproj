@@ -7,7 +7,6 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../package/package_desktop/dotnet/Interop.cs" Link="Interop.cs" />
-    <Compile Include="../../package/package_desktop/dotnet/ArupaBrowser.cs" Link="ArupaBrowser.cs" />
+    <Compile Include="../../package/package_desktop/dotnet/*.cs" Link="%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>
