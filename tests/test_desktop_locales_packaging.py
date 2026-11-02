@@ -81,9 +81,12 @@ class LocalePackagingTest(unittest.TestCase):
             headers = root / 'public'
             headers.mkdir()
             (headers / 'arupa_kernel_capi.h').write_text('/* fixture */\n')
+            mivpn = root / 'mivpn-sdk'
+            mivpn.mkdir()
             env = dict(os.environ, PATH=str(tools)+os.pathsep+os.environ['PATH'])
             out = root / "out"
             out.mkdir()
+            (out / "arupa-build.json").write_text('{"schema":2,"fixture":true}\n')
             files = ["arupa_render", "arupa_plugin_host", "content_shell.pak",
                      "devtools_resources.pak", "icudtl.dat", "snapshot_blob.bin",
                      "vk_swiftshader_icd.json", "hyphen-data/manifest.json",
@@ -97,6 +100,8 @@ class LocalePackagingTest(unittest.TestCase):
                 # architecture check; no fixture executable is ever launched.
                 (out / "libarupa_kernel.dylib").write_bytes(
                     struct.pack("<8I", 0xFEEDFACF, 0x100000C, 0, 6, 0, 0, 0, 0))
+                (mivpn / "mivpn-browser.dylib").write_bytes(
+                    struct.pack("<8I", 0xFEEDFACF, 0x100000C, 0, 6, 0, 0, 0, 0))
                 arch = "arm64"
             else:
                 files += ["libEGL.so", "libGLESv2.so", "libvk_swiftshader.so",
@@ -106,7 +111,12 @@ class LocalePackagingTest(unittest.TestCase):
                     b"\x7fELF\x02\x01\x01" + bytes(9) +
                     struct.pack("<HHIQQQIHHHHHH", 3, 62, 1, 0, 0, 0, 0,
                                 64, 0, 0, 0, 0, 0))
+                (mivpn / "libmivpn-browser.so").write_bytes(
+                    b"\x7fELF\x02\x01\x01" + bytes(9) +
+                    struct.pack("<HHIQQQIHHHHHH", 3, 62, 1, 0, 0, 0, 0,
+                                64, 0, 0, 0, 0, 0))
                 arch = "x64"
+            (mivpn / "mivpn-browser.h").write_text("/* fixture */\n")
             for name in files:
                 path = out / name
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,6 +138,7 @@ class LocalePackagingTest(unittest.TestCase):
                 ["bash", str(PACKAGER), "--os", target_os, "--arch", arch,
                  "--ver", "0.0.0.0", "--out", str(out), "--num", "1",
                  "--dist-dir", str(root / "dist"), "--no-package",
+                 "--mivpn-sdk", str(mivpn),
                  "--include-dir", str(headers), "--verify-script", str(verifier)],
                 capture_output=True, text=True, timeout=30, env=env)
             delivery = root / "dist" / f"arupa-{target_os}-{arch}-0.0.0.0-static-1"

@@ -562,6 +562,14 @@ class WorkspaceTest(unittest.TestCase):
         for name in ('content_shell.pak', 'devtools_resources.pak', 'icudtl.dat', 'snapshot_blob.bin',
                      'arupa_render', 'arupa_plugin_host', 'chrome_sandbox'):
             (out / name).write_bytes(b'fixture')
+        mivpn = self.root / 'dist/mivpn-sdk/hy2-20261022-coF8no'
+        mivpn.mkdir(parents=True)
+        (mivpn / 'mivpn-browser.dylib').write_bytes(
+            struct.pack('<IiiIIIII', 0xfeedfacf, 0x100000c, 0, 6, 0, 0, 0, 0))
+        (mivpn / 'libmivpn-browser.so').write_bytes(
+            b'\x7fELF\x02\x01\x01' + bytes(9) +
+            struct.pack('<HHIQQQIHHHHHH', 3, 62, 1, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0))
+        (mivpn / 'mivpn-browser.h').write_text('/* fixture */\n')
         (out / 'arupa-build.json').write_text('{"schema":2,"fixture":true}\n')
         for name in ('gen/extensions/strings/extensions_strings_en-US.pak',
                      'gen/extensions/extensions_renderer_generated_resources.pak',
@@ -724,6 +732,7 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual((delivery / 'docs/readme.txt').read_text(), 'desktop')
         self.assertTrue((delivery / '.hidden').is_file())
         self.assertTrue((delivery / 'kernel/plugin-runtime/runtime.js').is_file())
+        self.assertTrue((delivery / 'kernel/mivpn-sdk/hy2-20261022-coF8no/mivpn-browser.dylib').is_file())
         self.assertFalse((delivery / 'plugin-runtime').exists())
         for resource in (out / 'gen').rglob('*.pak'):
             relative = resource.relative_to(out)

@@ -545,51 +545,67 @@ def _run_facade_command(command, cwd):
 
 
 def refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props):
-    """按交付自带的门面源码现场重建 dotnet/ArupaKernel.dll，返回它（或 None）。
+    """按交付自带的门面源码重建 ArupaKernel.dll，返回稳定副本（或 None）。
 
     交付里的门面 DLL 有两个会咬人的状态，都会让宿主编译撞 CS0117/CS1061/CS0246：
       · 比它旁边的源码旧 —— 内核仓改了 package/desktop/dotnet/*.cs 却没重编就出包；
       · 被出包/外部进程还原成 ref 程序集（~4KB，只有签名）。
 
+    内核交付已经由 SHA256SUMS.txt 封存，消费方不得就地补写 DLL/摘要。这里先把
+    dotnet 源码和摘要所需的内核上下文复制到临时目录，再运行 kernel_facade.ensure，
+    最后只把验证过的 DLL 同步到 PC 仓的稳定缓存。这样重建门面不会污染交付清单。
+
     判"要不要重建"交给 scripts/kernel_facade：按**源码内容摘要**（侧车
-    .facade-source.sha256），不按 mtime —— 交付是 cp -R 搬的，mtime 恒等于打包
-    时刻，"mtime 比源码新"在交付里必然成立，按它判断等于永远不重建。
-    构建命令也由它给（🔴 绝不能 `-o <门面工程自己的目录>`：SDK 的
-    DefaultItemExcludes 会把 .cs 全排除，编出 4KB 空程序集且退出码为 0）。
+    .facade-source.sha256），不按 mtime。构建命令也由它给（绝不能 `-o
+    <门面工程自己的目录>`：SDK 会把 .cs 全排除，编出 4KB 空程序集）。
     """
-    d = kernel / 'dotnet'
-    top = d / kernel_facade.ASSEMBLY_NAME
+    source = kernel / 'dotnet'
     # PC 仓内的稳定副本与交付顶层必须同一份：Directory.Build.targets 的回落告警就是这么要求的。
     stable = repo / 'build' / 'kernel-facade' / kernel_facade.ASSEMBLY_NAME
 
     def sync_stable(path):
         if not path or not kernel_facade.facade_ok(path):
-            return
+            return None
         try:
             stable.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, stable)
+            return stable
         except OSError as error:
             F.log(f'稳定副本同步失败（不影响本次构建）: {stable}: {error}')
+        return None
 
-    result = kernel_facade.ensure(
-        d, dotnet, cfg=cfg, arch=arch, extra_props=restore_props,
-        runner=_run_facade_command, cwd=repo, dry_run=F.DRY_RUN,
-        # PC 编译要的就是这份门面：重建失败也不能把它删掉（真编不了会由
-        # VerifyArupaKernelAssembly / 编译错误暴露，比"文件凭空消失"好定位）。
-        drop_on_failure=False)
-    if result.state == 'current':
-        F.log(f'交付门面与源码一致（{top.stat().st_size}B）: {top}')
-    elif result.state == 'rebuilt':
-        F.log(f'交付门面重建完成: {result.path}（{top.stat().st_size}B）'
-              + (f' —— {result.detail}' if result.detail else ''))
-    else:
-        F.log(f'交付门面未重建（{result.text}）—— 沿用交付自带门面')
-    if result.path is not None:
-        sync_stable(result.path)
-    elif top.is_file():
-        sync_stable(top)
+    if F.DRY_RUN:
+        F.log(f'(dry-run) 在临时副本重建交付门面: {source}')
+        check_managed_facade_abi(kernel)
+        return stable if kernel_facade.facade_ok(stable) else None
+
+    with tempfile.TemporaryDirectory(prefix='arupa-facade-') as temporary:
+        staged_root = Path(temporary) / 'delivery'
+        staged = staged_root / 'dotnet'
+        shutil.copytree(source, staged)
+        for relative in kernel_facade.KERNEL_CONTEXT_FILES:
+            original = kernel / relative
+            if original.is_file():
+                target = staged_root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(original, target)
+
+        top = staged / kernel_facade.ASSEMBLY_NAME
+        result = kernel_facade.ensure(
+            staged, dotnet, cfg=cfg, arch=arch, extra_props=restore_props,
+            runner=_run_facade_command, cwd=repo, dry_run=False,
+            drop_on_failure=False)
+        if result.state == 'current':
+            F.log(f'临时门面与源码一致（{top.stat().st_size}B）')
+        elif result.state == 'rebuilt':
+            F.log(f'临时门面重建完成（{top.stat().st_size}B）'
+                  + (f' —— {result.detail}' if result.detail else ''))
+        else:
+            F.log(f'临时门面未重建（{result.text}）')
+        facade = sync_stable(result.path if result.path is not None else top)
+
     check_managed_facade_abi(kernel)
-    return top if top.is_file() else None
+    return facade
 
 
 def check_managed_facade_abi(kernel):
@@ -666,7 +682,10 @@ def desktop_build(root, args, target_os, arch, version, output):
     facade = refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props)
     props = [f'-p:ArupaDeliveryRoot={kernel}', f'-p:ArupaSdkDir={kernel}',
              f'-p:Platform={arch}', '-p:UseSharedCompilation=false', *restore_props]
-    if target_os != 'mac' and not (facade and facade.is_file() and facade.stat().st_size >= MIN_FACADE_BYTES):
+    if (target_os != 'mac' and facade and facade.is_file() and
+            facade.stat().st_size >= MIN_FACADE_BYTES):
+        props.append(f'-p:ArupaKernelAssembly={facade}')
+    elif target_os != 'mac':
         # 现场重建都拿不到完整门面（交付件缺门面源码/工程）：改用 PC 仓内的稳定副本，否则宿主满屏
         # CS0246 "未能找到 Arupa/ArupaWebView/ArupaKernel"。
         stable = repo / 'build' / 'kernel-facade' / 'ArupaKernel.dll'

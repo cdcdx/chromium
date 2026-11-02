@@ -25,21 +25,40 @@ function Assert-MivpnProbePayload {
     $pe = $null
     $found = $false
     try {
-        Add-Type -AssemblyName System.Reflection.Metadata -ErrorAction Stop
-        $stream = [IO.File]::OpenRead($assemblyPath)
-        $pe = [System.Reflection.PortableExecutable.PEReader]::new($stream)
-        $metadata = [System.Reflection.Metadata.PEReaderExtensions]::GetMetadataReader($pe)
-        foreach ($handle in $metadata.TypeDefinitions) {
-            $type = $metadata.GetTypeDefinition($handle)
-            if ($metadata.GetString($type.Namespace) -ne 'NomadBrowser.Avalonia' -or
-                $metadata.GetString($type.Name) -ne 'NativeMivpnProbeProfile') { continue }
-            foreach ($methodHandle in $type.GetMethods()) {
-                if ($metadata.GetString($metadata.GetMethodDefinition($methodHandle).Name) -eq 'Prepare') {
-                    $found = $true
-                    break
+        try {
+            Add-Type -AssemblyName System.Reflection.Metadata -ErrorAction Stop
+        }
+        catch {
+            # Windows PowerShell 5 does not ship System.Reflection.Metadata.
+            # Fall back to the Windows SDK metadata disassembler; it inspects
+            # the sealed assembly without loading or executing target code.
+            $windowsSdk = Join-Path ${env:ProgramFiles(x86)} 'Microsoft SDKs\Windows'
+            $ildasm = Get-ChildItem -LiteralPath $windowsSdk -Filter ildasm.exe -File -Recurse -ErrorAction Stop |
+                Sort-Object @{ Expression = { $_.FullName -match '[\\/]x64[\\/]' }; Descending = $true },
+                    @{ Expression = 'FullName'; Descending = $true } |
+                Select-Object -First 1
+            if (-not $ildasm) { throw }
+            $metadataText = @(& $ildasm.FullName /text /nobar $assemblyPath 2>$null)
+            if ($LASTEXITCODE -ne 0) { throw }
+            $found = [bool]($metadataText -match '^\.class .*NomadBrowser\.Avalonia\.NativeMivpnProbeProfile$') -and
+                [bool]($metadataText -match '^\s+Prepare\(string\[\] args\) cil managed$')
+        }
+        if (-not $found) {
+            $stream = [IO.File]::OpenRead($assemblyPath)
+            $pe = [System.Reflection.PortableExecutable.PEReader]::new($stream)
+            $metadata = [System.Reflection.Metadata.PEReaderExtensions]::GetMetadataReader($pe)
+            foreach ($handle in $metadata.TypeDefinitions) {
+                $type = $metadata.GetTypeDefinition($handle)
+                if ($metadata.GetString($type.Namespace) -ne 'NomadBrowser.Avalonia' -or
+                    $metadata.GetString($type.Name) -ne 'NativeMivpnProbeProfile') { continue }
+                foreach ($methodHandle in $type.GetMethods()) {
+                    if ($metadata.GetString($metadata.GetMethodDefinition($methodHandle).Name) -eq 'Prepare') {
+                        $found = $true
+                        break
+                    }
                 }
+                break
             }
-            break
         }
     }
     catch {

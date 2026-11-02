@@ -1,0 +1,16 @@
+# Keep repository scripts and configuration byte-identical across macOS,
+# Linux and Windows even when a Windows checkout uses core.autocrlf=true.
+*.ps1 text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+
+# Do not run line-ending conversion on packaged artifacts.
+*.zip binary
+*.crx binary
+*.dll binary
+*.dylib binary
+*.so binary
+*.lib binary
+*.a binary
