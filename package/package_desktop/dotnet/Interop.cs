@@ -490,6 +490,10 @@ namespace Arupa
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         public static extern void arupa_kernel_rescan_extensions(IntPtr kernel);
 
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int arupa_kernel_unregister_extension(IntPtr kernel,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string extensionId);
+
         // 列出内核已经认识的扩展 (JSON 数组; caller arupa_free)。
         // 🔴 启停要的是 MV3 那个 32 字符 id, **不是目录名** —— 拿这个取权威 id。
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]

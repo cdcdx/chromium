@@ -1,3 +1,27 @@
+function Assert-MivpnProbePackage {
+    param(
+        [Parameter(Mandatory = $true)][string]$PluginZip,
+        [Parameter(Mandatory = $true)][string]$PublicKeyFile,
+        [string]$Python = 'python',
+        [string]$OpenSsl = ''
+    )
+    $verifier = Join-Path (Split-Path $PSScriptRoot -Parent) 'arupa_desktop\plugin\mivpn_resources\verify_mivpn_package.py'
+    $publicKey = (Resolve-Path -LiteralPath $PublicKeyFile).Path
+    $arguments = @($verifier, $PluginZip, '--public-key-file', $publicKey)
+    if ($OpenSsl) { $arguments += @('--openssl', $OpenSsl) }
+    $metadata = & $Python @arguments
+    if ($LASTEXITCODE -ne 0) { throw 'MiVPN probe refuses an unsigned, untrusted or modified package.' }
+    $verified = ($metadata -join "`n") | ConvertFrom-Json
+    if ($verified.extensionId -ne 'objojdkhlcekcnhaeoebojmffolmafll' -or
+        $verified.packageDigest -notmatch '^[0-9a-f]{64}$' -or
+        $verified.keyId -notmatch '^[0-9a-f]{32}$') {
+        throw 'MiVPN package verifier did not return authenticated package metadata.'
+    }
+    # This preflight permits the expanded package shape. Actual loading still
+    # requires the main-image kernel's compiled trust roots and immutable copy.
+    return $verified
+}
+
 function Assert-MivpnProbePayload {
     param([Parameter(Mandatory = $true)][string]$PayloadRoot)
 

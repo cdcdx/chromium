@@ -23,6 +23,20 @@ VERSION = '1.2.3.4'
 
 
 class NomadTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.signing_temporary = tempfile.TemporaryDirectory(prefix='nomad-mivpn-key-')
+        cls.addClassCleanup(cls.signing_temporary.cleanup)
+        tools = Path(nomad.__file__).resolve().parents[1] / 'arupa_desktop/plugin/mivpn_resources'
+        sys.path.insert(0, str(tools))
+        import mivpn_package
+        cls.signing_binary = mivpn_package.openssl_binary()
+        cls.signing_key = Path(cls.signing_temporary.name).resolve() / 'private.pem'
+        cls.signing_public = cls.signing_key.with_name('public.pem')
+        mivpn_package.openssl_run(cls.signing_binary, ['genpkey', '-algorithm', 'ED25519', '-out', cls.signing_key])
+        mivpn_package.openssl_run(cls.signing_binary, ['pkey', '-in', cls.signing_key, '-pubout', '-out', cls.signing_public])
+        cls.mivpn_release = json.loads((tools / 'product/manifest.json').read_text())['version'] + '-r1'
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory(prefix='nomad test ')
         self.addCleanup(temp.cleanup)
@@ -34,6 +48,11 @@ class NomadTest(unittest.TestCase):
             self.addCleanup(setting.stop)
         self.args = build.build_parser().parse_args(['nomad_desktop', '--ver', VERSION, '--no-web'])
         self.args.dist_dir = self.root / 'dist'
+        setting = patch.dict(os.environ, {'MIVPN_SIGNING_KEY_FILE': str(self.signing_key),
+                                        'MIVPN_SIGNED_PACKAGE': '', 'MIVPN_PLUGIN_REVISION': 'r1',
+                                        'MIVPN_OPENSSL': self.signing_binary})
+        setting.start()
+        self.addCleanup(setting.stop)
 
     def quiet(self, fn, *args):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -42,20 +61,21 @@ class NomadTest(unittest.TestCase):
     def test_mivpn_three_platform_packages_are_one_canonical_artifact(self):
         source = Path(nomad.__file__).resolve().parents[1]
         sha256 = self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
-        names = [f'MiVPN-Plugin-{nomad.MIVPN_PLUGIN_RELEASE}-{platform}.zip'
+        names = [f'MiVPN-Plugin-{self.mivpn_release}-{platform}.zip'
                  for platform in nomad.MIVPN_PLUGIN_PLATFORMS]
         payloads = [(self.args.dist_dir / name).read_bytes() for name in names]
         self.assertTrue(payloads[0])
         self.assertTrue(all(payload == payloads[0] for payload in payloads))
         self.assertEqual(hashlib.sha256(payloads[0]).hexdigest(), sha256)
         with zipfile.ZipFile(io.BytesIO(payloads[0])) as archive:
-            self.assertEqual(archive.namelist(), [
+            self.assertEqual(sorted(archive.namelist()), sorted([
                 'manifest.json', 'background.js', 'popup.html',
-                'assets/popup.css', 'assets/popup.js', 'offline-nodes.json'])
+                'assets/popup.css', 'assets/popup.js', 'offline-nodes.json',
+                'META-INF/mivpn-package.json', 'META-INF/mivpn-package.sig']))
             self.assertTrue(all(b'\r\n' not in archive.read(name)
-                                for name in archive.namelist()))
+                                for name in archive.namelist() if not name.endswith('.sig')))
         sums = (self.args.dist_dir /
-                f'MiVPN-Plugin-{nomad.MIVPN_PLUGIN_RELEASE}-SHA256SUMS.txt').read_text()
+                f'MiVPN-Plugin-{self.mivpn_release}-SHA256SUMS.txt').read_text()
         self.assertEqual(sums, ''.join(f'{sha256}  {name}\n' for name in names))
 
     def test_linux_sandbox_installer_is_fail_closed(self):
@@ -81,7 +101,7 @@ class NomadTest(unittest.TestCase):
     def test_mivpn_changed_package_is_replaced_atomically(self):
         source = Path(nomad.__file__).resolve().parents[1]
         self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
-        target = self.args.dist_dir / f'MiVPN-Plugin-{nomad.MIVPN_PLUGIN_RELEASE}-mac.zip'
+        target = self.args.dist_dir / f'MiVPN-Plugin-{self.mivpn_release}-mac.zip'
         expected = target.read_bytes()
         target.write_bytes(b'old package')
         with patch.object(Path, 'replace', autospec=True, side_effect=Path.replace) as replace, \
@@ -98,6 +118,24 @@ class NomadTest(unittest.TestCase):
         self.assertEqual({call.args[0] for call in inherit.call_args_list},
                          set(self.args.dist_dir.resolve().iterdir()))
         self.assertEqual(inherit.call_count, 4)
+
+    def test_mivpn_missing_signing_configuration_rejects_without_publishing(self):
+        source = Path(nomad.__file__).resolve().parents[1]
+        with patch.dict(os.environ, {'MIVPN_SIGNING_KEY_FILE': '', 'MIVPN_SIGNED_PACKAGE': ''}):
+            with self.assertRaisesRegex(RuntimeError, '拒绝生成未签名插件'):
+                self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
+        self.assertFalse(self.args.dist_dir.exists())
+
+    def test_mivpn_presigned_package_verified_and_reused_without_private_key(self):
+        source = Path(nomad.__file__).resolve().parents[1]
+        expected = self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
+        signed = self.args.dist_dir / f'MiVPN-Plugin-{self.mivpn_release}-mac.zip'
+        other = self.root / 'public-only'
+        with patch.dict(os.environ, {'MIVPN_SIGNING_KEY_FILE': '', 'MIVPN_SIGNED_PACKAGE': str(signed),
+                                    'MIVPN_SIGNING_PUBLIC_KEY_FILE': str(self.signing_public)}):
+            actual = self.quiet(nomad.package_mivpn_plugins, source, other)
+        self.assertEqual(actual, expected)
+        self.assertEqual((other / signed.name).read_bytes(), signed.read_bytes())
 
     def test_published_permissions_only_enable_inheritance_on_windows(self):
         target = self.root / 'published output'

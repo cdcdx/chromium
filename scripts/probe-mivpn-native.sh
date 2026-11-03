@@ -4,6 +4,7 @@ set -euo pipefail
 payload=''
 probe=''
 plugin=''
+public_key=''
 egress=''
 timeout_seconds=420
 verify_connections=0
@@ -12,6 +13,7 @@ while (($#)); do
     --payload-root) payload=$2; shift 2 ;;
     --probe-root) probe=$2; shift 2 ;;
     --plugin-zip) plugin=$2; shift 2 ;;
+    --public-key-file) public_key=$2; shift 2 ;;
     --egress-url) egress=$2; shift 2 ;;
     --timeout-seconds) timeout_seconds=$2; shift 2 ;;
     --verify-connections) verify_connections=1; shift ;;
@@ -19,12 +21,14 @@ while (($#)); do
   esac
 done
 
-[[ -d "$payload" && -n "$probe" && -f "$plugin" ]] || {
-  echo 'Usage: probe-mivpn-native.sh --payload-root DIR --probe-root NEW_DIR --plugin-zip ZIP [--verify-connections --egress-url HTTPS_URL]' >&2
+[[ -d "$payload" && -n "$probe" && -f "$plugin" && -f "$public_key" ]] || {
+  echo 'Usage: probe-mivpn-native.sh --payload-root DIR --probe-root NEW_DIR --plugin-zip ZIP --public-key-file PUBLIC_PEM [--verify-connections --egress-url HTTPS_URL]' >&2
   exit 2
 }
 payload=$(cd "$payload" && pwd -P)
 plugin=$(cd "$(dirname "$plugin")" && printf '%s/%s' "$PWD" "$(basename "$plugin")")
+public_key=$(cd "$(dirname "$public_key")" && printf '%s/%s' "$PWD" "$(basename "$public_key")")
+package_tools=$(cd "$(dirname "${BASH_SOURCE[0]}")/../arupa_desktop/plugin/mivpn_resources" && pwd -P)
 [[ ! -e "$probe" ]] || { echo 'Probe root must be a new disposable directory.' >&2; exit 2; }
 probe_parent=$(cd "$(dirname "$probe")" && pwd -P)
 probe="$probe_parent/$(basename "$probe")"
@@ -45,19 +49,27 @@ else
 fi
 [[ -x "$executable" && -d "$arupa" ]] || { echo 'Debug executable or Arupa delivery is missing.' >&2; exit 2; }
 
-python3 - "$payload" "$plugin" "$egress" "$verify_connections" <<'PY'
+python3 - "$payload" "$plugin" "$egress" "$verify_connections" "$public_key" "$probe" "$package_tools" <<'PY'
 import ipaddress, json, pathlib, sys, urllib.parse, zipfile
 payload, plugin, endpoint, verify = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4] == '1'
+public_key, probe = pathlib.Path(sys.argv[5]), pathlib.Path(sys.argv[6])
+sys.path.insert(0, sys.argv[7])
+from mivpn_package import (COMPONENT_ID, PackageError, openssl_binary,
+                           public_key_bytes, read_zip, verify_resources)
 manifests = list(payload.glob('build-manifest.json'))
 if manifests:
     identity = json.loads(manifests[0].read_text())['identity']
     if identity.get('project') != 'nomad_desktop' or identity.get('variant') != 'debug':
         raise SystemExit('MiVPN probe requires a sealed Debug desktop delivery.')
-expected = {'manifest.json','background.js','popup.html','assets/popup.css','assets/popup.js','offline-nodes.json'}
-with zipfile.ZipFile(plugin) as archive:
-    names = {row.filename for row in archive.infolist() if not row.is_dir()}
-    if names != expected or any(row.filename.startswith('/') or '..' in pathlib.PurePosixPath(row.filename).parts for row in archive.infolist()):
-        raise SystemExit('MiVPN product ZIP contract rejected.')
+try:
+    # Extract exactly the bounded resource snapshot authenticated here. Do not
+    # reopen the ZIP after verification; native loading independently verifies
+    # it against the kernel's own compiled trust roots.
+    resources = read_zip(plugin)
+    binary = openssl_binary()
+    package = verify_resources(resources, public_key_bytes(public_key, binary), binary)
+except (OSError, PackageError, zipfile.BadZipFile) as error:
+    raise SystemExit(f'MiVPN signed probe package rejected: {error}')
 if verify:
     parsed = urllib.parse.urlsplit(endpoint)
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
@@ -69,11 +81,16 @@ if verify:
         if not address.is_global: raise SystemExit('Private egress endpoint rejected.')
     except ValueError:
         pass
+probe.mkdir(mode=0o700)
+(probe / '.nomad-mivpn-probe').write_text('Disposable MiVPN native launch probe.\n')
+installed = probe / 'extensions' / COMPONENT_ID
+for name, raw in resources.items():
+    target = installed / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(raw)
+print(json.dumps(package, sort_keys=True))
 PY
 
-mkdir -p "$probe/extensions/objojdkhlcekcnhaeoebojmffolmafll"
-printf '%s\n' 'Disposable MiVPN native launch probe.' > "$probe/.nomad-mivpn-probe"
-python3 -m zipfile -e "$plugin" "$probe/extensions/objojdkhlcekcnhaeoebojmffolmafll"
 output="$probe/checks.json"
 
 export NOMAD_MIVPN_TEST=1

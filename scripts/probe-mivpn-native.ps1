@@ -2,6 +2,9 @@ param(
     [Parameter(Mandatory = $true)][string]$PayloadRoot,
     [Parameter(Mandatory = $true)][string]$ProbeRoot,
     [Parameter(Mandatory = $true)][string]$PluginZip,
+    [Parameter(Mandatory = $true)][string]$PublicKeyFile,
+    [string]$Python = 'python',
+    [string]$OpenSsl = '',
     [int]$TimeoutSeconds = 180,
     [switch]$VerifyDefaultSandbox,
     [switch]$VerifyConnections,
@@ -25,6 +28,8 @@ $executable = Join-Path $payload 'NomadBrowser.exe'
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'Native NomadBrowser.exe is required.' }
 . (Join-Path $PSScriptRoot 'mivpn_probe_guard.ps1')
 Assert-MivpnProbePayload -PayloadRoot $payload
+$signedPackage = Assert-MivpnProbePackage -PluginZip $archive -PublicKeyFile $PublicKeyFile `
+    -Python $Python -OpenSsl $OpenSsl
 if (Test-Path -LiteralPath $probe) { throw 'ProbeRoot must be a new disposable directory.' }
 $normalProfile = Join-Path $env:LOCALAPPDATA 'NomadBrowser.Avalonia'
 if ($probe.StartsWith($normalProfile, [StringComparison]::OrdinalIgnoreCase)) { throw 'The normal user profile cannot be used.' }
@@ -90,6 +95,7 @@ try {
         sdkApiVersion = $(if ($apiV2) { 2 } else { $null })
         sandboxConfiguration = $(if ($VerifyDefaultSandbox) { 'main_image_default' } else { 'explicit_enabled' })
         profileMode = 'marked_regular_profile'
+        signedPackage = $signedPackage
         connectionsRequested = [bool]$VerifyConnections
         connectionsVerified = $(if ($VerifyConnections) { $connectionsVerified } else { $null })
     }

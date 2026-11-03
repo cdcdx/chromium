@@ -114,7 +114,8 @@ class MivpnProbeGuardTests(unittest.TestCase):
             pass
         result = subprocess.run([PWSH, "-NoProfile", "-File", str(ROOT / "scripts/probe-mivpn-native.ps1"),
                                  "-PayloadRoot", str(payload), "-ProbeRoot", str(profile),
-                                 "-PluginZip", str(archive)], capture_output=True, text=True, timeout=30)
+                                 "-PluginZip", str(archive), "-PublicKeyFile", str(self.work / 'unused.pem')],
+                                capture_output=True, text=True, timeout=30)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(profile.exists(), result.stdout + result.stderr)
 
@@ -129,7 +130,8 @@ class MivpnProbeGuardTests(unittest.TestCase):
             with self.subTest(endpoint=endpoint):
                 command = [PWSH, "-NoProfile", "-File", str(ROOT / "scripts/probe-mivpn-native.ps1"),
                            "-PayloadRoot", str(payload), "-ProbeRoot", str(profile),
-                           "-PluginZip", str(archive), "-VerifyConnections"]
+                           "-PluginZip", str(archive), "-PublicKeyFile", str(self.work / 'unused.pem'),
+                           "-VerifyConnections"]
                 if endpoint:
                     command.extend(["-EgressUrl", endpoint])
                 result = subprocess.run(command, capture_output=True, text=True, timeout=30)

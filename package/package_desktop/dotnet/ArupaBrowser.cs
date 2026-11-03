@@ -478,6 +478,18 @@ namespace Arupa
 
     public sealed partial class ArupaKernel : IDisposable
     {
+        [DllImport(Interop.Dll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr arupa_kernel_validate_mivpn_package(
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string root);
+
+        /// <summary>Native signed package preflight (ABI 1.57). Call on a background thread; load verifies again.</summary>
+        public static string? ValidateMivpnPackage(string root)
+        {
+            try { return Interop.TakeOwned(arupa_kernel_validate_mivpn_package(root)); }
+            catch (EntryPointNotFoundException) { return null; }
+            catch (DllNotFoundException) { return null; }
+        }
+
         private readonly InterceptCallbackBridge _backgroundBridge = new();
         // V3 回调只拿一个不透明请求指针，V2 拿 8 个展开参数：两种委托没有公共类型，
         // 所以按 Delegate 存（2026-10-12：批 11 的 wrapper 里两支都活着，而字段声明成 V2 → 编不过）。
@@ -946,6 +958,16 @@ namespace Arupa
         {
             try { Interop.arupa_kernel_rescan_extensions(_handle); }
             catch (EntryPointNotFoundException) { /* 旧 dll (< MINOR 12): 只能等下一个 renderer */ }
+        }
+
+        /// <summary>Waits for authoritative native unregister, including renderer admission and scan-cache invalidation.</summary>
+        public void UnregisterExtension(string extensionId)
+        {
+            int result;
+            try { result = Interop.arupa_kernel_unregister_extension(_handle, extensionId); }
+            catch (EntryPointNotFoundException error)
+            { throw new NotSupportedException("extension_unregister_unavailable", error); }
+            if (result != 0) throw new InvalidOperationException("extension_unregister_failed_" + result);
         }
 
         /// <summary>一个扩展的 background service worker 处在什么状态 (ABI MINOR 13, FB-P090)。</summary>
