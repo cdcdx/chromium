@@ -26,6 +26,10 @@ import source_provenance
 import toolchains
 
 
+MIVPN_PLUGIN_RELEASE = '0.0.11-r12'
+MIVPN_PLUGIN_PLATFORMS = ('mac', 'linux', 'win')
+
+
 def prepare_dotnet(args, repo, project=None):
     executable = args.dotnet or toolchains.dotnet_executable(F.load_config())
     executable = os.path.expanduser(executable)
@@ -675,25 +679,8 @@ def desktop_build(root, args, target_os, arch, version, output):
         os.environ.setdefault('MSBUILDDISABLENODEREUSE', '1')
         os.environ.setdefault('DOTNET_CLI_USE_MSBUILD_SERVER', '0')
     dotnet = prepare_dotnet(args, repo, project)
-    # 顺序要紧：先把交付自带的门面按源码现场重建，再决定 props 引用哪一份门面。
-    # 反过来的话，引用的还是那份「旧/空」门面 —— 表现就是一堆 CS0117/CS1061/CS0246。
-    # mac 也走这一步：KernelHost 编的是交付里的门面**源码**，但交付里那份 DLL 同样
-    # 必须与源码一致（Windows 宿主按 HintPath 直接引它，出包后没人再管就烂在包里）。
-    facade = refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props)
     props = [f'-p:ArupaDeliveryRoot={kernel}', f'-p:ArupaSdkDir={kernel}',
              f'-p:Platform={arch}', '-p:UseSharedCompilation=false', *restore_props]
-    if (target_os != 'mac' and facade and facade.is_file() and
-            facade.stat().st_size >= MIN_FACADE_BYTES):
-        props.append(f'-p:ArupaKernelAssembly={facade}')
-    elif target_os != 'mac':
-        # 现场重建都拿不到完整门面（交付件缺门面源码/工程）：改用 PC 仓内的稳定副本，否则宿主满屏
-        # CS0246 "未能找到 Arupa/ArupaWebView/ArupaKernel"。
-        stable = repo / 'build' / 'kernel-facade' / 'ArupaKernel.dll'
-        if stable.is_file() and stable.stat().st_size >= MIN_FACADE_BYTES:
-            F.log(f'交付顶层门面不可用 —— 引用回落稳定副本: {stable}')
-            props.append(f'-p:ArupaKernelAssembly={stable}')
-        else:
-            F.log('交付顶层门面不可用，PC 仓也没有稳定副本 —— 交由 MSBuild 自行回落')
     if target_os == 'mac':
         props += ['-p:BuildMac=true', f'-p:MacRuntimeIdentifier={rid}']
         # 签名门禁（NomadBrowser.Avalonia.Mac/build/mac-bundle.targets 的
@@ -709,10 +696,28 @@ def desktop_build(root, args, target_os, arch, version, output):
         developer_dir = F.cget(F.load_config(), 'nomad_developer_dir')
         if developer_dir:
             os.environ['DEVELOPER_DIR'] = developer_dir
-    if target_os == 'mac':
-        # Run the browser's authoritative delivery contract before WebUI/publish.
+        # Validate the immutable delivery contract before trying to copy or
+        # rebuild its managed facade. An incomplete delivery must fail at the
+        # contract gate, not later as an incidental missing-directory error.
         F.run([dotnet, 'msbuild', project, '-t:ValidateArupaDelivery',
                f'-p:RuntimeIdentifier={rid}', *props], repo)
+    # 顺序要紧：先把交付自带的门面按源码现场重建，再决定 props 引用哪一份门面。
+    # 反过来的话，引用的还是那份「旧/空」门面 —— 表现就是一堆 CS0117/CS1061/CS0246。
+    # mac 也走这一步：KernelHost 编的是交付里的门面**源码**，但交付里那份 DLL 同样
+    # 必须与源码一致（Windows 宿主按 HintPath 直接引它，出包后没人再管就烂在包里）。
+    facade = refresh_kernel_facade(dotnet, kernel, repo, cfg, arch, restore_props)
+    if (target_os != 'mac' and facade and facade.is_file() and
+            facade.stat().st_size >= MIN_FACADE_BYTES):
+        props.append(f'-p:ArupaKernelAssembly={facade}')
+    elif target_os != 'mac':
+        # 现场重建都拿不到完整门面（交付件缺门面源码/工程）：改用 PC 仓内的稳定副本，否则宿主满屏
+        # CS0246 "未能找到 Arupa/ArupaWebView/ArupaKernel"。
+        stable = repo / 'build' / 'kernel-facade' / 'ArupaKernel.dll'
+        if stable.is_file() and stable.stat().st_size >= MIN_FACADE_BYTES:
+            F.log(f'交付顶层门面不可用 —— 引用回落稳定副本: {stable}')
+            props.append(f'-p:ArupaKernelAssembly={stable}')
+        else:
+            F.log('交付顶层门面不可用，PC 仓也没有稳定副本 —— 交由 MSBuild 自行回落')
     web = repo / 'NomadWebUI/nomadwebui'
     if not args.no_web:
         if not (web / 'package.json').is_file():
@@ -732,7 +737,9 @@ def desktop_build(root, args, target_os, arch, version, output):
     stage = output.parent / ('.' + output.name + '.publish') if F.DRY_RUN else Path(tempfile.mkdtemp(prefix='.publish-', dir=output.parent))
     try:
         bundle_root = stage / 'bundles'
-        publish_props = props + ([f'-p:MacDistRoot={bundle_root}', f'-p:LocalDebugOutputRoot={stage / "local"}'] if target_os == 'mac' else [])
+        publish_props = props + ([f'-p:MacDistRoot={bundle_root}',
+                                  f'-p:LocalDebugOutputRoot={stage / "local"}',
+                                  f'-p:MacConfiguration={cfg}'] if target_os == 'mac' else [])
         # Windows Debug 是日常联调产物，程序集数量多且 ABP/EF/Avalonia 冷启动会集中触发
         # 大量 JIT。发布 ReadyToRun 保留 Debug 配置与 PDB/诊断能力，只把热点 IL 预编译，
         # 避免用户先看到空壳后再等数秒容器扫描与首窗 XAML 编译。
@@ -932,6 +939,37 @@ def delivery_base(identity):
             f"{identity['version']}-{identity['variant']}")
 
 
+def package_mivpn_plugins(source_root, destination):
+    """Build all platform-labelled MiVPN packages from one canonical byte stream."""
+    source_root = Path(source_root).resolve()
+    destination = Path(destination).resolve()
+    generator = source_root / 'arupa_desktop/plugin/mivpn_resources/build_product_resources.py'
+    resources = source_root / 'arupa_desktop/plugin/mivpn_resources/product'
+    if not generator.is_file() or not resources.is_dir():
+        F.err('MiVPN 产品资源或确定性打包器缺失；拒绝发布不完整的三端插件包')
+    destination.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.mivpn-package-', dir=destination) as temporary:
+        canonical = Path(temporary) / 'canonical.zip'
+        F.run([sys.executable, generator, 'package', '--source', resources,
+               '--output', canonical])
+        raw = canonical.read_bytes()
+        sha256 = hashlib.sha256(raw).hexdigest()
+        names = []
+        for platform in MIVPN_PLUGIN_PLATFORMS:
+            name = f'MiVPN-Plugin-{MIVPN_PLUGIN_RELEASE}-{platform}.zip'
+            staged = Path(temporary) / name
+            staged.write_bytes(raw)
+            staged.replace(destination / name)
+            names.append(name)
+        sums = ''.join(f'{sha256}  {name}\n' for name in names)
+        sums_name = f'MiVPN-Plugin-{MIVPN_PLUGIN_RELEASE}-SHA256SUMS.txt'
+        staged_sums = Path(temporary) / sums_name
+        staged_sums.write_bytes(sums.encode('utf-8'))
+        staged_sums.replace(destination / sums_name)
+    F.log(f'MiVPN 三端插件包: {sha256} ({len(raw)} bytes)')
+    return sha256
+
+
 def package(args, output, identity, *, source_root=None):
     keep = max(0, args.keep)
     if F.DRY_RUN:
@@ -1004,6 +1042,10 @@ def package(args, output, identity, *, source_root=None):
                 raise
         # 只在本次打包成功后清理旧交付：失败时上一份仍留着可回退。
         deliveries.prune(destination, prefix, keep, number)
+        if identity.get('project') == 'nomad_desktop':
+            package_mivpn_plugins(
+                source_root if source_root is not None else output.parent.parent,
+                destination)
     finally:
         # 收尾清理是 best-effort：无论打包成败，清理失败都不应掩盖真实结果（受限环境会拦截批量删除/单文件 unlink；改名旁置即可，别在这里抛）。
         try:

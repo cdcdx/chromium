@@ -455,7 +455,10 @@ def write_generated(header: Path, generated: Path, check_only: bool = False) -> 
     if check_only:
         return False
     generated.parent.mkdir(parents=True, exist_ok=True)
-    generated.write_text(expected, encoding="utf-8", newline="\n")
+    # Path.write_text gained the newline parameter after the Python 3.9 that
+    # still ships with supported Xcode installations. `render` already emits
+    # canonical LF, so writing encoded bytes is deterministic on every host.
+    generated.write_bytes(expected.encode("utf-8"))
     log(f"已生成 {generated}（源: {header}）" if actual is None else f"已刷新 {generated}（源: {header}）")
     return True
 

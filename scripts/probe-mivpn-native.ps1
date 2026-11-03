@@ -59,8 +59,14 @@ try {
     while (-not $process.WaitForExit(1000)) {
         if ([DateTime]::UtcNow -gt $deadline) { throw 'MiVPN native launch probe timed out.' }
     }
+    # PowerShell 5 needs the parameterless wait to refresh redirected streams
+    # and ExitCode after the timed WaitForExit overload reports completion.
+    $process.WaitForExit()
     if (-not (Test-Path -LiteralPath $output -PathType Leaf)) { throw ('Probe did not produce checks.json; process exit=' + $process.ExitCode) }
-    $checks = @(Get-Content -LiteralPath $output -Raw | ConvertFrom-Json)
+    # Windows PowerShell 5 wraps a top-level JSON array as one object inside @().
+    # Send it through the pipeline once so every check is counted independently.
+    $parsedChecks = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json
+    $checks = @($parsedChecks | ForEach-Object { $_ })
     $checks | Format-Table name, pass, detail -Wrap
     $apiChecksPassed = $checks.Count -ge 5 -and @($checks | Where-Object { -not $_.pass }).Count -eq 0
     $productReport = $null

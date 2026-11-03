@@ -1,5 +1,6 @@
 """Browser adapter tests with local project/SDK fixtures; no external builds."""
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -37,6 +38,25 @@ class NomadTest(unittest.TestCase):
     def quiet(self, fn, *args):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return fn(*args)
+
+    def test_mivpn_three_platform_packages_are_one_canonical_artifact(self):
+        source = Path(nomad.__file__).resolve().parents[1]
+        sha256 = self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
+        names = [f'MiVPN-Plugin-{nomad.MIVPN_PLUGIN_RELEASE}-{platform}.zip'
+                 for platform in nomad.MIVPN_PLUGIN_PLATFORMS]
+        payloads = [(self.args.dist_dir / name).read_bytes() for name in names]
+        self.assertTrue(payloads[0])
+        self.assertTrue(all(payload == payloads[0] for payload in payloads))
+        self.assertEqual(hashlib.sha256(payloads[0]).hexdigest(), sha256)
+        with zipfile.ZipFile(io.BytesIO(payloads[0])) as archive:
+            self.assertEqual(archive.namelist(), [
+                'manifest.json', 'background.js', 'popup.html',
+                'assets/popup.css', 'assets/popup.js', 'offline-nodes.json'])
+            self.assertTrue(all(b'\r\n' not in archive.read(name)
+                                for name in archive.namelist()))
+        sums = (self.args.dist_dir /
+                f'MiVPN-Plugin-{nomad.MIVPN_PLUGIN_RELEASE}-SHA256SUMS.txt').read_text()
+        self.assertEqual(sums, ''.join(f'{sha256}  {name}\n' for name in names))
 
     def test_linux_sandbox_installer_is_fail_closed(self):
         script = nomad.LINUX_SANDBOX_INSTALLER
@@ -191,6 +211,8 @@ class NomadTest(unittest.TestCase):
                 main = next(cmd for cmd in commands if 'publish' in cmd)
                 self.assertIn(f'{"osx" if target_os == "mac" else target_os}-{arch}', main)
                 self.assertIn(f'-p:Platform={arch}', main)
+                if target_os == 'mac':
+                    self.assertIn('-p:MacConfiguration=Release', main)
                 if target_os == 'linux':
                     self.assertIn('-m:1', main)
                 else:
@@ -632,6 +654,7 @@ class NomadTest(unittest.TestCase):
         self.args.zip = True
         with patch.object(nomad, 'desktop_provenance',
                           side_effect=lambda root, *_: provenance if root == self.root else {}) as capture, \
+             patch.object(nomad, 'package_mivpn_plugins', return_value='fixture'), \
              contextlib.redirect_stdout(io.StringIO()):
             final = nomad.package(self.args, output, identity, source_root=self.root)
         capture.assert_called_once_with(self.root, self.args, 'win', 'x64', VERSION)
