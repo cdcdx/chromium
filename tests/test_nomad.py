@@ -65,6 +65,116 @@ class NomadTest(unittest.TestCase):
         self.assertIn('owner=$owner mode=$mode', script)
         self.assertNotIn('ARUPA_UNSAFE_DISABLE_SANDBOX=1', script)
 
+    def test_mivpn_identical_packages_reuse_files_without_replace_permission(self):
+        source = Path(nomad.__file__).resolve().parents[1]
+        expected = self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
+        files = sorted(self.args.dist_dir.iterdir())
+        before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in files}
+        with patch.object(Path, 'replace', side_effect=PermissionError('replacement denied')) as replace, \
+             patch.object(nomad, 'inherit_published_permissions') as inherit:
+            actual = self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
+        replace.assert_not_called()
+        inherit.assert_not_called()
+        self.assertEqual(actual, expected)
+        self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in files})
+
+    def test_mivpn_changed_package_is_replaced_atomically(self):
+        source = Path(nomad.__file__).resolve().parents[1]
+        self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
+        target = self.args.dist_dir / f'MiVPN-Plugin-{nomad.MIVPN_PLUGIN_RELEASE}-mac.zip'
+        expected = target.read_bytes()
+        target.write_bytes(b'old package')
+        with patch.object(Path, 'replace', autospec=True, side_effect=Path.replace) as replace, \
+             patch.object(nomad, 'inherit_published_permissions') as inherit:
+            self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
+        self.assertEqual(target.read_bytes(), expected)
+        self.assertEqual([call.args[1] for call in replace.call_args_list], [target.resolve()])
+        inherit.assert_called_once_with(target.resolve())
+
+    def test_new_mivpn_packages_publish_with_destination_permissions(self):
+        source = Path(nomad.__file__).resolve().parents[1]
+        with patch.object(nomad, 'inherit_published_permissions') as inherit:
+            self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
+        self.assertEqual({call.args[0] for call in inherit.call_args_list},
+                         set(self.args.dist_dir.resolve().iterdir()))
+        self.assertEqual(inherit.call_count, 4)
+
+    def test_published_permissions_only_enable_inheritance_on_windows(self):
+        target = self.root / 'published output'
+        for windows, dry_run in ((True, False), (False, False), (True, True)):
+            with self.subTest(windows=windows, dry_run=dry_run), \
+                 patch.object(fetch, 'IS_WIN', windows), patch.object(fetch, 'DRY_RUN', dry_run), \
+                 patch.object(fetch, 'run') as run:
+                nomad.inherit_published_permissions(target)
+                if windows and not dry_run:
+                    run.assert_called_once_with(['icacls', str(target), '/inheritance:e'])
+                else:
+                    run.assert_not_called()
+
+    def test_output_acl_failure_is_not_retried_as_a_failed_rename(self):
+        payload = self.root / 'payload'
+        payload.mkdir()
+        (payload / 'file').write_bytes(b'fixture')
+        output = self.root / 'output'
+        with patch.object(nomad, 'inherit_published_permissions', side_effect=OSError('ACL failed')), \
+             patch.object(nomad.os, 'rename', wraps=os.rename) as rename, \
+             patch.object(nomad.shutil, 'copytree') as copy:
+            with self.assertRaisesRegex(OSError, 'ACL failed'):
+                nomad.save_output(payload, output)
+        rename.assert_called_once()
+        copy.assert_not_called()
+        self.assertEqual((output / 'file').read_bytes(), b'fixture')
+
+    def test_output_copy_fallback_also_inherits_destination_permissions(self):
+        payload = self.root / 'payload'
+        payload.mkdir()
+        (payload / 'file').write_bytes(b'fixture')
+        output = self.root / 'output'
+        with patch.object(nomad.os, 'rename', side_effect=OSError('busy')), \
+             patch.object(nomad.time, 'sleep'), \
+             patch.object(nomad, 'inherit_published_permissions') as inherit:
+            nomad.save_output(payload, output)
+        inherit.assert_called_once_with(output)
+        self.assertEqual((output / 'file').read_bytes(), b'fixture')
+
+    def test_mivpn_changed_package_denied_preserves_old_file_and_reports_path(self):
+        self.args.dist_dir.mkdir()
+        target = self.args.dist_dir / 'plugin.zip'
+        target.write_bytes(b'old package')
+        with patch.object(Path, 'replace', side_effect=PermissionError('replacement denied')):
+            with self.assertRaisesRegex(RuntimeError, 'plugin.zip'):
+                self.quiet(nomad.publish_mivpn_artifact,
+                           self.args.dist_dir / 'staged.zip', target, b'new package')
+        self.assertEqual(target.read_bytes(), b'old package')
+
+    def test_mivpn_unreadable_existing_package_reports_path_without_replacing(self):
+        target = self.args.dist_dir / 'plugin.zip'
+        with patch.object(Path, 'read_bytes', side_effect=PermissionError('read denied')), \
+             patch.object(Path, 'replace') as replace:
+            with self.assertRaisesRegex(RuntimeError, 'plugin.zip'):
+                self.quiet(nomad.publish_mivpn_artifact,
+                           self.args.dist_dir / 'staged.zip', target, b'new package')
+        replace.assert_not_called()
+
+    def test_plugin_failure_does_not_prune_previous_browser_delivery(self):
+        identity = {'project': 'nomad_desktop', 'os': 'win', 'arch': 'x64',
+                    'version': VERSION, 'variant': 'release'}
+        output = self.root / 'out' / nomad.delivery_base(identity)
+        output.mkdir(parents=True)
+        (output / 'NomadBrowser.exe').write_bytes(b'fixture')
+        provenance = {'source': 'current', 'kernelDelivery': 'current'}
+        nomad.seal(output, identity, provenance)
+        previous = self.args.dist_dir / (nomad.delivery_base(identity) + '-1')
+        previous.mkdir(parents=True)
+        self.args.keep = 1
+        with patch.object(nomad, 'desktop_provenance', return_value=provenance), \
+             patch.object(nomad, 'package_mivpn_plugins', side_effect=RuntimeError('plugin denied')), \
+             patch.object(nomad.deliveries, 'prune') as prune:
+            with self.assertRaisesRegex(RuntimeError, 'plugin denied'):
+                self.quiet(nomad.package, self.args, output, identity)
+        prune.assert_not_called()
+        self.assertTrue(previous.is_dir())
+
     def pc_fixture(self, target_os):
         folder = {'win': 'NomadBrowser.Avalonia', 'linux': 'NomadBrowser.Avalonia.Linux', 'mac': 'NomadBrowser.Avalonia.Mac'}[target_os]
         repo = self.root / 'nomad_desktop'
@@ -167,6 +277,7 @@ class NomadTest(unittest.TestCase):
         output = self.root / 'output'
         with patch.object(nomad, 'prepare_dotnet', return_value='dotnet'), \
              patch.object(nomad, 'refresh_kernel_facade', return_value=facade), \
+             patch.object(nomad, 'inherit_published_permissions'), \
              patch.object(fetch, 'run', side_effect=fake_publish):
             self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION, output)
         self.assertEqual((output / 'NomadBrowser.exe').read_bytes(), native_binary)
@@ -301,7 +412,9 @@ class NomadTest(unittest.TestCase):
             apk.parent.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(apk, 'w') as archive:
                 archive.writestr(f'lib/{abi}/libarupakernel.so', b'fixture')
-        with patch.object(fetch, 'run', side_effect=fake_gradle), patch.object(nomad, 'prepare_android_sdk'):
+        with patch.object(fetch, 'run', side_effect=fake_gradle), \
+             patch.object(nomad, 'prepare_android_sdk'), \
+             patch.object(nomad, 'inherit_published_permissions'):
             self.quiet(nomad.run, self.root, self.args, 'nomad_android', 'android',
                        ('arm64', 'x64'), VERSION, {'build', 'package'})
         deliveries = sorted(self.args.dist_dir.iterdir())
@@ -655,9 +768,11 @@ class NomadTest(unittest.TestCase):
         with patch.object(nomad, 'desktop_provenance',
                           side_effect=lambda root, *_: provenance if root == self.root else {}) as capture, \
              patch.object(nomad, 'package_mivpn_plugins', return_value='fixture'), \
+             patch.object(nomad, 'inherit_published_permissions') as inherit, \
              contextlib.redirect_stdout(io.StringIO()):
             final = nomad.package(self.args, output, identity, source_root=self.root)
         capture.assert_called_once_with(self.root, self.args, 'win', 'x64', VERSION)
+        inherit.assert_called_once_with(final)
         self.assertTrue((final / 'NomadBrowser.exe').is_file())
         with zipfile.ZipFile(str(final) + '.zip') as archive:
             self.assertEqual(archive.read(final.name + '/NomadBrowser.exe'), b'isolated browser fixture')

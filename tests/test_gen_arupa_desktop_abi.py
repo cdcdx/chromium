@@ -10,6 +10,8 @@ C 头里有了，手写的 ArupaBrowser.cs 没跟上，出包又是 cp + 只覆�
   · 手工同步 wrapper 留下过 "ArupaBrowser copy.cs" → C# glob 到它就 CS0101/CS0111，要提前拦。
 """
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -18,6 +20,9 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import gen_arupa_desktop_abi as abi
+
+ROOT = Path(__file__).resolve().parents[1]
+DOTNET = shutil.which('dotnet')
 
 HEADER = """\
 #define ARUPA_KERNEL_ABI_MAJOR 1
@@ -236,6 +241,78 @@ class DeliveryParityTest(unittest.TestCase):
         self.write_wrapper(GENERATED_LAYOUT_WRAPPER)
         self.assertEqual(0, abi.main(['--stage', str(self.root), '--no-build']))
         self.assertEqual([], abi.parity_refusals(self.root))
+
+
+@unittest.skipUnless(DOTNET, '.NET SDK required for the production wrapper callback probe')
+class ProductionBrowserCommandTest(unittest.TestCase):
+    def test_packaged_wrapper_delivers_every_declared_browser_command(self):
+        """An enum alone is insufficient: the native callback must accept its values.
+
+        Device-mode bounds command 7 was present in the shipped enum but rejected
+        by the production wrapper's old callback range. Fake UI transports and the
+        separate Nomad managed wrapper bypassed that gate and missed the regression.
+        Compile the actual delivery sources and exercise their callback, without
+        creating a native WebView or loading the kernel.
+        """
+        with tempfile.TemporaryDirectory(prefix='arupa browser command probe ') as temporary:
+            work = Path(temporary)
+            source = ROOT / 'package/package_desktop/dotnet'
+            # An isolated copy keeps all build products outside the source/delivery.
+            for path in source.glob('*.cs'):
+                shutil.copyfile(path, work / path.name)
+            (work / 'NuGet.Config').write_text(
+                '<configuration><packageSources><clear /></packageSources></configuration>',
+                encoding='utf-8')
+            (work / 'Probe.csproj').write_text(
+                '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
+                '<OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>'
+                '<Nullable>enable</Nullable><AllowUnsafeBlocks>true</AllowUnsafeBlocks>'
+                '</PropertyGroup></Project>', encoding='utf-8')
+            (work / 'Program.cs').write_text(r'''
+using System;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using Arupa;
+
+var view = (ArupaWebView)RuntimeHelpers.GetUninitializedObject(typeof(ArupaWebView));
+GC.SuppressFinalize(view); // No native constructor ran, so native disposal is inapplicable.
+var callback = typeof(ArupaWebView).GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
+    .Single(method => method.IsDefined(typeof(CompilerGeneratedAttribute), false)
+        && method.ReturnType == typeof(int)
+        && method.GetParameters().Select(parameter => parameter.ParameterType)
+            .SequenceEqual(new[] { typeof(IntPtr), typeof(int) }));
+int Invoke(int command) => (int)callback.Invoke(view, new object[] { IntPtr.Zero, command })!;
+int observed = -1;
+Action<BrowserCommand> record = command => observed = (int)command;
+view.BrowserCommandRequested += record;
+foreach (var command in Enum.GetValues<BrowserCommand>())
+{
+    observed = -1;
+    if (Invoke((int)command) != 1 || observed != (int)command)
+        throw new Exception($"Production wrapper dropped {command} ({(int)command}).");
+}
+foreach (int command in new[] { -1, 0, Enum.GetValues<BrowserCommand>().Max(value => (int)value) + 1, int.MaxValue })
+{
+    observed = -1;
+    if (Invoke(command) != 0 || observed != -1)
+        throw new Exception($"Production wrapper accepted unknown command {command}.");
+}
+view.BrowserCommandRequested -= record;
+if (Invoke((int)BrowserCommand.DevToolsBoundsChanged) != 0)
+    throw new Exception("Callback accepted a command with no host listener.");
+view.BrowserCommandRequested += _ => throw new InvalidOperationException("host handler failure");
+if (Invoke((int)BrowserCommand.DevToolsBoundsChanged) != 0)
+    throw new Exception("Callback failed to contain a host handler exception.");
+Console.WriteLine("PASS production browser-command callbacks, including device-mode bounds");
+''', encoding='utf-8')
+            result = subprocess.run(
+                [DOTNET, 'run', '--project', str(work / 'Probe.csproj'),
+                 '--configuration', 'Release', '--no-launch-profile',
+                 '-p:UseSharedCompilation=false', '-nodeReuse:false', '-m:1'],
+                cwd=work, capture_output=True, text=True, timeout=120)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertIn('PASS production browser-command callbacks', result.stdout)
 
 
 if __name__ == '__main__':

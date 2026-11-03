@@ -6,8 +6,8 @@ import os
 import platform
 
 GIB = 1024 ** 3
-MEMORY_PER_JOB = 2 * GIB
-RESERVE_MINIMUM = 1.5 * GIB
+MEMORY_PER_JOB = 4 * GIB
+RESERVE_MINIMUM = 3 * GIB
 
 
 def physical_memory():

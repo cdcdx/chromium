@@ -889,6 +889,15 @@ def android_build(root, args, arch, output):
         save_output(payload, output)
 
 
+def inherit_published_permissions(path):
+    # Python's private tempfile DACL must not become the public output's DACL
+    # after rename. Inherit from the actual destination, preserving explicit
+    # rules and ownership; Windows propagates inherited rules to unprotected
+    # children. Do not reset ACLs recursively or change private staging.
+    if F.IS_WIN and not F.DRY_RUN:
+        F.run(['icacls', str(path), '/inheritance:e'])
+
+
 def save_output(payload, output):
     # Only replace previously generated output after a successful build.
     if output.exists():
@@ -904,10 +913,13 @@ def save_output(payload, output):
     for attempt in range(4):
         try:
             os.rename(payload, output)
-            return
         except OSError:
             time.sleep(0.5 * (attempt + 1))
+        else:
+            inherit_published_permissions(output)
+            return
     shutil.copytree(payload, output, symlinks=True)
+    inherit_published_permissions(output)
 
 
 def seal(output, identity, provenance=None):
@@ -939,6 +951,24 @@ def delivery_base(identity):
             f"{identity['version']}-{identity['variant']}")
 
 
+def publish_mivpn_artifact(staged, target, content):
+    """Reuse identical artifacts; replace changed bytes without truncating the old file."""
+    try:
+        try:
+            if target.read_bytes() == content:
+                F.log(f'MiVPN 复用未变化资源: {target.name}')
+                return
+        except FileNotFoundError:
+            pass
+        staged.write_bytes(content)
+        staged.replace(target)
+        inherit_published_permissions(target)
+    except PermissionError as error:
+        F.err(f'MiVPN 资源发布被拒绝: {target}\n'
+              f'请检查该文件及父目录的写入/删除权限和文件占用；'
+              f'若旧文件由提升权限的进程生成，请用同等权限的终端重试。原始错误: {error}')
+
+
 def package_mivpn_plugins(source_root, destination):
     """Build all platform-labelled MiVPN packages from one canonical byte stream."""
     source_root = Path(source_root).resolve()
@@ -958,14 +988,12 @@ def package_mivpn_plugins(source_root, destination):
         for platform in MIVPN_PLUGIN_PLATFORMS:
             name = f'MiVPN-Plugin-{MIVPN_PLUGIN_RELEASE}-{platform}.zip'
             staged = Path(temporary) / name
-            staged.write_bytes(raw)
-            staged.replace(destination / name)
+            publish_mivpn_artifact(staged, destination / name, raw)
             names.append(name)
         sums = ''.join(f'{sha256}  {name}\n' for name in names)
         sums_name = f'MiVPN-Plugin-{MIVPN_PLUGIN_RELEASE}-SHA256SUMS.txt'
         staged_sums = Path(temporary) / sums_name
-        staged_sums.write_bytes(sums.encode('utf-8'))
-        staged_sums.replace(destination / sums_name)
+        publish_mivpn_artifact(staged_sums, destination / sums_name, sums.encode('utf-8'))
     F.log(f'MiVPN 三端插件包: {sha256} ({len(raw)} bytes)')
     return sha256
 
@@ -1030,6 +1058,7 @@ def package(args, output, identity, *, source_root=None):
                 if attempt == 3:
                     raise
                 time.sleep(0.5 * (attempt + 1))
+        inherit_published_permissions(final)
         if args.zip:
             archive_path = Path(str(final) + '.zip')
             try:
@@ -1040,12 +1069,12 @@ def package(args, output, identity, *, source_root=None):
             except BaseException:
                 archive_path.unlink(missing_ok=True)
                 raise
-        # 只在本次打包成功后清理旧交付：失败时上一份仍留着可回退。
-        deliveries.prune(destination, prefix, keep, number)
         if identity.get('project') == 'nomad_desktop':
             package_mivpn_plugins(
                 source_root if source_root is not None else output.parent.parent,
                 destination)
+        # 插件也属于本次交付；全部成功后再清理，失败时上一份仍留着可回退。
+        deliveries.prune(destination, prefix, keep, number)
     finally:
         # 收尾清理是 best-effort：无论打包成败，清理失败都不应掩盖真实结果（受限环境会拦截批量删除/单文件 unlink；改名旁置即可，别在这里抛）。
         try:

@@ -148,6 +148,7 @@ VALUE_ALIASES = {
     ("BrowserCommand", "ARUPA_BROWSER_COMMAND_DEVTOOLS_BOTTOM"): "DevToolsBottom",
     ("BrowserCommand", "ARUPA_BROWSER_COMMAND_DEVTOOLS_LEFT"): "DevToolsLeft",
     ("BrowserCommand", "ARUPA_BROWSER_COMMAND_DEVTOOLS_UNDOCKED"): "DevToolsUndocked",
+    ("BrowserCommand", "ARUPA_BROWSER_COMMAND_DEVTOOLS_BOUNDS_CHANGED"): "DevToolsBoundsChanged",
 }
 
 _DEFINE_MAJOR = re.compile(r"^\s*#define\s+ARUPA_KERNEL_ABI_MAJOR\s+(\d+)\s*$", re.M)
