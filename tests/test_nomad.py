@@ -23,20 +23,6 @@ VERSION = '1.2.3.4'
 
 
 class NomadTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.signing_temporary = tempfile.TemporaryDirectory(prefix='nomad-mivpn-key-')
-        cls.addClassCleanup(cls.signing_temporary.cleanup)
-        tools = Path(nomad.__file__).resolve().parents[1] / 'arupa_desktop/plugin/mivpn_resources'
-        sys.path.insert(0, str(tools))
-        import mivpn_package
-        cls.signing_binary = mivpn_package.openssl_binary()
-        cls.signing_key = Path(cls.signing_temporary.name).resolve() / 'private.pem'
-        cls.signing_public = cls.signing_key.with_name('public.pem')
-        mivpn_package.openssl_run(cls.signing_binary, ['genpkey', '-algorithm', 'ED25519', '-out', cls.signing_key])
-        mivpn_package.openssl_run(cls.signing_binary, ['pkey', '-in', cls.signing_key, '-pubout', '-out', cls.signing_public])
-        cls.mivpn_release = json.loads((tools / 'product/manifest.json').read_text())['version'] + '-r1'
-
     def setUp(self):
         temp = tempfile.TemporaryDirectory(prefix='nomad test ')
         self.addCleanup(temp.cleanup)
@@ -48,35 +34,92 @@ class NomadTest(unittest.TestCase):
             self.addCleanup(setting.stop)
         self.args = build.build_parser().parse_args(['nomad_desktop', '--ver', VERSION, '--no-web'])
         self.args.dist_dir = self.root / 'dist'
-        setting = patch.dict(os.environ, {'MIVPN_SIGNING_KEY_FILE': str(self.signing_key),
-                                        'MIVPN_SIGNED_PACKAGE': '', 'MIVPN_PLUGIN_REVISION': 'r1',
-                                        'MIVPN_OPENSSL': self.signing_binary})
-        setting.start()
-        self.addCleanup(setting.stop)
 
-    def quiet(self, fn, *args):
+    def quiet(self, fn, *args, **kwargs):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            return fn(*args)
+            return fn(*args, **kwargs)
 
-    def test_mivpn_three_platform_packages_are_one_canonical_artifact(self):
-        source = Path(nomad.__file__).resolve().parents[1]
-        sha256 = self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
-        names = [f'MiVPN-Plugin-{self.mivpn_release}-{platform}.zip'
-                 for platform in nomad.MIVPN_PLUGIN_PLATFORMS]
-        payloads = [(self.args.dist_dir / name).read_bytes() for name in names]
-        self.assertTrue(payloads[0])
-        self.assertTrue(all(payload == payloads[0] for payload in payloads))
-        self.assertEqual(hashlib.sha256(payloads[0]).hexdigest(), sha256)
-        with zipfile.ZipFile(io.BytesIO(payloads[0])) as archive:
-            self.assertEqual(sorted(archive.namelist()), sorted([
-                'manifest.json', 'background.js', 'popup.html',
-                'assets/popup.css', 'assets/popup.js', 'offline-nodes.json',
-                'META-INF/mivpn-package.json', 'META-INF/mivpn-package.sig']))
-            self.assertTrue(all(b'\r\n' not in archive.read(name)
-                                for name in archive.namelist() if not name.endswith('.sig')))
-        sums = (self.args.dist_dir /
-                f'MiVPN-Plugin-{self.mivpn_release}-SHA256SUMS.txt').read_text()
-        self.assertEqual(sums, ''.join(f'{sha256}  {name}\n' for name in names))
+    def browser_package_fixture(self, root, platform):
+        identity = {'project': 'nomad_desktop', 'os': platform,
+                    'arch': 'arm64' if platform == 'mac' else 'x64',
+                    'version': VERSION, 'variant': 'release'}
+        output = root / 'out' / nomad.delivery_base(identity)
+        binary = {'mac': '逐风浏览器.app/Contents/MacOS/NomadBrowser',
+                  'win': 'NomadBrowser.exe', 'linux': 'NomadBrowser'}[platform]
+        target = output / binary
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b'browser fixture')
+        provenance = {'source': 'current', 'kernelDelivery': 'current'}
+        nomad.seal(output, identity, provenance)
+        self.args.dist_dir = root / 'dist'
+        self.args.keep = 0
+        return output, identity, provenance, binary
+
+    def test_browser_packages_ignore_plugin_publishing_configuration(self):
+        missing = str(self.root / 'not-present')
+        empty = {name: '' for name in (
+            'MIVPN_SIGNING_KEY_FILE', 'MIVPN_SIGNED_PACKAGE',
+            'MIVPN_SIGNING_PUBLIC_KEY_FILE', 'MIVPN_PLUGIN_REVISION', 'MIVPN_OPENSSL')}
+        configurations = [
+            {},
+            {'MIVPN_SIGNING_KEY_FILE': missing},
+            {'MIVPN_SIGNED_PACKAGE': missing, 'MIVPN_SIGNING_PUBLIC_KEY_FILE': missing},
+            {'MIVPN_SIGNING_KEY_FILE': missing, 'MIVPN_SIGNED_PACKAGE': missing},
+            {'MIVPN_SIGNING_PUBLIC_KEY_FILE': missing, 'MIVPN_PLUGIN_REVISION': 'invalid',
+             'MIVPN_OPENSSL': missing},
+        ]
+        for platform in ('mac', 'linux', 'win'):
+            for index, configuration in enumerate(configurations):
+                with self.subTest(platform=platform, configuration=index):
+                    root = self.root / f'browser-only-{platform}-{index}'
+                    output, identity, provenance, binary = self.browser_package_fixture(root, platform)
+                    self.args.zip = True
+                    self.args.dist_dir.mkdir()
+                    existing = {'MiVPN-Plugin-developer.zip': b'independent plugin',
+                                'MiVPN-Plugin-developer-SHA256SUMS.txt': b'independent checksums'}
+                    for name, content in existing.items():
+                        (self.args.dist_dir / name).write_bytes(content)
+
+                    def run(command, *args, **kwargs):
+                        # A Mac browser still verifies its own app signature.
+                        # No plugin signer, verifier or OpenSSL may be invoked.
+                        self.assertEqual(command[0], 'codesign')
+                        return ''
+
+                    with patch.dict(os.environ, {**empty, **configuration}), \
+                         patch.object(nomad, 'desktop_provenance', return_value=provenance), \
+                         patch.object(nomad, 'has_ditto', return_value=False), \
+                         patch.object(nomad, 'inherit_published_permissions') as inherit, \
+                         patch.object(fetch, 'run', side_effect=run) as external:
+                        final = self.quiet(nomad.package, self.args, output, identity, source_root=root)
+                    inherit.assert_called_once_with(final)
+                    self.assertEqual((final / binary).read_bytes(), b'browser fixture')
+                    with zipfile.ZipFile(str(final) + '.zip') as archive:
+                        self.assertEqual(archive.read(final.name + '/' + binary), b'browser fixture')
+                    self.assertEqual(existing, {p.name: p.read_bytes()
+                        for p in self.args.dist_dir.glob('MiVPN-*')})
+                    self.assertFalse((root / 'arupa_desktop').exists())
+                    self.assertEqual(external.call_count, 1 if platform == 'mac' else 0)
+
+    def test_browser_package_failure_preserves_previous_delivery(self):
+        for platform, failure in (('linux', 'copy'), ('mac', 'codesign')):
+            with self.subTest(platform=platform, failure=failure):
+                root = self.root / f'failed-{platform}'
+                output, identity, provenance, _ = self.browser_package_fixture(root, platform)
+                previous = self.args.dist_dir / (nomad.delivery_base(identity) + '-1')
+                previous.mkdir(parents=True)
+                self.args.keep = 1
+                with patch.object(nomad, 'desktop_provenance', return_value=provenance), \
+                     patch.object(nomad, 'has_ditto', return_value=False), \
+                     patch.object(fetch, 'run', side_effect=RuntimeError('codesign denied')), \
+                     patch.object(nomad, 'copy_payload_tree', wraps=nomad.copy_payload_tree) as copy, \
+                     patch.object(nomad.deliveries, 'prune') as prune:
+                    if failure == 'copy':
+                        copy.side_effect = RuntimeError('copy denied')
+                    with self.assertRaisesRegex(RuntimeError, failure + ' denied'):
+                        self.quiet(nomad.package, self.args, output, identity, source_root=root)
+                prune.assert_not_called()
+                self.assertTrue(previous.is_dir())
 
     def test_linux_sandbox_installer_is_fail_closed(self):
         script = nomad.LINUX_SANDBOX_INSTALLER
@@ -84,58 +127,6 @@ class NomadTest(unittest.TestCase):
         self.assertIn('chmod 4755 "$HELPER"', script)
         self.assertIn('owner=$owner mode=$mode', script)
         self.assertNotIn('ARUPA_UNSAFE_DISABLE_SANDBOX=1', script)
-
-    def test_mivpn_identical_packages_reuse_files_without_replace_permission(self):
-        source = Path(nomad.__file__).resolve().parents[1]
-        expected = self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
-        files = sorted(self.args.dist_dir.iterdir())
-        before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in files}
-        with patch.object(Path, 'replace', side_effect=PermissionError('replacement denied')) as replace, \
-             patch.object(nomad, 'inherit_published_permissions') as inherit:
-            actual = self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
-        replace.assert_not_called()
-        inherit.assert_not_called()
-        self.assertEqual(actual, expected)
-        self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in files})
-
-    def test_mivpn_changed_package_is_replaced_atomically(self):
-        source = Path(nomad.__file__).resolve().parents[1]
-        self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
-        target = self.args.dist_dir / f'MiVPN-Plugin-{self.mivpn_release}-mac.zip'
-        expected = target.read_bytes()
-        target.write_bytes(b'old package')
-        with patch.object(Path, 'replace', autospec=True, side_effect=Path.replace) as replace, \
-             patch.object(nomad, 'inherit_published_permissions') as inherit:
-            self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
-        self.assertEqual(target.read_bytes(), expected)
-        self.assertEqual([call.args[1] for call in replace.call_args_list], [target.resolve()])
-        inherit.assert_called_once_with(target.resolve())
-
-    def test_new_mivpn_packages_publish_with_destination_permissions(self):
-        source = Path(nomad.__file__).resolve().parents[1]
-        with patch.object(nomad, 'inherit_published_permissions') as inherit:
-            self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
-        self.assertEqual({call.args[0] for call in inherit.call_args_list},
-                         set(self.args.dist_dir.resolve().iterdir()))
-        self.assertEqual(inherit.call_count, 4)
-
-    def test_mivpn_missing_signing_configuration_rejects_without_publishing(self):
-        source = Path(nomad.__file__).resolve().parents[1]
-        with patch.dict(os.environ, {'MIVPN_SIGNING_KEY_FILE': '', 'MIVPN_SIGNED_PACKAGE': ''}):
-            with self.assertRaisesRegex(RuntimeError, '拒绝生成未签名插件'):
-                self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
-        self.assertFalse(self.args.dist_dir.exists())
-
-    def test_mivpn_presigned_package_verified_and_reused_without_private_key(self):
-        source = Path(nomad.__file__).resolve().parents[1]
-        expected = self.quiet(nomad.package_mivpn_plugins, source, self.args.dist_dir)
-        signed = self.args.dist_dir / f'MiVPN-Plugin-{self.mivpn_release}-mac.zip'
-        other = self.root / 'public-only'
-        with patch.dict(os.environ, {'MIVPN_SIGNING_KEY_FILE': '', 'MIVPN_SIGNED_PACKAGE': str(signed),
-                                    'MIVPN_SIGNING_PUBLIC_KEY_FILE': str(self.signing_public)}):
-            actual = self.quiet(nomad.package_mivpn_plugins, source, other)
-        self.assertEqual(actual, expected)
-        self.assertEqual((other / signed.name).read_bytes(), signed.read_bytes())
 
     def test_published_permissions_only_enable_inheritance_on_windows(self):
         target = self.root / 'published output'
@@ -174,44 +165,6 @@ class NomadTest(unittest.TestCase):
             nomad.save_output(payload, output)
         inherit.assert_called_once_with(output)
         self.assertEqual((output / 'file').read_bytes(), b'fixture')
-
-    def test_mivpn_changed_package_denied_preserves_old_file_and_reports_path(self):
-        self.args.dist_dir.mkdir()
-        target = self.args.dist_dir / 'plugin.zip'
-        target.write_bytes(b'old package')
-        with patch.object(Path, 'replace', side_effect=PermissionError('replacement denied')):
-            with self.assertRaisesRegex(RuntimeError, 'plugin.zip'):
-                self.quiet(nomad.publish_mivpn_artifact,
-                           self.args.dist_dir / 'staged.zip', target, b'new package')
-        self.assertEqual(target.read_bytes(), b'old package')
-
-    def test_mivpn_unreadable_existing_package_reports_path_without_replacing(self):
-        target = self.args.dist_dir / 'plugin.zip'
-        with patch.object(Path, 'read_bytes', side_effect=PermissionError('read denied')), \
-             patch.object(Path, 'replace') as replace:
-            with self.assertRaisesRegex(RuntimeError, 'plugin.zip'):
-                self.quiet(nomad.publish_mivpn_artifact,
-                           self.args.dist_dir / 'staged.zip', target, b'new package')
-        replace.assert_not_called()
-
-    def test_plugin_failure_does_not_prune_previous_browser_delivery(self):
-        identity = {'project': 'nomad_desktop', 'os': 'win', 'arch': 'x64',
-                    'version': VERSION, 'variant': 'release'}
-        output = self.root / 'out' / nomad.delivery_base(identity)
-        output.mkdir(parents=True)
-        (output / 'NomadBrowser.exe').write_bytes(b'fixture')
-        provenance = {'source': 'current', 'kernelDelivery': 'current'}
-        nomad.seal(output, identity, provenance)
-        previous = self.args.dist_dir / (nomad.delivery_base(identity) + '-1')
-        previous.mkdir(parents=True)
-        self.args.keep = 1
-        with patch.object(nomad, 'desktop_provenance', return_value=provenance), \
-             patch.object(nomad, 'package_mivpn_plugins', side_effect=RuntimeError('plugin denied')), \
-             patch.object(nomad.deliveries, 'prune') as prune:
-            with self.assertRaisesRegex(RuntimeError, 'plugin denied'):
-                self.quiet(nomad.package, self.args, output, identity)
-        prune.assert_not_called()
-        self.assertTrue(previous.is_dir())
 
     def pc_fixture(self, target_os):
         folder = {'win': 'NomadBrowser.Avalonia', 'linux': 'NomadBrowser.Avalonia.Linux', 'mac': 'NomadBrowser.Avalonia.Mac'}[target_os]
@@ -805,7 +758,6 @@ class NomadTest(unittest.TestCase):
         self.args.zip = True
         with patch.object(nomad, 'desktop_provenance',
                           side_effect=lambda root, *_: provenance if root == self.root else {}) as capture, \
-             patch.object(nomad, 'package_mivpn_plugins', return_value='fixture'), \
              patch.object(nomad, 'inherit_published_permissions') as inherit, \
              contextlib.redirect_stdout(io.StringIO()):
             final = nomad.package(self.args, output, identity, source_root=self.root)

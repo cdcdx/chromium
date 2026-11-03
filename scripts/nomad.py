@@ -26,9 +26,6 @@ import source_provenance
 import toolchains
 
 
-MIVPN_PLUGIN_PLATFORMS = ('mac', 'linux', 'win')
-
-
 def prepare_dotnet(args, repo, project=None):
     executable = args.dotnet or toolchains.dotnet_executable(F.load_config())
     executable = os.path.expanduser(executable)
@@ -950,74 +947,6 @@ def delivery_base(identity):
             f"{identity['version']}-{identity['variant']}")
 
 
-def publish_mivpn_artifact(staged, target, content):
-    """Reuse identical artifacts; replace changed bytes without truncating the old file."""
-    try:
-        try:
-            if target.read_bytes() == content:
-                F.log(f'MiVPN 复用未变化资源: {target.name}')
-                return
-        except FileNotFoundError:
-            pass
-        staged.write_bytes(content)
-        staged.replace(target)
-        inherit_published_permissions(target)
-    except PermissionError as error:
-        F.err(f'MiVPN 资源发布被拒绝: {target}\n'
-              f'请检查该文件及父目录的写入/删除权限和文件占用；'
-              f'若旧文件由提升权限的进程生成，请用同等权限的终端重试。原始错误: {error}')
-
-
-def package_mivpn_plugins(source_root, destination):
-    """Publish one signed package for all platforms; never ship an unsigned ZIP."""
-    source_root = Path(source_root).resolve()
-    destination = Path(destination).resolve()
-    tools = source_root / 'arupa_desktop/plugin/mivpn_resources'
-    generator = tools / 'sign_mivpn_package.py'
-    resources = source_root / 'arupa_desktop/plugin/mivpn_resources/product'
-    private_key = os.environ.get('MIVPN_SIGNING_KEY_FILE')
-    signed_package = os.environ.get('MIVPN_SIGNED_PACKAGE')
-    public_key = os.environ.get('MIVPN_SIGNING_PUBLIC_KEY_FILE')
-    if not generator.is_file() or (not signed_package and not resources.is_dir()):
-        F.err('MiVPN 产品资源或确定性打包器缺失；拒绝发布不完整的三端插件包')
-    revision = os.environ.get('MIVPN_PLUGIN_REVISION', 'r1')
-    if not re.fullmatch(r'r[1-9][0-9]*', revision):
-        F.err('MIVPN_PLUGIN_REVISION 必须为 r1、r2 等发布修订号')
-    if bool(private_key) == bool(signed_package):
-        F.err('MiVPN 发布需选择一种来源：MIVPN_SIGNING_KEY_FILE，或 '
-              'MIVPN_SIGNED_PACKAGE + MIVPN_SIGNING_PUBLIC_KEY_FILE；拒绝生成未签名插件')
-    if signed_package and not public_key:
-        F.err('复用签名 MiVPN ZIP 必须提供可信 MIVPN_SIGNING_PUBLIC_KEY_FILE')
-    destination.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.mivpn-package-', dir=destination) as temporary:
-        canonical = Path(temporary) / 'canonical.zip'
-        if signed_package:
-            # Validate the same private snapshot that will be published, even if
-            # the upstream signing output is concurrently replaced.
-            canonical.write_bytes(Path(signed_package).read_bytes())
-            result = json.loads(F.run([sys.executable, tools / 'verify_mivpn_package.py',
-                                       canonical, '--public-key-file', public_key], capture=True))
-        else:
-            result = json.loads(F.run([sys.executable, generator, '--source', resources,
-                                       '--private-key-file', private_key,
-                                       '--output', canonical], capture=True))
-        raw = canonical.read_bytes()
-        release = result['version'] + '-' + revision
-        sha256 = hashlib.sha256(raw).hexdigest()
-        names = []
-        for platform in MIVPN_PLUGIN_PLATFORMS:
-            name = f'MiVPN-Plugin-{release}-{platform}.zip'
-            staged = Path(temporary) / name
-            publish_mivpn_artifact(staged, destination / name, raw)
-            names.append(name)
-        sums = ''.join(f'{sha256}  {name}\n' for name in names)
-        sums_name = f'MiVPN-Plugin-{release}-SHA256SUMS.txt'
-        staged_sums = Path(temporary) / sums_name
-        publish_mivpn_artifact(staged_sums, destination / sums_name, sums.encode('utf-8'))
-    F.log(f'MiVPN 三端插件包: {sha256} ({len(raw)} bytes)')
-    return sha256
-
-
 def package(args, output, identity, *, source_root=None):
     keep = max(0, args.keep)
     if F.DRY_RUN:
@@ -1089,11 +1018,8 @@ def package(args, output, identity, *, source_root=None):
             except BaseException:
                 archive_path.unlink(missing_ok=True)
                 raise
-        if identity.get('project') == 'nomad_desktop':
-            package_mivpn_plugins(
-                source_root if source_root is not None else output.parent.parent,
-                destination)
-        # 插件也属于本次交付；全部成功后再清理，失败时上一份仍留着可回退。
+        # Extension packages have their own developer/release workflow. Browser
+        # packaging never signs, copies or publishes them.
         deliveries.prune(destination, prefix, keep, number)
     finally:
         # 收尾清理是 best-effort：无论打包成败，清理失败都不应掩盖真实结果（受限环境会拦截批量删除/单文件 unlink；改名旁置即可，别在这里抛）。
