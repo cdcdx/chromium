@@ -5,7 +5,13 @@ function Assert-MivpnProbePackage {
         [string]$Python = 'python',
         [string]$OpenSsl = ''
     )
-    $verifier = Join-Path (Split-Path $PSScriptRoot -Parent) 'arupa_desktop\plugin\mivpn_resources\verify_mivpn_package.py'
+    $pluginProject = if ($env:MIVPN_PLUGIN_ROOT) { $env:MIVPN_PLUGIN_ROOT } else {
+        Join-Path (Split-Path $PSScriptRoot -Parent) 'mivpn-plugin'
+    }
+    $verifier = Join-Path $pluginProject 'tools\signing\verify_mivpn_package.py'
+    if (-not (Test-Path -LiteralPath $verifier -PathType Leaf)) {
+        throw 'MiVPN signing tools moved to the independent mivpn-plugin project. Prepare that project or set MIVPN_PLUGIN_ROOT.'
+    }
     $publicKey = (Resolve-Path -LiteralPath $PublicKeyFile).Path
     $arguments = @($verifier, $PluginZip, '--public-key-file', $publicKey)
     if ($OpenSsl) { $arguments += @('--openssl', $OpenSsl) }

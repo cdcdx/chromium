@@ -129,6 +129,27 @@ log()  { echo "[+] $*"; }
 warn() { echo "[!] $*" >&2; }
 err()  { echo "[x] $*" >&2; exit 1; }
 
+# Historical built-in MiVPN resources must not re-enter a new delivery.
+is_deprecated_mivpn_pak() {
+  local name="${1##*/}"
+  [[ "$(printf '%s' "${name}" | LC_ALL=C tr '[:upper:]' '[:lower:]')" == "mivpn_extension_resources.pak" ]]
+}
+
+copy_package_tree_filtered() {
+  local src="$1" dst="$2" entry name
+  mkdir -p "${dst}"
+  for entry in "${src}"/* "${src}"/.[!.]* "${src}"/..?*; do
+    [[ -e "${entry}" || -L "${entry}" ]] || continue
+    is_deprecated_mivpn_pak "${entry}" && continue
+    name="${entry##*/}"
+    if [[ -d "${entry}" && ! -L "${entry}" ]]; then
+      copy_package_tree_filtered "${entry}" "${dst}/${name}"
+    else
+      cp -R "${entry}" "${dst}/"
+    fi
+  done
+}
+
 # ---------------------------------------------------------------- 平台 / 架构
 norm_cpu() {
   case "$1" in
@@ -217,15 +238,25 @@ fi
 
 # 主 pak：out 根 content_shell.pak，没有则体积最大的 *.pak
 resolve_pak() {
-  local out="$1" f
+  local out="$1" f="" candidate size largest=-1
   if [[ -n "${PAK_SRC}" ]]; then
+    is_deprecated_mivpn_pak "${PAK_SRC}" \
+      && err "--pak 不接受已停用的 MiVPN 内置资源包: ${PAK_SRC}"
     [[ -f "${PAK_SRC}" ]] || err "--pak 找不到: ${PAK_SRC}"
     return
   fi
   if [[ -f "${out}/content_shell.pak" ]]; then
     PAK_SRC="${out}/content_shell.pak"; return
   fi
-  f="$(ls -1S "${out}"/*.pak 2>/dev/null | head -1 || true)"
+  for candidate in "${out}"/*.pak; do
+    [[ -f "${candidate}" ]] || continue
+    is_deprecated_mivpn_pak "${candidate}" && continue
+    size="$(wc -c < "${candidate}")"
+    if [[ ${size} -gt ${largest} ]]; then
+      f="${candidate}"
+      largest="${size}"
+    fi
+  done
   if [[ -n "${f}" && -f "${f}" ]]; then
     warn "out 里没有 content_shell.pak —— 取体积最大的 $(basename "${f}") 当主 pak"
     PAK_SRC="${f}"; return
@@ -249,7 +280,7 @@ have() {   # 可选件
 have_dir() {
   local src="$1" dst="$2"
   [[ -d "${src}" ]] || { MISSING_OPTIONAL+=("$(basename "${src}")/"); return; }
-  cp -R "${src}" "${dst}/"
+  copy_package_tree_filtered "${src}" "${dst}/$(basename "${src}")"
   log "  $(basename "${src}")/  $(du -sh "${src}" | cut -f1)"
 }
 
@@ -265,6 +296,7 @@ copy_package_dir() {
     [[ -e "${e}" || -L "${e}" ]] || continue           # 没匹配上的 glob 原样留着，跳过
     name="$(basename "${e}")"
     [[ "${name}" == ".DS_Store" ]] && continue
+    is_deprecated_mivpn_pak "${e}" && continue
     entries+=("${e}")
   done
 
@@ -284,7 +316,7 @@ copy_package_dir() {
         rel="kernel/plugin-runtime/"
       fi
       mkdir -p "${sub}"
-      cp -R "${e}/." "${sub}/"
+      copy_package_tree_filtered "${e}" "${sub}"
       log "  ${name}/  → ${rel}  $(du -sh "${e}" | cut -f1)"
       n=$((n+1))
       continue
@@ -295,14 +327,14 @@ copy_package_dir() {
     # dotnet/：bin/ obj/ 是内核仓那边的构建中间产物（旧门面 DLL 就躺在里面，
     # 引用错一份宿主就满屏 CS0117/CS1061），不进交付
     if [[ -d "${e}" && "${name}" == "dotnet" ]]; then
-      cp -R "${e}" "${dist}/"
+      copy_package_tree_filtered "${e}" "${dist}/${name}"
       rm -rf "${dist}/dotnet/bin" "${dist}/dotnet/obj"
       log "  ${name}/  ← package/${name}  $(du -sh "${dist}/dotnet" | cut -f1)（不含 bin/obj）"
       n=$((n+1))
       continue
     fi
     if [[ -d "${e}" ]]; then
-      cp -R "${e}" "${dist}/"
+      copy_package_tree_filtered "${e}" "${dist}/${name}"
       log "  ${name}/  ← package/${name}  $(du -sh "${e}" | cut -f1)"
     else
       cp -f "${e}" "${dist}/"
@@ -390,6 +422,7 @@ package_arch() {
   local f any_pak=0
   for f in "${out}"/*.pak; do
     [[ -f "${f}" ]] || continue
+    is_deprecated_mivpn_pak "${f}" && continue
     any_pak=1
     [[ -f "${dest}/$(basename "${f}")" ]] && continue
     have "${f}" "${dest}"
@@ -505,12 +538,12 @@ package_arch() {
   # 可选附件
   if [[ -n "${DOCS_DIR}" ]]; then
     [[ -d "${DOCS_DIR}" ]] || err "--docs 不是目录: ${DOCS_DIR}"
-    mkdir -p "${dist}/docs"; cp -R "${DOCS_DIR}/." "${dist}/docs/"
+    copy_package_tree_filtered "${DOCS_DIR}" "${dist}/docs"
     log "  附带 docs/ ← ${DOCS_DIR}"
   fi
   if [[ -n "${PROBE_DIR}" ]]; then
     [[ -d "${PROBE_DIR}" ]] || err "--probe 不是目录: ${PROBE_DIR}"
-    mkdir -p "${dist}/probe-plugin"; cp -R "${PROBE_DIR}/." "${dist}/probe-plugin/"
+    copy_package_tree_filtered "${PROBE_DIR}" "${dist}/probe-plugin"
     log "  附带 probe-plugin/ ← ${PROBE_DIR}"
   fi
 

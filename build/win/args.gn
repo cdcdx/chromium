@@ -1,4 +1,5 @@
-# 系统公共配置；target_cpu 和 is_component_build 由构建入口按参数替换。
+# 系统公共配置；target_cpu 和 is_component_build
+# 由构建入口按参数替换。
 target_os = "win"
 target_cpu = "x64"
 is_component_build = false
@@ -29,6 +30,3 @@ enable_platform_dts_audio = true
 
 # 启用siso需把源码真实放进src目录 或 改用siso支持的布局
 use_siso = false
-
-# MiVPN product resources are present and pass the six-file build inventory.
-mivpn_has_product_resources = true

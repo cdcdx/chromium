@@ -94,6 +94,27 @@ function Write-Warn { param([string]$Message) Write-Host "[!] $Message" -Foregro
 function Write-Err  { param([string]$Message) Write-Host "[x] $Message" -ForegroundColor Red }
 function Fail       { param([string]$Message) throw $Message }
 
+# Historical built-in MiVPN resources must not re-enter a new delivery.
+function Test-DeprecatedMivpnPak {
+    param([string]$Path)
+    return [string]::Equals([System.IO.Path]::GetFileName($Path),
+        'mivpn_extension_resources.pak', [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Copy-FilteredPackageTree {
+    param([string]$Src, [string]$DestDir)
+    New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
+    foreach ($entry in (Get-ChildItem -LiteralPath $Src -Force)) {
+        if (Test-DeprecatedMivpnPak $entry.Name) { continue }
+        $target = Join-Path $DestDir $entry.Name
+        if ($entry.PSIsContainer) {
+            Copy-FilteredPackageTree -Src $entry.FullName -DestDir $target
+        } else {
+            Copy-Item -LiteralPath $entry.FullName -Destination $target -Force
+        }
+    }
+}
+
 function Show-Usage {
     $inside = $false
     foreach ($line in (Get-Content -LiteralPath $PSCommandPath -Encoding UTF8)) {
@@ -301,6 +322,9 @@ if ($NoPackage) {
 function Resolve-Pak {
     param([string]$OutPath)
     if ($script:PakSrc) {
+        if (Test-DeprecatedMivpnPak $script:PakSrc) {
+            throw "--pak 不接受已停用的 MiVPN 内置资源包: $($script:PakSrc)"
+        }
         if (-not (Test-Path -LiteralPath $script:PakSrc -PathType Leaf)) { throw "--pak 找不到: $($script:PakSrc)" }
         return
     }
@@ -310,6 +334,7 @@ function Resolve-Pak {
         return
     }
     $largest = Get-ChildItem -LiteralPath $OutPath -File -Filter '*.pak' -ErrorAction SilentlyContinue |
+        Where-Object { -not (Test-DeprecatedMivpnPak $_.Name) } |
         Sort-Object -Property Length -Descending | Select-Object -First 1
     if ($largest) {
         Write-Warn "out 里没有 content_shell.pak —— 取体积最大的 $($largest.Name) 当主 pak"
@@ -349,7 +374,7 @@ function Add-OptionalDir {
     }
     $destSub = Join-Path $DestDir (Split-Path -Leaf $Src)
     New-Item -ItemType Directory -Force -Path $destSub | Out-Null
-    Copy-Item -Path "$Src\*" -Destination $destSub -Recurse -Force
+    Copy-FilteredPackageTree -Src $Src -DestDir $destSub
     $bytes = (Get-ChildItem -LiteralPath $Src -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
     if (-not $bytes) { $bytes = 0 }
     Write-Step ("  {0}/  {1}" -f (Split-Path -Leaf $Src), (Format-Size ([long]$bytes)))
@@ -371,7 +396,7 @@ function Copy-PackageDir {
     if (-not (Test-Path -LiteralPath $PackageDir -PathType Container)) { return }
 
     $entries = @(Get-ChildItem -LiteralPath $PackageDir -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -ne '.DS_Store' })
+        Where-Object { $_.Name -ne '.DS_Store' -and -not (Test-DeprecatedMivpnPak $_.Name) })
     if ($entries.Count -eq 0) {
         Write-Warn "package 目录是空的，交付包里不会有 docs\ dotnet\ 等附加件: $PackageDir"
         return
@@ -389,10 +414,9 @@ function Copy-PackageDir {
                 $rel = 'kernel\plugin-runtime\'
             }
             New-Item -ItemType Directory -Force -Path $sub | Out-Null
-            $files = @(Get-ChildItem -LiteralPath $e.FullName -Recurse -File -Force -ErrorAction SilentlyContinue)
-            if ($files.Count -gt 0) {
-                Copy-Item -Path (Join-Path $e.FullName '*') -Destination $sub -Recurse -Force -ErrorAction SilentlyContinue
-            }
+            $files = @(Get-ChildItem -LiteralPath $e.FullName -Recurse -File -Force -ErrorAction SilentlyContinue |
+                Where-Object { -not (Test-DeprecatedMivpnPak $_.Name) })
+            Copy-FilteredPackageTree -Src $e.FullName -DestDir $sub
             $bytes = ($files | Measure-Object -Property Length -Sum).Sum
             if (-not $bytes) { $bytes = 0 }
             Write-Step ("  {0}/  → {1}  {2}" -f $e.Name, $rel, (Format-Size ([long]$bytes)))
@@ -408,16 +432,17 @@ function Copy-PackageDir {
             # 门面源码目录：bin\/obj\ 是内核仓那边的构建中间产物（旧门面 DLL 就躺在里面，
             # 引用错一份就会满屏 CS0117/CS1061），不进交付。
             New-Item -ItemType Directory -Force -Path $dest | Out-Null
-            robocopy $e.FullName $dest /E /XD bin obj /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+            robocopy $e.FullName $dest /E /XD bin obj /XF mivpn_extension_resources.pak /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
             if ($LASTEXITCODE -ge 8) { throw "package\dotnet 拷贝失败 (robocopy exit $LASTEXITCODE)" }
             $bytes = (Get-ChildItem -LiteralPath $e.FullName -Recurse -File -Force -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
+                Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' -and -not (Test-DeprecatedMivpnPak $_.Name) } |
                 Measure-Object -Property Length -Sum).Sum
             if (-not $bytes) { $bytes = 0 }
             Write-Step ("  {0}/  ← package\{0}  {1}（不含 bin\/obj\）" -f $e.Name, (Format-Size ([long]$bytes)))
         } elseif ($e.PSIsContainer) {
-            Copy-Item -LiteralPath $e.FullName -Destination $dest -Recurse -Force
+            Copy-FilteredPackageTree -Src $e.FullName -DestDir $dest
             $bytes = (Get-ChildItem -LiteralPath $e.FullName -Recurse -File -Force -ErrorAction SilentlyContinue |
+                Where-Object { -not (Test-DeprecatedMivpnPak $_.Name) } |
                 Measure-Object -Property Length -Sum).Sum
             if (-not $bytes) { $bytes = 0 }
             Write-Step ("  {0}/  ← package\{0}  {1}" -f $e.Name, (Format-Size ([long]$bytes)))
@@ -465,6 +490,7 @@ function Invoke-PackageArch {
     # 其余 *.pak（shell_resources / ui_resources / extensions_* 等）
     $pakCount = 0
     foreach ($f in (Get-ChildItem -LiteralPath $OutPath -File -Filter '*.pak' -ErrorAction SilentlyContinue)) {
+        if (Test-DeprecatedMivpnPak $f.Name) { continue }
         $pakCount++
         if (Test-Path -LiteralPath (Join-Path $dest $f.Name) -PathType Leaf) { continue }
         Add-OptionalFile -Src $f.FullName -DestDir $dest
@@ -586,14 +612,14 @@ function Invoke-PackageArch {
         if (-not (Test-Path -LiteralPath $DocsDir -PathType Container)) { throw "--docs 不是目录: $DocsDir" }
         $docsDest = Join-Path $DistPath 'docs'
         New-Item -ItemType Directory -Force -Path $docsDest | Out-Null
-        Copy-Item -Path "$DocsDir\*" -Destination $docsDest -Recurse -Force
+        Copy-FilteredPackageTree -Src $DocsDir -DestDir $docsDest
         Write-Step "  附带 docs\ ← $DocsDir"
     }
     if ($ProbeDir) {
         if (-not (Test-Path -LiteralPath $ProbeDir -PathType Container)) { throw "--probe 不是目录: $ProbeDir" }
         $probeDest = Join-Path $DistPath 'probe-plugin'
         New-Item -ItemType Directory -Force -Path $probeDest | Out-Null
-        Copy-Item -Path "$ProbeDir\*" -Destination $probeDest -Recurse -Force
+        Copy-FilteredPackageTree -Src $ProbeDir -DestDir $probeDest
         Write-Step "  附带 probe-plugin\ ← $ProbeDir"
     }
 

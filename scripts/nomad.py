@@ -163,6 +163,19 @@ def has_ditto():
     return F.HOST_OS == 'mac' and shutil.which('ditto') is not None
 
 
+def kernel_payload_ignore(target_os):
+    """Exclude the retired built-in MiVPN pack from every SDK subtree."""
+    native_host_ignore = shutil.ignore_patterns('arupa_desktop.exe') if target_os == 'win' else None
+
+    def ignore(directory, names):
+        excluded = [name for name in names if name.casefold() == 'mivpn_extension_resources.pak']
+        if native_host_ignore:
+            excluded.extend(native_host_ignore(directory, names))
+        return excluded
+
+    return ignore
+
+
 def copy_payload_tree(source, destination, target_os):
     # On macOS, signatures of managed DLLs live in extended attributes.
     # Python shutil on Apple's Python does not preserve them; ditto also
@@ -689,7 +702,7 @@ def desktop_build(root, args, target_os, arch, version, output):
             props += [f'-p:MacCodeSignIdentity={identity}']
         else:
             props += ['-p:MacAllowAdHocSigning=true']
-        developer_dir = F.cget(F.load_config(), 'nomad_developer_dir')
+        developer_dir = F.cget(F.load_config(), 'chromium_developer_dir')
         if developer_dir:
             os.environ['DEVELOPER_DIR'] = developer_dir
         # Validate the immutable delivery contract before trying to copy or
@@ -786,9 +799,8 @@ def desktop_build(root, args, target_os, arch, version, output):
                 F.err(f'发布缺少浏览器可执行文件: {executable}')
             # Windows starts the actual native host at the payload root. Keep
             # its assets under arupa-desktop/ and avoid a second launch entry.
-            ignore = shutil.ignore_patterns('arupa_desktop.exe') if target_os == 'win' else None
             shutil.copytree(kernel / 'kernel', payload / 'arupa-desktop',
-                            dirs_exist_ok=True, symlinks=True, ignore=ignore)
+                            dirs_exist_ok=True, symlinks=True, ignore=kernel_payload_ignore(target_os))
             if target_os == 'win':
                 install_windows_native_host(kernel, payload)
                 install_mivpn_sdk(root, kernel, payload)

@@ -28,7 +28,8 @@ done
 payload=$(cd "$payload" && pwd -P)
 plugin=$(cd "$(dirname "$plugin")" && printf '%s/%s' "$PWD" "$(basename "$plugin")")
 public_key=$(cd "$(dirname "$public_key")" && printf '%s/%s' "$PWD" "$(basename "$public_key")")
-package_tools=$(cd "$(dirname "${BASH_SOURCE[0]}")/../arupa_desktop/plugin/mivpn_resources" && pwd -P)
+plugin_project=${MIVPN_PLUGIN_ROOT:-"$(dirname "${BASH_SOURCE[0]}")/../mivpn-plugin"}
+package_tools=$(cd "$plugin_project/tools/signing" && pwd -P)
 [[ ! -e "$probe" ]] || { echo 'Probe root must be a new disposable directory.' >&2; exit 2; }
 probe_parent=$(cd "$(dirname "$probe")" && pwd -P)
 probe="$probe_parent/$(basename "$probe")"
