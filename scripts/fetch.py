@@ -820,6 +820,12 @@ def build_parser():
     p.set_defaults(shallow=True)
     p.add_argument("--save", action="store_true", help="成功后将 --ver 保存到 .env")
     p.add_argument("--dry-run", action="store_true", help="仅打印计划，不写文件、不联网")
+    sync = p.add_mutually_exclusive_group()
+    sync.add_argument("--local", dest="sync_target", action="store_const", const="local",
+                      help="pull / push 使用 .env 的 <仓库>_local_src 指定地址，而不是分支 upstream")
+    sync.add_argument("--remote", dest="sync_target", action="store_const", const="remote",
+                      help="pull / push 使用分支 upstream（默认）")
+    p.set_defaults(sync_target="remote")
     return p
 
 
@@ -829,11 +835,20 @@ def main(argv=None):
     args = parser.parse_args(argv)
     DRY_RUN = args.dry_run
     requested = args.targets or ["all"]
+    if args.sync_target == "local" and not set(requested) & {"pull", "push"}:
+        parser.error("--local 仅用于 pull / push")
     if set(requested) & {"pull", "push"}:
         if len(requested) != 1 or args.save or args.install_host_deps or args.vs_installer:
             parser.error("pull / push 必须单独执行，不能与其他动作混用")
         import repositories
-        return repositories.sync(Path.cwd(), requested[0], args.dry_run)
+        local_src = None
+        if args.sync_target == "local":
+            cfg = load_config()
+
+            def local_src(name, cfg=cfg):
+                return cget(cfg, repositories.local_src_key(name))
+
+        return repositories.sync(Path.cwd(), requested[0], args.dry_run, local_src=local_src)
     if set(requested) & {"log", "branch"}:
         if set(requested) - {"log", "branch"} or args.save or args.install_host_deps or args.vs_installer:
             parser.error("log / branch 是只读命令，不能与拉取、保存或安装动作混用")

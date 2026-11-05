@@ -183,12 +183,72 @@ class RepositoriesTest(unittest.TestCase):
         with patch.object(R, 'git', side_effect=AssertionError('executed')), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(R.sync(self.root, 'push', True), 0)
 
+    def test_local_address_sync_uses_url_without_upstream_and_covers_src(self):
+        target = self.root / 'fixtures/local.git'
+        target.mkdir(parents=True)
+        self.git(target, 'init', '--bare')
+        repos = {}
+        for name in ('src', 'project'):
+            repo = self.init(name)
+            self.git(repo, 'branch', '-m', name)
+            (repo / 'file').write_text(name + ' local update')
+            self.git(repo, '-c', 'commit.gpgsign=false', 'commit', '-am', name + ' local update')
+            repos[name] = repo
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(R.sync(self.root, 'push', local_src=lambda name: str(target)), 0)
+        for name, repo in repos.items():
+            self.assertEqual(self.git(target, 'rev-parse', f'refs/heads/{name}'),
+                             self.git(repo, 'rev-parse', 'HEAD'))
+        self.assertNotIn('跳过', output.getvalue())
+
+        seed = self.root / 'fixtures/seed'
+        self.git(target.parent, 'clone', '-b', 'project', str(target), str(seed))
+        self.git(seed, 'config', 'user.name', 'Test')
+        self.git(seed, 'config', 'user.email', 'test@example.invalid')
+        (seed / 'file').write_text('from local address')
+        self.git(seed, '-c', 'commit.gpgsign=false', 'commit', '-am', 'from local address')
+        self.git(seed, 'push', 'origin', 'HEAD:refs/heads/project')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(R.sync(self.root, 'pull', local_src=lambda name: str(target) if name == 'project' else ''), 0)
+        self.assertEqual((repos['project'] / 'file').read_text(), 'from local address')
+
+        (repos['project'] / 'file').write_text('dirty')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(R.sync(self.root, 'pull', local_src=lambda name: str(target)), 1)
+        self.assertEqual((repos['project'] / 'file').read_text(), 'dirty')
+
+    def test_local_address_skips_repositories_without_config(self):
+        self.init('project')
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(R.sync(self.root, 'push', local_src=lambda name: ''), 0)
+        self.assertIn('未配置 project_local_src', output.getvalue())
+        self.assertIn('跳过 1 个', output.getvalue())
+
+    def test_local_src_key_aliases(self):
+        self.assertEqual(R.local_src_key('arupa_desktop'), 'arupa_desktop_local_src')
+        self.assertEqual(R.local_src_key('src'), 'chromium_local_src')
+        self.assertEqual(R.local_src_key('mivpn-plugin'), 'mivpn_plugin_local_src')
+        self.assertEqual(R.local_src_key('mivpn-sdk'), 'mivpn_client_local_src')
+
     def test_sync_cli_without_fetch_config(self):
         with patch.object(Path, 'cwd', return_value=self.root), \
              patch.object(fetch, 'load_config', side_effect=AssertionError('config')), \
              patch.object(R, 'sync', return_value=0) as sync:
             self.assertEqual(fetch.main(['pull', '--dry-run']), 0)
-            sync.assert_called_once_with(self.root, 'pull', True)
+            sync.assert_called_once_with(self.root, 'pull', True, local_src=None)
         for args in (['pull', 'push'], ['push', 'log'], ['pull', '--save']):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 fetch.main(args)
+
+    def test_sync_cli_local_reads_env_addresses(self):
+        cfg = {'project_local_src': 'ssh://example.invalid/project.git'}
+        with patch.object(Path, 'cwd', return_value=self.root), \
+             patch.object(fetch, 'load_config', return_value=cfg), \
+             patch.object(R, 'sync', return_value=0) as sync:
+            self.assertEqual(fetch.main(['push', '--local', '--dry-run']), 0)
+        self.assertEqual(sync.call_args.kwargs['local_src']('project'),
+                         'ssh://example.invalid/project.git')
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            fetch.main(['log', '--local'])

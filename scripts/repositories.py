@@ -12,6 +12,14 @@ import subprocess
 # depot_tools / chromium 目标单独管理；pull / log / branch 不受影响。
 PUSH_EXCLUDED = frozenset({'depot_tools', 'src'})
 
+# --local 的地址按仓库目录名查 .env；业务仓库沿用 fetch 已有的键名约定。
+LOCAL_SRC_ALIASES = {'src': 'chromium', 'mivpn-plugin': 'mivpn_plugin', 'mivpn-sdk': 'mivpn_client'}
+
+
+def local_src_key(name):
+    """目录名 -> .env 的 --local 地址键，例如 arupa_desktop_local_src。"""
+    return LOCAL_SRC_ALIASES.get(name, name.replace('-', '_')) + '_local_src'
+
 
 def repositories(root, onerror):
     """One level only, including worktrees/bare repos but excluding symlink aliases."""
@@ -41,7 +49,7 @@ def git(path, *arguments):
                           capture_output=True, text=True, encoding='utf-8', errors='replace')
 
 
-def sync_branch(path, action):
+def sync_branch(path, action, local_url=None):
     def checked(*arguments):
         result = git(path, *arguments)
         if result.returncode:
@@ -51,6 +59,15 @@ def sync_branch(path, action):
         raise RuntimeError('裸仓库没有工作分支，不执行同步')
     branch = checked('symbolic-ref', '--quiet', '--short', 'HEAD')
     checked('rev-parse', '--verify', 'HEAD')
+    if local_url:
+        # 直连 URL 同步，不依赖也不改动 remote / upstream 配置。
+        print(f'[INFO] {branch} -> {local_url}（--local）', flush=True)
+        if action == 'pull':
+            if checked('status', '--porcelain'):
+                raise RuntimeError('工作区有未提交或未跟踪修改，请先处理后再 pull')
+            return checked('pull', '--ff-only', '--no-rebase', '--no-autostash', local_url,
+                           f'refs/heads/{branch}')
+        return checked('-c', 'push.followTags=false', 'push', local_url, f'HEAD:refs/heads/{branch}')
     remote = checked('config', '--get', f'branch.{branch}.remote')
     refs = checked('config', '--get-all', f'branch.{branch}.merge').splitlines()
     if len(refs) != 1 or not refs[0].startswith('refs/heads/'):
@@ -69,7 +86,7 @@ def sync_branch(path, action):
                    'push', remote, f'HEAD:{ref}')
 
 
-def sync(root, action, dry_run=False):
+def sync(root, action, dry_run=False, local_src=None):
     root = root.resolve()
     errors = []
     count = success = 0
@@ -81,20 +98,27 @@ def sync(root, action, dry_run=False):
     for path in repositories(root, scan_error):
         count += 1
         print(f'\n=== {path.name} ===', flush=True)
-        if action == 'push' and path.name in PUSH_EXCLUDED:
+        local_url = local_src(path.name) if local_src is not None else None
+        if local_src is not None:
+            if not local_url:
+                skipped.append(path.name)
+                print(f'[INFO] 跳过：未配置 {local_src_key(path.name)}（.env 或环境变量）')
+                continue
+        elif action == 'push' and path.name in PUSH_EXCLUDED:
             skipped.append(path.name)
             print('[INFO] 跳过 push：上游/工具仓库')
             continue
         if dry_run:
-            print(f'[INFO] (dry-run) {action} 当前分支 upstream（执行时校验分支和配置）')
+            plan = '到配置的 --local 地址' if local_src is not None else '当前分支 upstream'
+            print(f'[INFO] (dry-run) {action} {plan}（执行时校验分支和地址）')
             continue
         try:
-            output = sync_branch(path, action)
+            output = sync_branch(path, action, local_url)
             print(output or f'[INFO] {action} 成功')
             success += 1
         except (RuntimeError, OSError) as error:
             errors.append(f'{path.name}: {error}')
-            print(f'[ERROR] {error}；需处于有提交的本地分支并配置 upstream')
+            print(f'[ERROR] {error}')
     print(f'\n[INFO] 共 {count} 个仓库，成功 {success} 个'
           + (f'，跳过 {len(skipped)} 个（{"、".join(skipped)}）' if skipped else '')
           + f'，错误 {len(errors)} 个'
