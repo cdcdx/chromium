@@ -14,8 +14,6 @@
 #            resources\, plugin-runtime\,
 #            .arupa-version, .arupa-delivery-id}
 #     include\{arupa_kernel_capi.h, arupa_kernel_capi_nomad.h}
-#     mivpn-sdk\hy2-20261022-coF8no\{mivpn-browser.dll, mivpn-browser.h, mivpn-browser.lib}
-#                            ← MiVPN 浏览器 SDK（运行期按「安装根\mivpn-sdk\<name>\…」加载）
 #     docs\ dotnet\ …        ← <repo>\package\package_desktop 下的一级文件/文件夹整份搬过来（有则带）
 #     SHA256SUMS.txt / MANIFEST.md
 #
@@ -34,7 +32,6 @@
 #       --pak FILE      主 pak 来源，默认 out\content_shell.pak，
 #                       没有时取 out 根体积最大的 *.pak
 #       --include-dir DIR      默认 <repo>\arupa_desktop\public（里面的 *.h 拷进 include\）
-#       --mivpn-sdk DIR         MiVPN 浏览器 SDK 目录（默认 <repo>\dist\mivpn-sdk\hy2-20261022-coF8no）
 #       --verify-script FILE   交付 ABI 校验脚本（默认 <repo>\arupa_desktop\tools\verify_transfer_delivery.py）；
 #                              会被拷进交付根 tools\ 并执行，非零退出即判定交付不合格
 #       --package-dir DIR       把该目录下的一级文件/文件夹整份拷进交付根
@@ -63,8 +60,6 @@
 #   OUT\angledata\ hyphen-data\ resources\ → kernel\同名目录（可选）
 #   OUT\arupa_locales\{en-US,zh-CN}.pak → kernel\locales\（旧构建可无；有则两者必需）
 #   <repo>\arupa_desktop\public\*.h          → include\
-#   <repo>\dist\mivpn-sdk\hy2-20261022-coF8no\{mivpn-browser.dll,.h,.lib}
-#                                            → mivpn-sdk\hy2-20261022-coF8no\（必需）
 #   <repo>\package\package_desktop\{docs,dotnet,…}            → 交付根同名（有则带，跟 scripts\builder\kernel.py
 #                                               的 copy_assets 同一口径；其中 dotnet\ 不带 bin\/obj\）
 #   <repo>\package\package_desktop\plugin-runtime\            → kernel\plugin-runtime\（运行期按「内核目录/
@@ -143,10 +138,6 @@ $DistDir   = Join-Path $Root 'dist'
 $DistName  = ''
 $PakSrc    = ''
 $IncDir    = ''
-# Keep in sync with arupa_desktop/app/arupa_mivpn_sdk_admission.h
-# (kMivpnSdkRelativePath): the browser loads the SDK from its install root.
-$MivpnSdkName = 'hy2-20261022-coF8no'
-$MivpnSdkDir  = Join-Path $Root "dist\mivpn-sdk\$MivpnSdkName"
 $VerifyScript = ''
 $PackageDir = ''
 $NoPackage = $false
@@ -177,7 +168,6 @@ try {
             'dist-name' { $DistName = (Read-Value $key); break }
             'pak' { $PakSrc = (Read-Value $key); break }
             'include-dir' { $IncDir = (Read-Value $key); break }
-            'mivpn-sdk' { $MivpnSdkDir = (Read-Value $key); break }
             'verify-script' { $VerifyScript = (Read-Value $key); break }
             'package-dir' { $PackageDir = (Read-Value $key); break }
             'no-package' { $NoPackage = $true; break }
@@ -564,16 +554,6 @@ function Invoke-PackageArch {
         if ($headerCount -eq 0) { Write-Warn "--include-dir 下没有 *.h: $IncDir" }
     } else {
         Write-Warn "找不到 C API 头文件目录: $IncDir（可用 --include-dir 指定）"
-    }
-
-    # MiVPN 浏览器 SDK：运行期按「安装根\mivpn-sdk\<name>\mivpn-browser.dll」加载
-    # （arupa_mivpn_sdk_admission.h 的 kMivpnSdkRelativePath）。镜像随包带上，
-    # 交给浏览器外壳在发布载荷里平铺到 NomadBrowser.exe 同级。
-    $sdkDest = Join-Path $DistPath "mivpn-sdk\$MivpnSdkName"
-    New-Item -ItemType Directory -Force -Path $sdkDest | Out-Null
-    foreach ($name in @('mivpn-browser.dll', 'mivpn-browser.h', 'mivpn-browser.lib')) {
-        Add-RequiredFile -Src (Join-Path $MivpnSdkDir $name) -DestDir $sdkDest `
-            -Hint "MiVPN Browser SDK（先运行 mivpn-client\build_browser_dll_windows.ps1，或用 --mivpn-sdk 指定目录）:$MivpnSdkDir"
     }
 
     # 版本标记

@@ -239,34 +239,6 @@ def desktop_project(repo, target_os, explicit):
 LINUX_KERNELHOST_PROJ = ('Posix', 'NomadBrowser.Linux.KernelHost', 'NomadBrowser.Linux.KernelHost.csproj')
 LINUX_KERNELHOST_EXE = 'NomadBrowser.Linux.KernelHost'
 
-# Must match arupa_desktop/app/arupa_mivpn_sdk_admission.h kMivpnSdkRelativePath:
-# the utility process resolves the DLL from its own image directory, i.e.
-# <install root>/mivpn-sdk/<name>/mivpn-browser.dll.
-MIVPN_SDK_DIR_NAME = 'hy2-20261022-coF8no'
-MIVPN_SDK_FILES = ('mivpn-browser.dll', 'mivpn-browser.h', 'mivpn-browser.lib')
-
-
-def install_mivpn_sdk(root, delivery_root, payload):
-    """Place the Windows MiVPN SDK beside NomadBrowser.exe.
-
-    It belongs at the payload root, never under arupa-desktop/: the browser
-    derives the SDK path from its own image location. Prefer the kernel
-    delivery's copy so a release stays reproducible from the same inputs; fall
-    back to the workspace SDK build directory.
-    """
-    source = delivery_root / 'mivpn-sdk' / MIVPN_SDK_DIR_NAME
-    if not source.is_dir():
-        source = root / 'dist' / 'mivpn-sdk' / MIVPN_SDK_DIR_NAME
-    missing = [name for name in MIVPN_SDK_FILES if not (source / name).is_file()]
-    if missing:
-        F.err('缺少 MiVPN Browser SDK: ' + ', '.join(missing)
-              + f'（{source}）；先运行 mivpn-client/build_browser_dll_windows.ps1')
-    destination = payload / 'mivpn-sdk' / MIVPN_SDK_DIR_NAME
-    destination.mkdir(parents=True, exist_ok=True)
-    for name in MIVPN_SDK_FILES:
-        shutil.copy2(source / name, destination / name)
-    F.log(f'MiVPN Browser SDK → mivpn-sdk/{MIVPN_SDK_DIR_NAME}')
-
 
 # 两个 OOP 宿主工程编**同一批源码**：Mac 侧逐条列在自己的 csproj 里，Linux 侧用
 # `..\..\Mac\NomadBrowser.Mac.KernelHost\**\*.cs` 把 Mac 的业务源整目录 glob 进来 ——
@@ -769,7 +741,6 @@ def desktop_build(root, args, target_os, arch, version, output):
                             dirs_exist_ok=True, symlinks=True, ignore=ignore)
             if target_os == 'win':
                 install_windows_native_host(kernel, payload)
-                install_mivpn_sdk(root, kernel, payload)
             if target_os == 'linux':
                 # 放在 copytree 之后：交付根的 kernel/ 是内核产出方的目录，不往里写，
                 # 只写我们自己的交付暂存目录（理由见 publish_linux_kernelhost）。

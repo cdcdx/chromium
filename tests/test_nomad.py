@@ -124,10 +124,6 @@ class NomadTest(unittest.TestCase):
         kernel = self.args.delivery / 'kernel'
         (kernel / 'vcruntime140.dll').write_bytes(b'CRT dependency')
         (kernel / 'libEGL.dll').write_bytes(b'GPU dependency')
-        sdk = self.args.delivery / 'mivpn-sdk' / nomad.MIVPN_SDK_DIR_NAME
-        sdk.mkdir(parents=True)
-        for name in nomad.MIVPN_SDK_FILES:
-            (sdk / name).write_bytes(b'SDK fixture')
         repo = self.root / 'nomad_desktop'
         resources = repo / 'dist/Release/Resources'
         resources.mkdir(parents=True)
@@ -156,7 +152,6 @@ class NomadTest(unittest.TestCase):
         self.assertFalse((output / 'arupa-desktop/arupa_desktop.exe').exists())
         self.assertTrue((output / 'NomadBrowser.runtimeconfig.json').is_file())
         self.assertTrue((output / 'arupa-desktop/arupa_kernel.dll').is_file())
-        self.assertTrue((output / 'mivpn-sdk' / nomad.MIVPN_SDK_DIR_NAME / 'mivpn-browser.dll').is_file())
 
     def android_fixture(self):
         repo = self.root / 'nomad_android'

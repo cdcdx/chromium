@@ -36,10 +36,6 @@ class WindowsNativePackagingTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b'fixture')
             (out / 'arupa-build.json').write_text('{"schema":2}')
-            sdk = root / 'sdk'
-            sdk.mkdir()
-            for name in ('mivpn-browser.dll', 'mivpn-browser.h', 'mivpn-browser.lib'):
-                (sdk / name).write_bytes(b'fixture')
             headers = root / 'headers'
             headers.mkdir()
             (headers / 'arupa_kernel_capi.h').write_text('// fixture')
@@ -48,8 +44,7 @@ class WindowsNativePackagingTests(unittest.TestCase):
                 [shutil.which('pwsh') or shutil.which('powershell.exe') or 'powershell.exe', '-NoProfile',
                  '-ExecutionPolicy', 'Bypass', '-File', str(PACKAGER), '--arch', 'x64',
                  '--ver', '0.0.0.0', '--out', str(out), '--dist-dir', str(dist),
-                 '--num', '1', '--no-package', '--include-dir', str(headers),
-                 '--mivpn-sdk', str(sdk)],
+                 '--num', '1', '--no-package', '--include-dir', str(headers)],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60)
             delivery = dist / 'arupa-win-x64-0.0.0.0-static-1'
             check(result, delivery)
