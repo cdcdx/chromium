@@ -91,13 +91,19 @@ class VerifyPayloadTest(unittest.TestCase):
               guard._utf16le('something else entirely'))
         self.assertFalse(self.quiet(self.payload))
 
-    def test_windows_in_process_payload_needs_no_kernelhost_dll(self):
-        write(os.path.join(self.payload, 'arupa_kernel.dll'),
-              b'...cannot point FILE_EXE at...')
-        write(os.path.join(self.payload, 'arupa_render.exe'), b'window shell')
-        self.assertTrue(self.quiet(self.payload, target_os='win'))
-        os.unlink(os.path.join(self.payload, 'arupa_render.exe'))
-        self.assertFalse(self.quiet(self.payload, target_os='win'))
+    def test_windows_requires_separate_host_and_child_shell(self):
+        kernel = os.path.join(self.payload, 'arupa-desktop')
+        os.makedirs(kernel)
+        write(os.path.join(kernel, 'arupa_kernel.dll'), b'...cannot point FILE_EXE at...')
+        write(os.path.join(kernel, 'arupa_render.exe'), b'child shell')
+        host = os.path.join(self.payload, 'NomadBrowser.Windows.KernelHost')
+        self.assertFalse(self.quiet(kernel, target_os='win'))
+        write(host + '.dll', guard._utf16le('handing off to') + guard._utf16le('refusing to run the full'))
+        self.assertFalse(self.quiet(kernel, target_os='win'))
+        write(host + '.exe', b'native host')
+        self.assertTrue(self.quiet(kernel, target_os='win'))
+        os.unlink(os.path.join(kernel, 'arupa_render.exe'))
+        self.assertFalse(self.quiet(kernel, target_os='win'))
 
     def test_find_payload_walks_into_app_layout(self):
         """mac 布局是 *.app/Contents/...：按内核库定位而不是硬编码路径。"""

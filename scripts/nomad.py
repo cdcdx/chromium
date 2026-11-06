@@ -244,8 +244,10 @@ def windows_apphost_resources(repo):
         'FileDescription': project.findtext('.//Product') or 'Nomad Browser',
         'ProductName': project.findtext('.//Product') or 'Nomad Browser',
         'CompanyName': project.findtext('.//Company') or 'Nomad',
-        'FileVersion': app_version, 'ProductVersion': app_version,
-        'OriginalFilename': 'NomadBrowser.exe', 'InternalName': 'NomadBrowser',
+        'FileVersion': app_version,
+        'ProductVersion': app_version,
+        'OriginalFilename': 'NomadBrowser.Windows.KernelHost.exe',
+        'InternalName': 'NomadBrowser.Windows.KernelHost',
     }.items():
         lines.append(f'   VALUE "{key}", {quoted(value)}')
     lines += ['  END', ' END', ' BLOCK "VarFileInfo" BEGIN',
@@ -254,9 +256,13 @@ def windows_apphost_resources(repo):
 
 
 def install_windows_native_host(delivery_root, payload, root, arch, version):
-    """Build Nomad's small native apphost; never substitute a static kernel EXE."""
-    required = ('NomadBrowser.dll', 'NomadBrowser.runtimeconfig.json',
-                'NomadBrowser.deps.json', 'hostfxr.dll', 'hostpolicy.dll', 'coreclr.dll')
+    """Build the small native KernelHost entry; retain the separate .NET UI apphost."""
+    required = ('NomadBrowser.Windows.KernelHost.dll',
+                'NomadBrowser.Windows.KernelHost.runtimeconfig.json',
+                'NomadBrowser.Windows.KernelHost.deps.json',
+                'hostfxr.dll',
+                'hostpolicy.dll',
+                'coreclr.dll')
     missing = [name for name in required if not (payload / name).is_file()]
     if missing:
         F.err('原生浏览器宿主缺少托管运行文件: ' + ', '.join(missing))
@@ -274,7 +280,7 @@ windows_manifest("nomad_manifest") {
   sources = [ "app.manifest", common_controls_manifest, default_compatibility_manifest ]
 }
 executable("apphost") {
-  output_name = "NomadBrowser"
+  output_name = "NomadBrowser.Windows.KernelHost"
   output_dir = "$root_out_dir/nomad-native"
   sources = [ "main.cc", "app.rc" ]
   deps = [ "//base", "//sandbox", ":nomad_manifest",
@@ -294,10 +300,10 @@ group("delivery") {
     expected = (delivery_root / 'kernel/.arupa-sandbox-build-id').read_text().strip()
     actual = digest(out / 'obj/sandbox/win/sandbox.lib')
     if expected != actual:
-        F.err('Nomad 原生入口与 SDK 沙箱构建不匹配；请重建配套 SDK')
+        F.err('Nomad native entry does not match sandbox build ID; please rebuild SDK')
     F.run([sys.executable, root / 'arupa_desktop/tools/verify_transfer_delivery.py',
-           '--bootstrap-host', out / 'nomad-native/NomadBrowser.exe'])
-    shutil.copy2(out / 'nomad-native/NomadBrowser.exe', payload / 'NomadBrowser.exe')
+           '--bootstrap-host', out / 'nomad-native/NomadBrowser.Windows.KernelHost.exe'])
+    shutil.copy2(out / 'nomad-native/NomadBrowser.Windows.KernelHost.exe', payload / 'NomadBrowser.Windows.KernelHost.exe')
     # Windows resolves static imports before wWinMain/managed SetDllDirectory.
     # Child processes also enter the native host directly, before managed code.
     # Only the native entry's CRT belongs at the application root. Chromium's
@@ -308,7 +314,7 @@ group("delivery") {
         dependency = delivery_root / 'kernel' / name
         if dependency.is_file():
             shutil.copy2(dependency, payload / name)
-    F.log('Windows 浏览器入口 → Nomad 小型原生入口；内核位于 arupa-desktop/arupa_kernel.dll')
+    F.log('Windows UI → native KernelHost → arupa-desktop/arupa_kernel.dll')
 
 
 def desktop_project(repo, target_os, explicit):
@@ -319,7 +325,7 @@ def desktop_project(repo, target_os, explicit):
                   'linux': 'NomadBrowser.Avalonia.Linux'}[target_os]
         path = repo / folder / (folder + '.csproj')
     if not path.is_file():
-        F.err(f'缺少浏览器项目 {path}；请先 fetch nomad_desktop，或使用 --pc-project 指定实际工程')
+        F.err(f'Missing browser project: {path}; please fetch nomad_desktop or use the --pc-project flag')
     return path
 
 
@@ -354,18 +360,16 @@ def install_mivpn_sdk(root, delivery_root, payload):
     F.log(f'MiVPN Browser SDK → arupa-desktop/mivpn-sdk/{MIVPN_SDK_DIR_NAME}')
 
 
-# 两个 OOP 宿主工程编**同一批源码**：Mac 侧逐条列在自己的 csproj 里，Linux 侧用
-# `..\..\Mac\NomadBrowser.Mac.KernelHost\**\*.cs` 把 Mac 的业务源整目录 glob 进来 ——
-# 但 NomadBrowser.Arupa / NomadBrowser.Core 的单文件清单是两边各列各的，于是
-# 「Mac 工程收了新源、Linux 工程漏收」的漂移只在 Linux 上以 CS0103/CS0246 暴露，
-# 且往往要等整条构建跑到最后的 publish_linux_kernelhost 才炸。
-# 2026-10-16 实例：ArupaExtensionEventListeners.cs 漏收 → 共享源 NativeExtensionHost.cs:331
-# CS0103（报错位置指向 Mac 目录，很容易误判成命名空间问题），桌面 Linux 出包失败。
-# 故在构建入口先对齐两份清单：见 check_kernelhost_source_parity。
+# 三端 OOP 宿主共享业务源。Windows 额外编入原有系统技能后端；其余源必须相同。
 KERNELHOST_PROJ = {
     'mac': ('Mac', 'NomadBrowser.Mac.KernelHost', 'NomadBrowser.Mac.KernelHost.csproj'),
     'linux': LINUX_KERNELHOST_PROJ,
+    'win': ('Windows', 'NomadBrowser.Windows.KernelHost', 'NomadBrowser.Windows.KernelHost.csproj'),
 }
+WINDOWS_KERNELHOST_EXTRA_SOURCES = (
+    'NomadBrowser.Arupa/ArupaNativeSkills.cs',
+    'NomadBrowser.Foundation/Contracts/INativeExtensionSkills.cs',
+)
 
 
 def kernelhost_sources(project):
@@ -373,7 +377,19 @@ def kernelhost_sources(project):
     project = project.resolve()
     root = str(project.parent)
     sources = set()
-    for element in ET.parse(project).iter():
+    def elements(path, visited=None):
+        visited = set() if visited is None else visited
+        path = path.resolve()
+        if path in visited: return
+        visited.add(path)
+        for element in ET.parse(path).iter():
+            if element.tag.rsplit('}', 1)[-1] == 'Import':
+                imported = element.get('Project', '').replace('\\', '/')
+                if imported and '$(' not in imported:
+                    target = path.parent / imported
+                    if target.is_file(): yield from elements(target, visited)
+            yield element
+    for element in elements(project):
         if element.tag.rsplit('}', 1)[-1] != 'Compile':
             continue
         include = (element.get('Include') or '').strip().replace('\\', '/')
@@ -401,38 +417,34 @@ def kernelhost_sources(project):
 
 
 def check_kernelhost_source_parity(repo):
-    """两个内核宿主工程的编译源清单必须逐条对齐 —— 不是「差不多」，是同一批源。
-
-    Mac 侧新收一个文件而 Linux 侧没同步时，Linux 上就是 CS0103/CS0246（错误位置还指向
-    Mac 目录下的共享源）。这里提前比对并指名差异文件，省掉一次跑到收尾才失败的构建。
-    工程不在（例如只取了 Windows 侧的树）就跳过：缺工程本身由 publish_linux_kernelhost 拦。
-    """
+    """在构建前核对共享宿主源；允许明确列出的 Windows 系统后端。"""
     sources = {}
     for platform, parts in KERNELHOST_PROJ.items():
         project = repo.joinpath(*parts)
         if not project.is_file():
-            F.log(f'内核宿主源码对齐：跳过（缺少 {platform} 工程 {project}）')
+            if platform == 'win':
+                continue  # Compatibility for source snapshots predating the Windows host.
+            F.log(f'Kernel host source parity: skip (missing project {platform} project: {project}')
             return
         sources[platform] = kernelhost_sources(project)
-    if sources['mac'] == sources['linux']:
-        F.log(f'内核宿主源码清单一致（{len(sources["linux"])} 个源文件）')
-        return
+    if 'win' in sources:
+        sources['win'] -= {str((repo / name).resolve()) for name in WINDOWS_KERNELHOST_EXTRA_SOURCES}
     detail = []
-    for platform, other in (('mac', 'linux'), ('linux', 'mac')):
-        only = sorted(sources[other] - sources[platform])
-        if only:
-            detail.append(f'{platform} 工程漏收（{other} 收了）: ' + ', '.join(only))
-    F.err('两个内核宿主工程编同一批源码，但编译源清单不一致 —— ' + '；'.join(detail)
-          + '。请把缺的 <Compile Include=…> 补进对应 csproj（改一个必须改另一个）。')
+    for platform, current in sources.items():
+        missing = sorted(sources['mac'] - current)
+        extra = sorted(current - sources['mac'])
+        if missing: detail.append(f'{platform} missing: ' + ', '.join(missing))
+        if extra: detail.append(f'{platform} unexpected: ' + ', '.join(extra))
+    if detail:
+        F.err('Kernel hosts must compile the same shared source code: ' + '; '.join(detail))
+    F.log(f'Kernel host source parity: {len(sources["mac"])} shared source files match across {", ".join(sources)}')
 
 
 def publish_linux_kernelhost(repo, kernel_dir, dotnet, cfg, rid, props):
     """把 OOP 内核宿主发布进 Linux 便携包的 arupa-desktop/（即 UI 侧的 ArupaDir）。
 
-    为什么 Linux 也要独立宿主：Windows 必须走原生宿主（内核静态链进主镜像）—— Chromium 的
-    Windows 沙箱在 CreateProcess(CREATE_SUSPENDED) 与 ResumeThread 之间做跨进程地址交接，
-    那一刻只有主 EXE 镜像被映射；macOS/Linux 的沙箱不做地址交接（策略编译成字符串交子进程自
-    sandbox_init），库式嵌入/OOP 本身就是安全形态，所以 Linux 与 Mac 同走 OOP，交付里必须带宿主。
+    三端均使用独立 KernelHost 加动态内核库。Windows 的原生小入口另行完成沙箱引导；
+    Linux 与 Mac 通过共享宿主启动，并保留各平台的子进程薄壳。
 
     为什么装进 arupa-desktop/ 而不是别处（两条硬约束各钉一个）：
       · 宿主自己：NomadBrowser.Avalonia.Linux/Program.cs::ResolveKernelHostPath 按

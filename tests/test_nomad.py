@@ -269,8 +269,8 @@ class NomadTest(unittest.TestCase):
                 for name in ('NomadBrowser.exe', 'NomadBrowser.dll', 'NomadBrowser.runtimeconfig.json',
                              'NomadBrowser.deps.json', 'hostfxr.dll', 'hostpolicy.dll', 'coreclr.dll'):
                     (target / name).write_bytes(b'managed publish fixture')
-                # The project's AfterTargets=Publish produces the native entry.
-                (target / 'NomadBrowser.exe').write_bytes(native_binary)
+                # Publish retains the UI apphost and adds a separate native KernelHost.
+                (target / 'NomadBrowser.Windows.KernelHost.exe').write_bytes(native_binary)
                 for name in ('vcruntime140.dll',):
                     shutil.copy2(kernel / name, target / name)
         output = self.root / 'output'
@@ -279,7 +279,8 @@ class NomadTest(unittest.TestCase):
              patch.object(nomad, 'inherit_published_permissions'), \
              patch.object(fetch, 'run', side_effect=fake_publish):
             self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION, output)
-        self.assertEqual((output / 'NomadBrowser.exe').read_bytes(), native_binary)
+        self.assertEqual((output / 'NomadBrowser.exe').read_bytes(), b'managed publish fixture')
+        self.assertEqual((output / 'NomadBrowser.Windows.KernelHost.exe').read_bytes(), native_binary)
         self.assertEqual((output / 'vcruntime140.dll').read_bytes(), b'CRT dependency')
         self.assertFalse((output / 'libEGL.dll').exists())
         self.assertEqual((output / 'arupa-desktop/libEGL.dll').read_bytes(), b'GPU dependency')
@@ -710,6 +711,16 @@ class NomadTest(unittest.TestCase):
         repo.mkdir()
         with contextlib.redirect_stdout(io.StringIO()):
             nomad.check_kernelhost_source_parity(repo)
+
+    def test_windows_kernel_host_cannot_omit_shared_sources(self):
+        repo = self.kernelhost_fixture(linux_extra=[r'..\..\NomadBrowser.Arupa\ArupaExtensionEventListeners.cs'])
+        windows = repo.joinpath(*nomad.KERNELHOST_PROJ['win'])
+        windows.parent.mkdir(parents=True)
+        windows.write_text('<Project><ItemGroup><Compile Include="../../Mac/NomadBrowser.Mac.KernelHost/*.cs" /></ItemGroup></Project>')
+        with self.assertRaisesRegex(RuntimeError, 'win missing:'):
+            self.quiet(nomad.check_kernelhost_source_parity, repo)
+        windows.write_text(repo.joinpath(*nomad.LINUX_KERNELHOST_PROJ).read_text().replace('../KernelHostShared/', '../../Posix/KernelHostShared/').replace('..\\KernelHostShared\\', '..\\..\\Posix\\KernelHostShared\\'))
+        self.quiet(nomad.check_kernelhost_source_parity, repo)
 
     def test_desktop_build_gates_kernel_host_source_parity(self):
         self.pc_fixture('linux')

@@ -161,19 +161,17 @@ def verify_payload(payload, target_os='linux'):
     host = os.path.join(payload, SUBPROCESS_HOST[target_os])
     print(f'UI payload {payload}')
     ok = report(scan_kernel(library, target_os), os.path.basename(library))
-    if target_os == 'win':
-        # Windows loads the kernel in the NomadBrowser.exe process; it has no OOP
-        # KernelHost.dll.  The native kernel marker and subprocess shell are
-        # the relevant guards for this packaging shape.
-        print('    ✔ Windows in-process host; *KernelHost.dll is not required')
-    else:
-        dll = next((name for name in sorted(os.listdir(payload))
-                    if name.endswith('.KernelHost.dll')), None) if os.path.isdir(payload) else None
-        if dll:
-            ok = report(scan_host_dll(os.path.join(payload, dll)), dll) and ok
-        else:
-            print('    ✘ 找不到 *KernelHost.dll（托管护栏无从校验）')
+    managed_root = os.path.dirname(payload) if target_os == 'win' else payload
+    dll = next((name for name in sorted(os.listdir(managed_root))
+                if name.endswith('.KernelHost.dll')), None) if os.path.isdir(managed_root) else None
+    if dll:
+        ok = report(scan_host_dll(os.path.join(managed_root, dll)), dll) and ok
+        if target_os == 'win' and not os.path.isfile(os.path.join(managed_root, 'NomadBrowser.Windows.KernelHost.exe')):
+            print('    ✘ 缺少 Windows 原生 KernelHost 入口')
             ok = False
+    else:
+        print('    ✘ 找不到 *KernelHost.dll（托管护栏无从校验）')
+        ok = False
     if os.path.isfile(host):
         print(f'    ✔ 子进程薄壳 {os.path.basename(host)} 就位 ({os.path.getsize(host)}B)')
     else:
