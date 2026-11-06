@@ -168,7 +168,7 @@ def kernel_payload_ignore(target_os):
     native_host_ignore = shutil.ignore_patterns('arupa_desktop.exe') if target_os == 'win' else None
 
     def ignore(directory, names):
-        excluded = [name for name in names if name.casefold() == 'mivpn_extension_resources.pak']
+        excluded = [name for name in names if name.casefold() in ('mivpn_extension_resources.pak', 'mivpn-sdk')]
         if native_host_ignore:
             excluded.extend(native_host_ignore(directory, names))
         return excluded
@@ -331,33 +331,6 @@ def desktop_project(repo, target_os, explicit):
 
 LINUX_KERNELHOST_PROJ = ('Posix', 'NomadBrowser.Linux.KernelHost', 'NomadBrowser.Linux.KernelHost.csproj')
 LINUX_KERNELHOST_EXE = 'NomadBrowser.Linux.KernelHost'
-
-# Must match arupa_desktop/app/arupa_mivpn_sdk_admission.h kMivpnSdkRelativePath:
-# the utility process resolves the DLL from its own image directory, i.e.
-# <kernel directory>/mivpn-sdk/<name>/mivpn-browser.dll.
-MIVPN_SDK_DIR_NAME = 'hy2-20261022-coF8no'
-MIVPN_SDK_FILES = ('mivpn-browser.dll', 'mivpn-browser.h', 'mivpn-browser.lib')
-
-
-def install_mivpn_sdk(root, delivery_root, payload):
-    """Place the Windows MiVPN SDK beside the kernel DLL.
-
-    Both browser and child processes resolve it from the loaded kernel. Prefer the kernel
-    delivery's copy so a release stays reproducible from the same inputs; fall
-    back to the workspace SDK build directory.
-    """
-    source = delivery_root / 'kernel/mivpn-sdk' / MIVPN_SDK_DIR_NAME
-    if not source.is_dir():
-        source = root / 'dist' / 'mivpn-sdk' / MIVPN_SDK_DIR_NAME
-    missing = [name for name in MIVPN_SDK_FILES if not (source / name).is_file()]
-    if missing:
-        F.err('缺少 MiVPN Browser SDK: ' + ', '.join(missing)
-              + f'（{source}）；先运行 mivpn-client/build_browser_dll_windows.ps1')
-    destination = payload / 'arupa-desktop/mivpn-sdk' / MIVPN_SDK_DIR_NAME
-    destination.mkdir(parents=True, exist_ok=True)
-    for name in MIVPN_SDK_FILES:
-        shutil.copy2(source / name, destination / name)
-    F.log(f'MiVPN Browser SDK → arupa-desktop/mivpn-sdk/{MIVPN_SDK_DIR_NAME}')
 
 
 # 三端 OOP 宿主共享业务源。Windows 额外编入原有系统技能后端；其余源必须相同。
@@ -886,8 +859,6 @@ def desktop_build(root, args, target_os, arch, version, output):
             # its assets under arupa-desktop/ and avoid a second launch entry.
             shutil.copytree(kernel / 'kernel', payload / 'arupa-desktop',
                             dirs_exist_ok=True, symlinks=True, ignore=kernel_payload_ignore(target_os))
-            if target_os == 'win':
-                install_mivpn_sdk(root, kernel, payload)
             if target_os == 'linux':
                 # 放在 copytree 之后：交付根的 kernel/ 是内核产出方的目录，不往里写，
                 # 只写我们自己的交付暂存目录（理由见 publish_linux_kernelhost）。

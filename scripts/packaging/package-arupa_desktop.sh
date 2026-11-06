@@ -35,8 +35,6 @@
 #                               会被拷进交付根 tools/ 并执行，非零退出即判定交付不合格
 #       --package-dir DIR       把该目录下的一级文件/文件夹整份拷进交付根
 #                               （默认 <repo>/package/package_desktop，常见: docs/ dotnet/）
-#       --mivpn-sdk DIR         MiVPN Browser SDK 目录（默认
-#                               <repo>/dist/mivpn-sdk/hy2-20261022-coF8no）
 #       --no-package    不拷 package 目录
 #       --docs DIR      额外把该目录整份拷成 docs/
 #       --probe DIR     额外拷成 probe-plugin/
@@ -92,7 +90,6 @@ PAK_SRC=""
 INC_DIR=""
 VERIFY_SCRIPT=""
 PKG_DIR=""
-MIVPN_SDK_DIR=""
 DOCS_DIR=""
 PROBE_DIR=""
 DO_ZIP=0
@@ -112,7 +109,7 @@ while [[ $# -gt 0 ]]; do
     --include-dir)     INC_DIR="${2:?--include-dir 需要参数}"; shift 2 ;;
     --verify-script)   VERIFY_SCRIPT="${2:?--verify-script 需要参数}"; shift 2 ;;
     --package-dir)     PKG_DIR="${2:?--package-dir 需要参数}"; shift 2 ;;
-    --mivpn-sdk)       MIVPN_SDK_DIR="${2:?--mivpn-sdk 需要参数}"; shift 2 ;;
+    --mivpn-sdk)       : "${2:?--mivpn-sdk 需要参数}"; shift 2 ;; # legacy option, no longer shipped
     --no-package)      NO_PACKAGE=1; shift ;;
     --docs)            DOCS_DIR="${2:?--docs 需要参数}"; shift 2 ;;
     --probe)           PROBE_DIR="${2:?--probe 需要参数}"; shift 2 ;;
@@ -225,9 +222,6 @@ fi
 # ---------------------------------------------------------------- 公共附件
 if [[ -z "${INC_DIR}" ]]; then INC_DIR="${ROOT_DIR}/arupa_desktop/public"; fi
 if [[ -z "${VERIFY_SCRIPT}" ]]; then VERIFY_SCRIPT="${ROOT_DIR}/arupa_desktop/tools/verify_transfer_delivery.py"; fi
-if [[ -z "${MIVPN_SDK_DIR}" ]]; then
-  MIVPN_SDK_DIR="${ROOT_DIR}/dist/mivpn-sdk/hy2-20261022-coF8no"
-fi
 
 # package 附加件（docs/ dotnet/ …）：一级文件/文件夹整份搬进交付根，与 kernel.py copy_assets 同口径
 if [[ -z "${PKG_DIR}" ]]; then PKG_DIR="${ROOT_DIR}/package/package_desktop"; fi
@@ -380,26 +374,6 @@ package_arch() {
     chmod 0755 "${dest}/chrome-sandbox"
     log "  chrome-sandbox  $(du -h "${out}/chrome_sandbox" | cut -f1)（安装阶段必须 root:root/4755）"
   fi
-
-  # MiVPN runs in a dedicated sandboxed utility. Keep its SDK beside the native
-  # host so the browser can admit exactly one fixed install-relative path.
-  local mivpn_library
-  if [[ "${OS}" == "mac" ]]; then
-    mivpn_library="mivpn-browser.dylib"
-  else
-    mivpn_library="libmivpn-browser.so"
-  fi
-  [[ -s "${MIVPN_SDK_DIR}/${mivpn_library}" ]] \
-    || err "缺 MiVPN Browser SDK: ${MIVPN_SDK_DIR}/${mivpn_library}（先运行 mivpn-sdk/build_browser_library_unix.sh，或用 --mivpn-sdk 指定）"
-  mkdir -p "${dest}/mivpn-sdk/hy2-20261022-coF8no"
-  cp -f "${MIVPN_SDK_DIR}/${mivpn_library}" \
-    "${dest}/mivpn-sdk/hy2-20261022-coF8no/"
-  if [[ -s "${MIVPN_SDK_DIR}/mivpn-browser.h" ]]; then
-    cp -f "${MIVPN_SDK_DIR}/mivpn-browser.h" \
-      "${dest}/mivpn-sdk/hy2-20261022-coF8no/"
-  fi
-  check_lib_arch "${dest}/mivpn-sdk/hy2-20261022-coF8no/${mivpn_library}" "${cpu}"
-  log "  MiVPN Browser SDK -> kernel/mivpn-sdk/hy2-20261022-coF8no/${mivpn_library}"
 
   # 主 pak
   want "${out}/arupa_plugin_host" "${dest}" "ninja 目标 chrome/browser/arupa_desktop/plugin/host:arupa_plugin_host"

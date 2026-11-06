@@ -732,7 +732,7 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual((delivery / 'docs/readme.txt').read_text(), 'desktop')
         self.assertTrue((delivery / '.hidden').is_file())
         self.assertTrue((delivery / 'kernel/plugin-runtime/runtime.js').is_file())
-        self.assertTrue((delivery / 'kernel/mivpn-sdk/hy2-20261022-coF8no/mivpn-browser.dylib').is_file())
+        self.assertFalse((delivery / 'kernel/mivpn-sdk').exists())
         self.assertFalse((delivery / 'plugin-runtime').exists())
         for resource in (out / 'gen').rglob('*.pak'):
             relative = resource.relative_to(out)

@@ -138,11 +138,12 @@ class LocalePackagingTest(unittest.TestCase):
                 ["bash", str(PACKAGER), "--os", target_os, "--arch", arch,
                  "--ver", "0.0.0.0", "--out", str(out), "--num", "1",
                  "--dist-dir", str(root / "dist"), "--no-package",
-                 "--mivpn-sdk", str(mivpn),
                  "--include-dir", str(headers), "--verify-script", str(verifier)],
                 capture_output=True, text=True, timeout=30, env=env)
             delivery = root / "dist" / f"arupa-{target_os}-{arch}-0.0.0.0-static-1"
             check(result, delivery)
+            if result.returncode == 0:
+                self.assertFalse((delivery / "kernel/mivpn-sdk").exists())
 
     def test_legacy_build_has_no_false_missing_warning(self):
         def check(result, delivery):
