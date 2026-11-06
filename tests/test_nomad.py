@@ -179,7 +179,8 @@ class NomadTest(unittest.TestCase):
         (delivery / 'kernel' / library).touch()
         (delivery / 'kernel/.arupa-version').write_text(VERSION)
         if target_os == 'win':
-            (delivery / 'kernel/arupa_desktop.exe').touch()
+            (delivery / 'kernel/arupa_render.exe').touch()
+            (delivery / 'kernel/.arupa-sandbox-build-id').write_text('a' * 64)
             (delivery / 'tools').mkdir(exist_ok=True)
             shutil.copy2(Path(nomad.__file__).resolve().parents[1] /
                          'arupa_desktop/tools/verify_transfer_delivery.py', delivery / 'tools')
@@ -217,35 +218,38 @@ class NomadTest(unittest.TestCase):
                     'arupa_kernel_respond_ext_api', 'arupa_free', 'arupa_kernel_abi_minor',
                     'arupa_kernel_create', 'arupa_subprocess_main']
         binary = self.native_pe_fixture(required)
-        for name in ('arupa_kernel.dll', 'arupa_desktop.exe'):
-            (self.args.delivery / 'kernel' / name).write_bytes(binary)
+        (self.args.delivery / 'kernel/arupa_kernel.dll').write_bytes(binary)
+        (self.args.delivery / 'kernel/arupa_render.exe').write_bytes(self.native_pe_fixture([
+            'arupa_bootstrap_sandbox_info_v1', 'arupa_bootstrap_sandbox_build_v1',
+            'g_shared_section', 'g_sentinel_value_start', 'g_sentinel_value_end']))
         return binary
 
-    def test_windows_delivery_without_native_host_stops_before_managed_build(self):
+    def test_windows_delivery_without_child_bootstrap_stops_before_managed_build(self):
         self.pc_fixture('win')
-        (self.args.delivery / 'kernel/arupa_desktop.exe').unlink()
+        (self.args.delivery / 'kernel/arupa_render.exe').unlink()
         with patch.object(nomad, 'prepare_dotnet') as dotnet:
-            with self.assertRaisesRegex(RuntimeError, '原生主镜像宿主'):
+            with self.assertRaisesRegex(RuntimeError, '子进程薄壳'):
                 self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION,
                            self.root / 'output')
         dotnet.assert_not_called()
 
-    def test_windows_renamed_apphost_fails_static_gate_before_managed_build(self):
+    def test_windows_renamed_apphost_fails_bootstrap_gate_before_managed_build(self):
         self.native_delivery_fixture()
         # The file name alone must never establish main-image kernel identity.
-        (self.args.delivery / 'kernel/arupa_desktop.exe').write_bytes(self.native_pe_fixture([]))
+        (self.args.delivery / 'kernel/arupa_render.exe').write_bytes(self.native_pe_fixture([]))
         with patch.object(nomad, 'prepare_dotnet') as dotnet:
             with self.assertRaises(subprocess.CalledProcessError):
                 self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION,
                            self.root / 'output')
         dotnet.assert_not_called()
 
-    def test_windows_publish_replaces_apphost_with_native_kernel_and_runtime_dependencies(self):
-        native_binary = self.native_delivery_fixture()
+    def test_windows_publish_preserves_nomad_entry_and_delivers_kernel_once(self):
+        self.native_delivery_fixture()
+        native_binary = b'Nomad-owned native entry fixture'
         kernel = self.args.delivery / 'kernel'
         (kernel / 'vcruntime140.dll').write_bytes(b'CRT dependency')
         (kernel / 'libEGL.dll').write_bytes(b'GPU dependency')
-        sdk = self.args.delivery / 'mivpn-sdk' / nomad.MIVPN_SDK_DIR_NAME
+        sdk = self.args.delivery / 'kernel/mivpn-sdk' / nomad.MIVPN_SDK_DIR_NAME
         sdk.mkdir(parents=True)
         for name in nomad.MIVPN_SDK_FILES:
             (sdk / name).write_bytes(b'SDK fixture')
@@ -265,6 +269,10 @@ class NomadTest(unittest.TestCase):
                 for name in ('NomadBrowser.exe', 'NomadBrowser.dll', 'NomadBrowser.runtimeconfig.json',
                              'NomadBrowser.deps.json', 'hostfxr.dll', 'hostpolicy.dll', 'coreclr.dll'):
                     (target / name).write_bytes(b'managed publish fixture')
+                # The project's AfterTargets=Publish produces the native entry.
+                (target / 'NomadBrowser.exe').write_bytes(native_binary)
+                for name in ('vcruntime140.dll',):
+                    shutil.copy2(kernel / name, target / name)
         output = self.root / 'output'
         with patch.object(nomad, 'prepare_dotnet', return_value='dotnet'), \
              patch.object(nomad, 'refresh_kernel_facade', return_value=facade), \
@@ -273,12 +281,13 @@ class NomadTest(unittest.TestCase):
             self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION, output)
         self.assertEqual((output / 'NomadBrowser.exe').read_bytes(), native_binary)
         self.assertEqual((output / 'vcruntime140.dll').read_bytes(), b'CRT dependency')
-        self.assertEqual((output / 'libEGL.dll').read_bytes(), b'GPU dependency')
+        self.assertFalse((output / 'libEGL.dll').exists())
+        self.assertEqual((output / 'arupa-desktop/libEGL.dll').read_bytes(), b'GPU dependency')
         self.assertFalse((output / 'arupa_kernel.dll').exists())
         self.assertFalse((output / 'arupa-desktop/arupa_desktop.exe').exists())
         self.assertTrue((output / 'NomadBrowser.runtimeconfig.json').is_file())
         self.assertTrue((output / 'arupa-desktop/arupa_kernel.dll').is_file())
-        self.assertTrue((output / 'mivpn-sdk' / nomad.MIVPN_SDK_DIR_NAME / 'mivpn-browser.dll').is_file())
+        self.assertTrue((output / 'arupa-desktop/mivpn-sdk' / nomad.MIVPN_SDK_DIR_NAME / 'mivpn-browser.dll').is_file())
 
     def android_fixture(self):
         repo = self.root / 'nomad_android'

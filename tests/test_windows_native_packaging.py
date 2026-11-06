@@ -33,7 +33,7 @@ INTERMEDIATE_GEN_PAKS = (
 
 @unittest.skipUnless(platform.system() == 'Windows', 'Windows packager')
 class WindowsNativePackagingTests(unittest.TestCase):
-    def package(self, host_bytes, check, missing_gen_pak=None):
+    def package(self, host_bytes, check, missing_gen_pak=None, child_bytes=True):
         with tempfile.TemporaryDirectory(prefix='arupa-native-package-') as temporary:
             root = Path(temporary).resolve()
             out = root / 'out'
@@ -41,7 +41,14 @@ class WindowsNativePackagingTests(unittest.TestCase):
             (out / 'arupa_kernel.dll').write_bytes(fixtures.pe_fixture(sorted(fixtures.gate.REQUIRED)))
             if host_bytes is not None:
                 (out / 'arupa_desktop.exe').write_bytes(host_bytes)
-            for name in ('arupa_render.exe', 'arupa_plugin_host.exe', 'content_shell.pak',
+            if child_bytes is True:
+                child_bytes = fixtures.pe_fixture(sorted(fixtures.gate.BOOTSTRAP_REQUIRED))
+            if child_bytes is not None:
+                (out / 'arupa_render.exe').write_bytes(child_bytes)
+            archive = out / 'obj/sandbox/win/sandbox.lib'
+            archive.parent.mkdir(parents=True)
+            archive.write_bytes(b'compiled sandbox fixture')
+            for name in ('arupa_plugin_host.exe', 'content_shell.pak',
                          'devtools_resources.pak', 'icudtl.dat', 'snapshot_blob.bin',
                          'custom_root.pak'):
                 path = out / name
@@ -72,15 +79,15 @@ class WindowsNativePackagingTests(unittest.TestCase):
             delivery = dist / 'arupa-win-x64-0.0.0.0-static-1'
             check(result, delivery)
 
-    def test_production_delivery_keeps_native_host_and_compatibility_dll(self):
+    def test_production_delivery_excludes_stale_static_host_and_keeps_dll(self):
         host = fixtures.pe_fixture(sorted(fixtures.gate.NATIVE_REQUIRED))
         def check(result, delivery):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual((delivery / 'kernel/arupa_desktop.exe').read_bytes(), host)
+            self.assertFalse((delivery / 'kernel/arupa_desktop.exe').exists())
             self.assertTrue((delivery / 'kernel/arupa_kernel.dll').is_file())
             report = json.loads((delivery / 'transfer-abi.json').read_text(encoding='utf-8'))
-            self.assertEqual(report['nativeHost']['staticAbi'], 'passed')
-            self.assertIn('kernel/arupa_desktop.exe', (delivery / 'SHA256SUMS.txt').read_text(encoding='utf-8'))
+            self.assertEqual(report['childBootstrap']['staticAbi'], 'passed')
+            self.assertNotIn('kernel/arupa_desktop.exe', (delivery / 'SHA256SUMS.txt').read_text(encoding='utf-8'))
         self.package(host, check)
 
     def test_only_runtime_gen_paks_are_delivered(self):
@@ -111,7 +118,7 @@ class WindowsNativePackagingTests(unittest.TestCase):
                     self.assertFalse(delivery.exists(), 'failed package must be removed')
                 self.package(host, check, missing_gen_pak=relative)
 
-    def test_missing_or_invalid_native_host_cannot_leave_a_delivery(self):
+    def test_missing_or_invalid_child_bootstrap_cannot_leave_a_delivery(self):
         invalid_exports = fixtures.pe_fixture(['arupa_free'])
         wrong_arch = fixtures.pe_fixture(sorted(fixtures.gate.NATIVE_REQUIRED))
         struct.pack_into('<H', wrong_arch, 0x84, 0xAA64)
@@ -120,8 +127,7 @@ class WindowsNativePackagingTests(unittest.TestCase):
                 def check(result, delivery):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertFalse(delivery.exists(), 'failed package must be removed')
-                    self.assertIn('arupa_desktop.exe', result.stdout + result.stderr)
-                self.package(host, check)
+                self.package(None, check, child_bytes=host)
 
 
 if __name__ == '__main__':

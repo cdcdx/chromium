@@ -207,34 +207,108 @@ def delivery(root, args, target_os, arch, version):
 
 
 def validate_windows_native_host(delivery_root):
-    """Reject DLL-only deliveries before publishing a Windows browser."""
-    host = delivery_root / 'kernel/arupa_desktop.exe'
+    """Validate the DLL and native child bootstrap required by Windows."""
+    host = delivery_root / 'kernel/arupa_render.exe'
     gate = delivery_root / 'tools/verify_transfer_delivery.py'
     if not host.is_file():
-        F.err(f'Windows 浏览器需要原生主镜像宿主: {host}；请重新构建配套内核交付包')
+        F.err(f'Windows 浏览器缺少子进程薄壳: {host}')
+    if (delivery_root / 'kernel/arupa_desktop.exe').exists():
+        F.err('Windows DLL 交付不得包含大型 arupa_desktop.exe')
     if not gate.is_file():
         F.err(f'内核交付缺少原生主镜像校验工具: {gate}')
     if F.DRY_RUN:
         F.log(f'(dry-run) 校验 Windows 原生主镜像导出: {host}')
         return
     F.run([sys.executable, gate, '--library', delivery_root / 'kernel/arupa_kernel.dll',
-           '--platform', 'win', '--require-native-host'])
+           '--platform', 'win', '--require-dll-bootstrap'])
 
 
-def install_windows_native_host(delivery_root, payload):
-    """Use the kernel's real static host for both browser and child processes."""
+def windows_apphost_resources(repo):
+    """Keep the native entry's Explorer metadata owned by the Nomad project."""
+    app_version = ET.parse(repo / 'Config/AppVersion.props').findtext('.//NomadAppVersion')
+    if not app_version or not re.fullmatch(r'\d+\.\d+\.\d+(?:\.\d+)?', app_version):
+        F.err('NomadAppVersion 必须是有效的 Windows 数字版本')
+    parts = [int(part) for part in app_version.split('.')]
+    parts += [0] * (4 - len(parts))
+    if any(part > 65535 for part in parts):
+        F.err('NomadAppVersion 超出 Windows 版本范围')
+    project = ET.parse(repo / 'NomadBrowser.Avalonia/NomadBrowser.Avalonia.csproj')
+    def quoted(value):
+        return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '\\0"'
+    numbers = ','.join(str(part) for part in parts)
+    lines = ['#pragma code_page(65001)', '1 ICON "app.ico"', '1 VERSIONINFO',
+             f' FILEVERSION {numbers}', f' PRODUCTVERSION {numbers}',
+             ' FILEOS 0x40004', ' FILETYPE 1', 'BEGIN',
+             ' BLOCK "StringFileInfo" BEGIN', '  BLOCK "040904b0" BEGIN']
+    for key, value in {
+        'FileDescription': project.findtext('.//Product') or 'Nomad Browser',
+        'ProductName': project.findtext('.//Product') or 'Nomad Browser',
+        'CompanyName': project.findtext('.//Company') or 'Nomad',
+        'FileVersion': app_version, 'ProductVersion': app_version,
+        'OriginalFilename': 'NomadBrowser.exe', 'InternalName': 'NomadBrowser',
+    }.items():
+        lines.append(f'   VALUE "{key}", {quoted(value)}')
+    lines += ['  END', ' END', ' BLOCK "VarFileInfo" BEGIN',
+              '  VALUE "Translation", 0x409, 1200', ' END', 'END', '']
+    return '\n'.join(lines)
+
+
+def install_windows_native_host(delivery_root, payload, root, arch, version):
+    """Build Nomad's small native apphost; never substitute a static kernel EXE."""
     required = ('NomadBrowser.dll', 'NomadBrowser.runtimeconfig.json',
                 'NomadBrowser.deps.json', 'hostfxr.dll', 'hostpolicy.dll', 'coreclr.dll')
     missing = [name for name in required if not (payload / name).is_file()]
     if missing:
         F.err('原生浏览器宿主缺少托管运行文件: ' + ', '.join(missing))
-    shutil.copy2(delivery_root / 'kernel/arupa_desktop.exe', payload / 'NomadBrowser.exe')
+    src = root / 'src'
+    out = src / 'out' / f'arupa-win-{arch}-{version}-static'
+    graph = src / 'arupa_build/nomad_windows'
+    graph.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(root / 'nomad_desktop/Native/Windows/main.cc', graph / 'main.cc')
+    shutil.copy2(root / 'nomad_desktop/NomadBrowser.Avalonia/app.manifest', graph / 'app.manifest')
+    shutil.copy2(root / 'nomad_desktop/NomadBrowser.Avalonia/Assets/app.ico', graph / 'app.ico')
+    (graph / 'app.rc').write_text(windows_apphost_resources(root / 'nomad_desktop'), encoding='utf-16')
+    (graph / 'BUILD.gn').write_text('''# Generated from the Nomad native entry.
+import("//build/config/win/manifest.gni")
+windows_manifest("nomad_manifest") {
+  sources = [ "app.manifest", common_controls_manifest, default_compatibility_manifest ]
+}
+executable("apphost") {
+  output_name = "NomadBrowser"
+  output_dir = "$root_out_dir/nomad-native"
+  sources = [ "main.cc", "app.rc" ]
+  deps = [ "//base", "//sandbox", ":nomad_manifest",
+           "//chrome/browser/arupa_desktop:windows_sandbox_build_id" ]
+  configs -= [ "//build/config/win:console" ]
+  configs += [ "//build/config/win:windowed" ]
+}
+group("delivery") {
+  testonly = true
+  deps = [ ":apphost", "//arupa_build/arupa_desktop:delivery" ]
+}
+''', encoding='utf-8')
+    F.run([src / 'buildtools/win/gn.exe', 'gen', out,
+           '--root-target=//arupa_build/nomad_windows:delivery'], src)
+    F.run([src / 'third_party/ninja/ninja.exe', '-C', out, '-j', '8',
+           'arupa_build/nomad_windows:apphost'], src)
+    expected = (delivery_root / 'kernel/.arupa-sandbox-build-id').read_text().strip()
+    actual = digest(out / 'obj/sandbox/win/sandbox.lib')
+    if expected != actual:
+        F.err('Nomad 原生入口与 SDK 沙箱构建不匹配；请重建配套 SDK')
+    F.run([sys.executable, root / 'arupa_desktop/tools/verify_transfer_delivery.py',
+           '--bootstrap-host', out / 'nomad-native/NomadBrowser.exe'])
+    shutil.copy2(out / 'nomad-native/NomadBrowser.exe', payload / 'NomadBrowser.exe')
     # Windows resolves static imports before wWinMain/managed SetDllDirectory.
     # Child processes also enter the native host directly, before managed code.
-    for dependency in (delivery_root / 'kernel').glob('*.dll'):
-        if dependency.name.lower() != 'arupa_kernel.dll':
-            shutil.copy2(dependency, payload / dependency.name)
-    F.log('Windows 浏览器入口 → 原生主镜像 NomadBrowser.exe（同镜像启动沙箱子进程）')
+    # Only the native entry's CRT belongs at the application root. Chromium's
+    # graphics/compiler DLLs resolve beside arupa_kernel.dll; copying them to
+    # both roots would waste tens of megabytes and permit version drift.
+    for name in ('msvcp140.dll', 'msvcp140_atomic_wait.dll', 'vcruntime140.dll',
+                 'vcruntime140_1.dll', 'vcruntime140_threads.dll', 'concrt140.dll'):
+        dependency = delivery_root / 'kernel' / name
+        if dependency.is_file():
+            shutil.copy2(dependency, payload / name)
+    F.log('Windows 浏览器入口 → Nomad 小型原生入口；内核位于 arupa-desktop/arupa_kernel.dll')
 
 
 def desktop_project(repo, target_os, explicit):
@@ -254,31 +328,30 @@ LINUX_KERNELHOST_EXE = 'NomadBrowser.Linux.KernelHost'
 
 # Must match arupa_desktop/app/arupa_mivpn_sdk_admission.h kMivpnSdkRelativePath:
 # the utility process resolves the DLL from its own image directory, i.e.
-# <install root>/mivpn-sdk/<name>/mivpn-browser.dll.
+# <kernel directory>/mivpn-sdk/<name>/mivpn-browser.dll.
 MIVPN_SDK_DIR_NAME = 'hy2-20261022-coF8no'
 MIVPN_SDK_FILES = ('mivpn-browser.dll', 'mivpn-browser.h', 'mivpn-browser.lib')
 
 
 def install_mivpn_sdk(root, delivery_root, payload):
-    """Place the Windows MiVPN SDK beside NomadBrowser.exe.
+    """Place the Windows MiVPN SDK beside the kernel DLL.
 
-    It belongs at the payload root, never under arupa-desktop/: the browser
-    derives the SDK path from its own image location. Prefer the kernel
+    Both browser and child processes resolve it from the loaded kernel. Prefer the kernel
     delivery's copy so a release stays reproducible from the same inputs; fall
     back to the workspace SDK build directory.
     """
-    source = delivery_root / 'mivpn-sdk' / MIVPN_SDK_DIR_NAME
+    source = delivery_root / 'kernel/mivpn-sdk' / MIVPN_SDK_DIR_NAME
     if not source.is_dir():
         source = root / 'dist' / 'mivpn-sdk' / MIVPN_SDK_DIR_NAME
     missing = [name for name in MIVPN_SDK_FILES if not (source / name).is_file()]
     if missing:
         F.err('缺少 MiVPN Browser SDK: ' + ', '.join(missing)
               + f'（{source}）；先运行 mivpn-client/build_browser_dll_windows.ps1')
-    destination = payload / 'mivpn-sdk' / MIVPN_SDK_DIR_NAME
+    destination = payload / 'arupa-desktop/mivpn-sdk' / MIVPN_SDK_DIR_NAME
     destination.mkdir(parents=True, exist_ok=True)
     for name in MIVPN_SDK_FILES:
         shutil.copy2(source / name, destination / name)
-    F.log(f'MiVPN Browser SDK → mivpn-sdk/{MIVPN_SDK_DIR_NAME}')
+    F.log(f'MiVPN Browser SDK → arupa-desktop/mivpn-sdk/{MIVPN_SDK_DIR_NAME}')
 
 
 # 两个 OOP 宿主工程编**同一批源码**：Mac 侧逐条列在自己的 csproj 里，Linux 侧用
@@ -802,7 +875,6 @@ def desktop_build(root, args, target_os, arch, version, output):
             shutil.copytree(kernel / 'kernel', payload / 'arupa-desktop',
                             dirs_exist_ok=True, symlinks=True, ignore=kernel_payload_ignore(target_os))
             if target_os == 'win':
-                install_windows_native_host(kernel, payload)
                 install_mivpn_sdk(root, kernel, payload)
             if target_os == 'linux':
                 # 放在 copytree 之后：交付根的 kernel/ 是内核产出方的目录，不往里写，

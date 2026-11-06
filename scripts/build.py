@@ -216,10 +216,6 @@ def build_targets(project, target_os, arch, out):
         return targets
     targets = [base + ":arupa_kernel", "//content/shell:pak",
                "//third_party/hyphenation-patterns:bundle_hyphen_data"]
-    if target_os == "win":
-        # Production Windows bootstrap: MiVPN's sandbox broker and target must
-        # use the same main image. The packager requires this alongside the DLL.
-        targets.append(base + ":arupa_desktop")
     if target_os in ("win", "mac", "linux"):
         targets += [base + ":render", base + "/plugin/host:arupa_plugin_host"]
     if target_os == "linux":
@@ -391,9 +387,6 @@ def prepare_project(project):
         # 那一份（PC 侧 Mac/ArupaDelivery.props 逐件校验它）。它默认不在本工程的图里，得显式挂进来。
         lines += ['  deps = [ "//chrome/browser/arupa_desktop:arupa_kernel", "//content/shell:pak",',
                   '            "//third_party/hyphenation-patterns:bundle_hyphen_data" ]',
-                  # Windows 正式宿主：GN testonly 来自 content_shell_lib 依赖，
-                  # 交付仍必须带上主镜像宿主，不能退回 DLL broker。
-                  '  if (is_win) { deps += [ "//chrome/browser/arupa_desktop:arupa_desktop" ] }',
                   '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:render" ] }',
                   '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop/plugin/host:arupa_plugin_host" ] }',
                   '  if (is_linux) { deps += [ "//sandbox/linux:chrome_sandbox" ] }']
