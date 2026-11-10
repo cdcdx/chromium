@@ -36,11 +36,12 @@ if ($probe.StartsWith($normalProfile, [StringComparison]::OrdinalIgnoreCase)) { 
 New-Item -ItemType Directory -Path $probe | Out-Null
 Set-Content -LiteralPath (Join-Path $probe '.nomad-mivpn-probe') -Value 'Disposable MiVPN native launch probe.'
 $extensionRoot = Join-Path $probe 'extensions'
-$installed = Join-Path $extensionRoot 'objojdkhlcekcnhaeoebojmffolmafll'
+$installed = Join-Path $extensionRoot $signedPackage.extensionId
 Expand-Archive -LiteralPath $archive -DestinationPath $installed
 $output = Join-Path $probe 'checks.json'
 $environmentValues = @{
     NOMAD_MIVPN_TEST = '1'
+    NOMAD_MIVPN_EXTENSION_ID = $signedPackage.extensionId
     NOMAD_PLUGIN_STORAGE_TEST = 'mivpn'
     NOMAD_PROFILE_DIR = $probe
     NOMAD_EXTENSION_ROOT = $extensionRoot

@@ -18,7 +18,8 @@ function Assert-MivpnProbePackage {
     $metadata = & $Python @arguments
     if ($LASTEXITCODE -ne 0) { throw 'MiVPN probe refuses an unsigned, untrusted or modified package.' }
     $verified = ($metadata -join "`n") | ConvertFrom-Json
-    if ($verified.extensionId -ne 'objojdkhlcekcnhaeoebojmffolmafll' -or
+    $authorizedIds = @('objojdkhlcekcnhaeoebojmffolmafll', 'hcjdpccaikglmijenhghaddadbmmhgea')
+    if ($authorizedIds -notcontains $verified.extensionId -or
         $verified.packageDigest -notmatch '^[0-9a-f]{64}$' -or
         $verified.keyId -notmatch '^[0-9a-f]{32}$') {
         throw 'MiVPN package verifier did not return authenticated package metadata.'
