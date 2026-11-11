@@ -915,8 +915,14 @@ def desktop_build(root, args, target_os, arch, version, output):
                 launcher.chmod(0o755)
                 write_linux_desktop_integration(repo, payload)
                 prune_foreign_native_runtimes(payload, rid)
-                F.run([sys.executable, repo / 'Scripts/packaging/deduplicate-managed-runtime.py',
-                       '--root', payload, '--ui', payload, '--host', payload / 'arupa-desktop'])
+                deduplicate = repo / 'Scripts/packaging/deduplicate-managed-runtime.py'
+                if deduplicate.is_file():
+                    F.run([sys.executable, deduplicate, '--root', payload,
+                           '--ui', payload, '--host', payload / 'arupa-desktop'])
+                else:
+                    # Older browser branches publish independent UI/host runtimes.
+                    # Deduplication saves disk space but is not a runtime dependency.
+                    F.log('当前浏览器分支未提供运行库去重脚本，保留 UI/KernelHost 各自的运行库')
         save_output(payload, output)
         # 输出已就位，stage 里的中间物（mac 的 payload/bundles/local）再无人引用：先掏成空壳，
         # 让收尾走轻量 rmtree。放在成功路径上而不是 finally：构建失败/被打断时不做这种
