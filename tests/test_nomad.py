@@ -180,6 +180,7 @@ class NomadTest(unittest.TestCase):
         (delivery / 'kernel/.arupa-version').write_text(VERSION)
         if target_os == 'win':
             (delivery / 'kernel/arupa_render.exe').touch()
+            (delivery / 'kernel/arupa_kernel_host.exe').touch()
             (delivery / 'kernel/.arupa-sandbox-build-id').write_text('a' * 64)
             (delivery / 'tools').mkdir(exist_ok=True)
             shutil.copy2(Path(nomad.__file__).resolve().parents[1] /
@@ -220,6 +221,9 @@ class NomadTest(unittest.TestCase):
         binary = self.native_pe_fixture(required)
         (self.args.delivery / 'kernel/arupa_kernel.dll').write_bytes(binary)
         (self.args.delivery / 'kernel/arupa_render.exe').write_bytes(self.native_pe_fixture([
+            'arupa_bootstrap_sandbox_info_v1', 'arupa_bootstrap_sandbox_build_v1',
+            'g_shared_section', 'g_sentinel_value_start', 'g_sentinel_value_end']))
+        (self.args.delivery / 'kernel/arupa_kernel_host.exe').write_bytes(self.native_pe_fixture([
             'arupa_bootstrap_sandbox_info_v1', 'arupa_bootstrap_sandbox_build_v1',
             'g_shared_section', 'g_sentinel_value_start', 'g_sentinel_value_end']))
         return binary
@@ -269,7 +273,7 @@ class NomadTest(unittest.TestCase):
                              'NomadBrowser.deps.json', 'hostfxr.dll', 'hostpolicy.dll', 'coreclr.dll'):
                     (target / name).write_bytes(b'managed publish fixture')
                 # Publish retains the UI apphost and adds a separate native KernelHost.
-                (target / 'NomadBrowser.Windows.KernelHost.exe').write_bytes(native_binary)
+                (target / 'arupa_kernel_host.exe').write_bytes(native_binary)
                 for name in ('vcruntime140.dll',):
                     shutil.copy2(kernel / name, target / name)
         output = self.root / 'output'
@@ -279,7 +283,7 @@ class NomadTest(unittest.TestCase):
              patch.object(fetch, 'run', side_effect=fake_publish):
             self.quiet(nomad.desktop_build, self.root, self.args, 'win', 'x64', VERSION, output)
         self.assertEqual((output / 'NomadBrowser.exe').read_bytes(), b'managed publish fixture')
-        self.assertEqual((output / 'NomadBrowser.Windows.KernelHost.exe').read_bytes(), native_binary)
+        self.assertEqual((output / 'arupa_kernel_host.exe').read_bytes(), native_binary)
         self.assertEqual((output / 'vcruntime140.dll').read_bytes(), b'CRT dependency')
         self.assertFalse((output / 'libEGL.dll').exists())
         self.assertEqual((output / 'arupa-desktop/libEGL.dll').read_bytes(), b'GPU dependency')

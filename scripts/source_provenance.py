@@ -92,7 +92,9 @@ def build_artifacts(out: Path, target_os: str) -> dict[str, str]:
     library = {"mac": "libarupa_kernel.dylib", "linux": "libarupa_kernel.so",
                "win": "arupa_kernel.dll"}[target_os]
     helper = "arupa_render.exe" if target_os == "win" else "arupa_render"
-    names = (library, helper, "content_shell.pak", "devtools_resources.pak", "icudtl.dat")
+    names = [library, helper, "content_shell.pak", "devtools_resources.pak", "icudtl.dat"]
+    if target_os == "win":
+        names.append("arupa_kernel_host.exe")
     missing = [name for name in names if not (out / name).is_file()]
     if missing:
         raise RuntimeError(f"missing desktop build artifacts: {', '.join(missing)}")

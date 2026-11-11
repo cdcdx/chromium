@@ -18,12 +18,12 @@ class SourceProvenanceTest(unittest.TestCase):
             for name in ('arupa_kernel.dll', 'arupa_render.exe', 'content_shell.pak',
                          'devtools_resources.pak', 'icudtl.dat'):
                 (out / name).write_bytes(b'fixture')
-            with self.assertRaisesRegex(RuntimeError, 'arupa_desktop.exe'):
+            with self.assertRaisesRegex(RuntimeError, 'arupa_kernel_host.exe'):
                 provenance.build_artifacts(out, 'win')
-            host = out / 'arupa_desktop.exe'
+            host = out / 'arupa_kernel_host.exe'
             host.write_bytes(b'compiled native host')
             artifacts = provenance.build_artifacts(out, 'win')
-            self.assertEqual(artifacts['arupa_desktop.exe'], provenance.file_sha256(host))
+            self.assertEqual(artifacts['arupa_kernel_host.exe'], provenance.file_sha256(host))
             host.write_bytes(b'replaced host')
             self.assertNotEqual(artifacts, provenance.build_artifacts(out, 'win'))
 

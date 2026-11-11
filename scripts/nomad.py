@@ -16,6 +16,7 @@ import tempfile
 import time
 import zipfile
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape as xml_escape
 
 import deliveries
 import fetch as F
@@ -165,7 +166,8 @@ def has_ditto():
 
 def kernel_payload_ignore(target_os):
     """Exclude the retired built-in MiVPN pack from every SDK subtree."""
-    native_host_ignore = shutil.ignore_patterns('arupa_desktop.exe') if target_os == 'win' else None
+    native_host_ignore = shutil.ignore_patterns(
+        'arupa_desktop.exe', 'arupa_kernel_host.exe') if target_os == 'win' else None
 
     def ignore(directory, names):
         excluded = [name for name in names if name.casefold() in ('mivpn_extension_resources.pak', 'mivpn-sdk')]
@@ -207,114 +209,23 @@ def delivery(root, args, target_os, arch, version):
 
 
 def validate_windows_native_host(delivery_root):
-    """Validate the DLL and native child bootstrap required by Windows."""
-    host = delivery_root / 'kernel/arupa_render.exe'
+    """Validate the immutable SDK-owned browser/child bootstrap pair."""
+    host = delivery_root / 'kernel/arupa_kernel_host.exe'
+    child = delivery_root / 'kernel/arupa_render.exe'
     gate = delivery_root / 'tools/verify_transfer_delivery.py'
     if not host.is_file():
-        F.err(f'Windows 浏览器缺少子进程薄壳: {host}')
+        F.err(f'Windows 内核交付缺少浏览器进程薄壳: {host}')
+    if not child.is_file():
+        F.err(f'Windows 内核交付缺少子进程薄壳: {child}')
     if (delivery_root / 'kernel/arupa_desktop.exe').exists():
         F.err('Windows DLL 交付不得包含大型 arupa_desktop.exe')
     if not gate.is_file():
         F.err(f'内核交付缺少原生主镜像校验工具: {gate}')
     if F.DRY_RUN:
-        F.log(f'(dry-run) 校验 Windows 原生主镜像导出: {host}')
+        F.log(f'(dry-run) 校验 Windows SDK 原生薄壳: {host}')
         return
     F.run([sys.executable, gate, '--library', delivery_root / 'kernel/arupa_kernel.dll',
            '--platform', 'win', '--require-dll-bootstrap'])
-
-
-def windows_apphost_resources(repo):
-    """Keep the native entry's Explorer metadata owned by the Nomad project."""
-    app_version = ET.parse(repo / 'Config/AppVersion.props').findtext('.//NomadAppVersion')
-    if not app_version or not re.fullmatch(r'\d+\.\d+\.\d+(?:\.\d+)?', app_version):
-        F.err('NomadAppVersion 必须是有效的 Windows 数字版本')
-    parts = [int(part) for part in app_version.split('.')]
-    parts += [0] * (4 - len(parts))
-    if any(part > 65535 for part in parts):
-        F.err('NomadAppVersion 超出 Windows 版本范围')
-    project = ET.parse(repo / 'NomadBrowser.Avalonia/NomadBrowser.Avalonia.csproj')
-    def quoted(value):
-        return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '\\0"'
-    numbers = ','.join(str(part) for part in parts)
-    lines = ['#pragma code_page(65001)', '1 ICON "app.ico"', '1 VERSIONINFO',
-             f' FILEVERSION {numbers}', f' PRODUCTVERSION {numbers}',
-             ' FILEOS 0x40004', ' FILETYPE 1', 'BEGIN',
-             ' BLOCK "StringFileInfo" BEGIN', '  BLOCK "040904b0" BEGIN']
-    for key, value in {
-        'FileDescription': project.findtext('.//Product') or 'Nomad Browser',
-        'ProductName': project.findtext('.//Product') or 'Nomad Browser',
-        'CompanyName': project.findtext('.//Company') or 'Nomad',
-        'FileVersion': app_version,
-        'ProductVersion': app_version,
-        'OriginalFilename': 'NomadBrowser.Windows.KernelHost.exe',
-        'InternalName': 'NomadBrowser.Windows.KernelHost',
-    }.items():
-        lines.append(f'   VALUE "{key}", {quoted(value)}')
-    lines += ['  END', ' END', ' BLOCK "VarFileInfo" BEGIN',
-              '  VALUE "Translation", 0x409, 1200', ' END', 'END', '']
-    return '\n'.join(lines)
-
-
-def install_windows_native_host(delivery_root, payload, root, arch, version):
-    """Build the small native KernelHost entry; retain the separate .NET UI apphost."""
-    required = ('NomadBrowser.Windows.KernelHost.dll',
-                'NomadBrowser.Windows.KernelHost.runtimeconfig.json',
-                'NomadBrowser.Windows.KernelHost.deps.json',
-                'hostfxr.dll',
-                'hostpolicy.dll',
-                'coreclr.dll')
-    missing = [name for name in required if not (payload / name).is_file()]
-    if missing:
-        F.err('原生浏览器宿主缺少托管运行文件: ' + ', '.join(missing))
-    src = root / 'src'
-    out = src / 'out' / f'arupa-win-{arch}-{version}-static'
-    graph = src / 'arupa_build/nomad_windows'
-    graph.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(root / 'nomad_desktop/Native/Windows/main.cc', graph / 'main.cc')
-    shutil.copy2(root / 'nomad_desktop/NomadBrowser.Avalonia/app.manifest', graph / 'app.manifest')
-    shutil.copy2(root / 'nomad_desktop/NomadBrowser.Avalonia/Assets/app.ico', graph / 'app.ico')
-    (graph / 'app.rc').write_text(windows_apphost_resources(root / 'nomad_desktop'), encoding='utf-16')
-    (graph / 'BUILD.gn').write_text('''# Generated from the Nomad native entry.
-import("//build/config/win/manifest.gni")
-windows_manifest("nomad_manifest") {
-  sources = [ "app.manifest", common_controls_manifest, default_compatibility_manifest ]
-}
-executable("apphost") {
-  output_name = "NomadBrowser.Windows.KernelHost"
-  output_dir = "$root_out_dir/nomad-native"
-  sources = [ "main.cc", "app.rc" ]
-  deps = [ "//base", "//sandbox", ":nomad_manifest",
-           "//chrome/browser/arupa_desktop:windows_sandbox_build_id" ]
-  configs -= [ "//build/config/win:console" ]
-  configs += [ "//build/config/win:windowed" ]
-}
-group("delivery") {
-  testonly = true
-  deps = [ ":apphost", "//arupa_build/arupa_desktop:delivery" ]
-}
-''', encoding='utf-8')
-    F.run([src / 'buildtools/win/gn.exe', 'gen', out,
-           '--root-target=//arupa_build/nomad_windows:delivery'], src)
-    F.run([src / 'third_party/ninja/ninja.exe', '-C', out, '-j', '8',
-           'arupa_build/nomad_windows:apphost'], src)
-    expected = (delivery_root / 'kernel/.arupa-sandbox-build-id').read_text().strip()
-    actual = digest(out / 'obj/sandbox/win/sandbox.lib')
-    if expected != actual:
-        F.err('Nomad native entry does not match sandbox build ID; please rebuild SDK')
-    F.run([sys.executable, root / 'arupa_desktop/tools/verify_transfer_delivery.py',
-           '--bootstrap-host', out / 'nomad-native/NomadBrowser.Windows.KernelHost.exe'])
-    shutil.copy2(out / 'nomad-native/NomadBrowser.Windows.KernelHost.exe', payload / 'NomadBrowser.Windows.KernelHost.exe')
-    # Windows resolves static imports before wWinMain/managed SetDllDirectory.
-    # Child processes also enter the native host directly, before managed code.
-    # Only the native entry's CRT belongs at the application root. Chromium's
-    # graphics/compiler DLLs resolve beside arupa_kernel.dll; copying them to
-    # both roots would waste tens of megabytes and permit version drift.
-    for name in ('msvcp140.dll', 'msvcp140_atomic_wait.dll', 'vcruntime140.dll',
-                 'vcruntime140_1.dll', 'vcruntime140_threads.dll', 'concrt140.dll'):
-        dependency = delivery_root / 'kernel' / name
-        if dependency.is_file():
-            shutil.copy2(dependency, payload / name)
-    F.log('Windows UI → native KernelHost → arupa-desktop/arupa_kernel.dll')
 
 
 def desktop_project(repo, target_os, explicit):
@@ -710,6 +621,129 @@ def discard_stage(stage):
             deliveries.remove_path(dead)
 
 
+UPDATE_SDK_PACKAGES = (
+    'NomadBrowser.Update.Contracts',
+    'NomadBrowser.Update.Security',
+    'NomadBrowser.Update.Packaging',
+    'NomadBrowser.Update.Agent',
+)
+
+
+def update_sdk_version(repo):
+    """读 Config/UpdateSdk.props 里钉住的独立更新 SDK 版本；没有该文件的分支返回 None。"""
+    props = repo / 'Config' / 'UpdateSdk.props'
+    if not props.is_file():
+        return None
+    for element in ET.parse(props).iter():
+        if element.tag.rsplit('}', 1)[-1] == 'NomadUpdateSdkVersion':
+            return (element.text or '').strip() or None
+    return None
+
+
+def global_packages_directory(dotnet, repo):
+    if os.environ.get('NUGET_PACKAGES'):
+        return Path(os.environ['NUGET_PACKAGES']).expanduser()
+    result = subprocess.run([dotnet, 'nuget', 'locals', 'global-packages', '--list'],
+                            cwd=repo, capture_output=True, text=True)
+    match = re.search(r'global-packages:\s*(.+)', result.stdout)
+    if match:
+        return Path(match.group(1).strip()).expanduser()
+    return Path.home() / '.nuget' / 'packages'
+
+
+def restore_update_sdk(dotnet, version, sources, credentials=None):
+    """用临时探针工程把独立更新 SDK 还原进全局缓存，顺带补齐它的依赖。
+
+    探针工程放在临时目录而不是仓库里：仓库的 Directory.Build.props / global.json
+    会改掉目标框架与 SDK 选择，这里只要「能把包拉下来」这一件事。"""
+    with tempfile.TemporaryDirectory(prefix='nomad-update-sdk-') as stage:
+        stage = Path(stage)
+        references = '\n'.join(f'    <PackageReference Include="{name}" Version="[{version}]" />'
+                               for name in UPDATE_SDK_PACKAGES)
+        (stage / 'probe.csproj').write_text(
+            '<Project Sdk="Microsoft.NET.Sdk">\n'
+            '  <PropertyGroup>\n'
+            '    <TargetFramework>net10.0</TargetFramework>\n'
+            '    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>\n'
+            '  </PropertyGroup>\n'
+            '  <ItemGroup>\n'
+            f'{references}\n'
+            '  </ItemGroup>\n'
+            '</Project>\n', encoding='utf-8')
+        entries = '\n'.join(f'    <add key="{name}" value="{xml_escape(url)}" />' for name, url in sources)
+        credential_xml = ''
+        if credentials:
+            values = {}
+            for item in credentials.split(';'):
+                key, _, value = item.partition('=')
+                if key.strip() and value:
+                    values[key.strip()] = value.strip()
+            if 'Username' in values and 'Password' in values:
+                adds = '\n'.join(f'      <add key="{key}" value="{xml_escape(value)}" />'
+                                 for key, value in values.items())
+                credential_xml = ('  <packageSourceCredentials>\n'
+                                  f'    <{sources[0][0]}>\n{adds}\n    </{sources[0][0]}>\n'
+                                  '  </packageSourceCredentials>\n')
+        (stage / 'nuget.config').write_text(
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<configuration>\n'
+            '  <packageSources>\n'
+            '    <clear />\n'
+            f'{entries}\n'
+            '  </packageSources>\n'
+            f'{credential_xml}'
+            '</configuration>\n', encoding='utf-8')
+        result = subprocess.run([dotnet, 'restore', str(stage / 'probe.csproj'),
+                                 '--configfile', str(stage / 'nuget.config'), '--nologo'],
+                                cwd=stage, capture_output=True, text=True)
+        if result.returncode:
+            detail = (result.stdout + result.stderr).strip()
+            F.err('独立更新 SDK 还原失败（{0}）:\n{1}'.format(version, detail[-4000:]))
+
+
+def prepare_update_sdk(repo, dotnet):
+    """补齐独立更新 SDK 包：本地 feed + 全局 NuGet 缓存。
+
+    v1.3.0 起更新器改为消费 backend 发布的 NomadBrowser.Update.* 包，而本仓库的
+    restore 走 build/nuget.config（只有 nuget.org）—— 私有包只能在全局缓存里命中。
+    backend 的 prepare-update-sdk.ps1 需要 pwsh 和源码/源配置，这里直接用
+    NOMAD_UPDATE_SDK_FEED（私有源再加 NOMAD_UPDATE_SDK_CREDENTIALS）把包取下来，
+    同时把 nupkg 落进 artifacts/update-sdk/packages 供仓库 nuget.config 使用。"""
+    version = update_sdk_version(repo)
+    if not version or F.DRY_RUN:
+        return
+    target = repo / 'artifacts' / 'update-sdk' / 'packages'
+    cache = global_packages_directory(dotnet, repo)
+
+    def present(root):
+        return all((root / f'{name.lower()}.{version}.nupkg').is_file() for name in UPDATE_SDK_PACKAGES)
+
+    def cached():
+        return all((cache / name.lower() / version / f'{name.lower()}.{version}.nupkg').is_file()
+                   for name in UPDATE_SDK_PACKAGES)
+
+    if not present(target):
+        feed = os.environ.get('NOMAD_UPDATE_SDK_FEED', '').strip()
+        if not feed:
+            F.err(f'缺少独立更新 SDK {version}: {", ".join(UPDATE_SDK_PACKAGES)}\n'
+                  f'  release 出包用的 build/nuget.config 只挂 nuget.org，这些私有包只能在全局缓存里命中。\n'
+                  f'  请设置 NOMAD_UPDATE_SDK_FEED（私有源再加 NOMAD_UPDATE_SDK_CREDENTIALS），'
+                  f'或把 prepare-update-sdk.ps1 生成的 .nupkg 放进 {target}')
+        F.log(f'还原独立更新 SDK {version}: {feed}')
+        restore_update_sdk(dotnet, version, [('update-sdk', feed)],
+                           os.environ.get('NOMAD_UPDATE_SDK_CREDENTIALS'))
+    if not cached():
+        F.log(f'预热 NuGet 全局缓存（本地 feed: {target}）')
+        restore_update_sdk(dotnet, version,
+                           [('update-sdk-local', str(target)), ('nuget.org', 'https://api.nuget.org/v3/index.json')])
+    target.mkdir(parents=True, exist_ok=True)
+    for name in UPDATE_SDK_PACKAGES:
+        source = cache / name.lower() / version / f'{name.lower()}.{version}.nupkg'
+        destination = target / source.name
+        if source.is_file() and not destination.is_file():
+            shutil.copy2(source, destination)
+
+
 def desktop_build(root, args, target_os, arch, version, output):
     repo = root / 'nomad_desktop'
     if target_os in ('mac', 'linux'):
@@ -746,6 +780,7 @@ def desktop_build(root, args, target_os, arch, version, output):
         os.environ.setdefault('MSBUILDDISABLENODEREUSE', '1')
         os.environ.setdefault('DOTNET_CLI_USE_MSBUILD_SERVER', '0')
     dotnet = prepare_dotnet(args, repo, project)
+    prepare_update_sdk(repo, dotnet)
     props = [f'-p:ArupaDeliveryRoot={kernel}', f'-p:ArupaSdkDir={kernel}',
              f'-p:Platform={arch}', '-p:UseSharedCompilation=false', *restore_props]
     if target_os == 'mac':

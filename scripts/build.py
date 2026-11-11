@@ -218,6 +218,8 @@ def build_targets(project, target_os, arch, out):
                "//third_party/hyphenation-patterns:bundle_hyphen_data"]
     if target_os in ("win", "mac", "linux"):
         targets += [base + ":render", base + "/plugin/host:arupa_plugin_host"]
+    if target_os == "win":
+        targets.append(base + ":kernel_host")
     if target_os == "linux":
         # Ubuntu 24.04 commonly restricts unprivileged user namespaces through
         # AppArmor.  Keep Chromium's SUID sandbox helper in every Linux build so
@@ -388,6 +390,7 @@ def prepare_project(project):
         lines += ['  deps = [ "//chrome/browser/arupa_desktop:arupa_kernel", "//content/shell:pak",',
                   '            "//third_party/hyphenation-patterns:bundle_hyphen_data" ]',
                   '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop:render" ] }',
+                  '  if (is_win) { deps += [ "//chrome/browser/arupa_desktop:kernel_host" ] }',
                   '  if (is_win || is_mac || is_linux) { deps += [ "//chrome/browser/arupa_desktop/plugin/host:arupa_plugin_host" ] }',
                   '  if (is_linux) { deps += [ "//sandbox/linux:chrome_sandbox" ] }']
     else:

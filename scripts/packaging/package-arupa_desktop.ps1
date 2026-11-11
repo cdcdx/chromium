@@ -7,7 +7,7 @@
 #
 # 输出目录（目录自带 arch，所以 kernel\ 是平铺的，不再按架构分层）：
 #   dist\arupa-win-x64-154.0.8037.21-static-1\
-#     kernel\{arupa_kernel.dll, arupa_render.exe, arupa_plugin_host.exe, *.pak, icudtl.dat,
+#     kernel\{arupa_kernel.dll, arupa_kernel_host.exe, arupa_render.exe, arupa_plugin_host.exe, *.pak, icudtl.dat,
 #            snapshot_blob.bin, v8_context_snapshot.bin, libEGL.dll, libGLESv2.dll,
 #            vk_swiftshader.dll, vulkan-1.dll, d3dcompiler_47.dll, dxcompiler.dll,
 #            msvcp140*.dll, vcruntime140*.dll, …, angledata\, hyphen-data\,
@@ -46,8 +46,9 @@
 #
 # 复制映射（OUT = src\out\arupa-win-{arch}-{ver}-static）:
 #   OUT\arupa_kernel.dll        → kernel\（内核本体，必需）
+#   OUT\arupa_kernel_host.exe         → kernel\（浏览器进程薄壳，必需）
 #   OUT\arupa_render.exe              → kernel\（渲染进程薄壳，必需）
-#   OUT\arupa_desktop.exe       → 不交付（浏览器拥有独立的小型原生入口）
+#   OUT\arupa_desktop.exe             → 不交付（完整静态宿主，DLL SDK 不需要）
 #   OUT\arupa_plugin_host.exe   → kernel\（插件宿主，缺失终止打包）
 #   OUT\<主 pak> + 其余 *.pak   → kernel\（原名平铺，必需至少一个）
 #   OUT\icudtl.dat              → kernel\（必需）
@@ -256,6 +257,7 @@ if (($OutOverride -or $OutName) -and $Archs.Count -gt 1) {
 }
 
 function Get-LibName { return 'arupa_kernel.dll' }
+function Get-KernelHostName { return 'arupa_kernel_host.exe' }
 function Get-HelperName { return 'arupa_render.exe' }
 
 # ------------------------------------------------------------------- 版本号
@@ -461,12 +463,15 @@ function Invoke-PackageArch {
 
     # 内核本体
     Add-RequiredFile -Src (Join-Path $OutPath (Get-LibName)) -DestDir $dest -Hint 'ninja 目标 chrome/browser/arupa_desktop:arupa_kernel'
+    # 浏览器进程薄壳必须由内核构建产出，确保其 sandbox broker 与 DLL/子进程完全匹配。
+    Add-RequiredFile -Src (Join-Path $OutPath (Get-KernelHostName)) -DestDir $dest -Hint 'ninja 目标 chrome/browser/arupa_desktop:kernel_host；Nomad 不再自行链接 Chromium'
     # 渲染进程薄壳：win 必需（BUILD.gn 的 win 分支里有 executable("render")）
     Add-RequiredFile -Src (Join-Path $OutPath (Get-HelperName)) -DestDir $dest -Hint 'ninja 目标 chrome/browser/arupa_desktop:render，少了它没有渲染进程'
     # 插件宿主：arupa_kernel 的 data_deps，三平台交付均必需
     Add-RequiredFile -Src (Join-Path $OutPath 'arupa_plugin_host.exe') -DestDir $dest
 
     $kernelHash = Get-FileSha256 -Path (Join-Path $dest (Get-LibName))
+    $hostHash = Get-FileSha256 -Path (Join-Path $dest (Get-KernelHostName))
     $renderHash = Get-FileSha256 -Path (Join-Path $dest (Get-HelperName))
 
     # 主 pak
@@ -556,7 +561,7 @@ function Invoke-PackageArch {
 
     # 调试符号（可选开关）
     if ($WithPdb) {
-        foreach ($pattern in @('arupa_kernel.dll.pdb', 'arupa_render.exe.pdb', 'arupa_plugin_host.exe.pdb')) {
+        foreach ($pattern in @('arupa_kernel.dll.pdb', 'arupa_kernel_host.exe.pdb', 'arupa_render.exe.pdb', 'arupa_plugin_host.exe.pdb')) {
             Add-OptionalFile -Src (Join-Path $OutPath $pattern) -DestDir $dest
         }
     }
@@ -606,8 +611,9 @@ function Invoke-PackageArch {
 
     # 附件可以并入 kernel\，但不能替换本次构建的正式入口。
     if ((Get-FileSha256 -Path (Join-Path $dest (Get-LibName))) -ne $kernelHash -or
+        (Get-FileSha256 -Path (Join-Path $dest (Get-KernelHostName))) -ne $hostHash -or
         (Get-FileSha256 -Path (Join-Path $dest (Get-HelperName))) -ne $renderHash) {
-        throw '交付附件替换了本次构建的内核或子进程薄壳'
+        throw '交付附件替换了本次构建的内核或原生薄壳'
     }
     if (Get-ChildItem -LiteralPath $DistPath -Recurse -File -Filter 'arupa_desktop.exe') {
         throw 'DLL 交付禁止包含 arupa_desktop.exe'
@@ -621,6 +627,7 @@ function Invoke-PackageArch {
 
     # 架构核对：内核库必须就是本次打包的 arch
     Assert-LibArch -LibPath (Join-Path $dest (Get-LibName)) -WantCpu $Cpu
+    Assert-LibArch -LibPath (Join-Path $dest (Get-KernelHostName)) -WantCpu $Cpu
     Assert-LibArch -LibPath (Join-Path $dest (Get-HelperName)) -WantCpu $Cpu
 
     . (Join-Path $Root 'scripts\_find_python.ps1')

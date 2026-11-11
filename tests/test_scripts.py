@@ -167,10 +167,10 @@ class WorkspaceTest(unittest.TestCase):
             with self.subTest(target_os=target_os):
                 self.assertIn('//chrome/browser/arupa_desktop:render',
                               build.build_targets('arupa_desktop', target_os, 'x64', self.src / 'out'))
-        self.assertIn('//chrome/browser/arupa_desktop:arupa_desktop',
+        self.assertIn('//chrome/browser/arupa_desktop:kernel_host',
                       build.build_targets('arupa_desktop', 'win', 'x64', self.src / 'out'))
         for target_os in ('mac', 'linux'):
-            self.assertNotIn('//chrome/browser/arupa_desktop:arupa_desktop',
+            self.assertNotIn('//chrome/browser/arupa_desktop:kernel_host',
                              build.build_targets('arupa_desktop', target_os, 'x64', self.src / 'out'))
         self.assertIn('//sandbox/linux:chrome_sandbox',
                       build.build_targets('arupa_desktop', 'linux', 'x64', self.src / 'out'))

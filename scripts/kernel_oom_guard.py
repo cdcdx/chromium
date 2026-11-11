@@ -163,14 +163,16 @@ def verify_payload(payload, target_os='linux'):
     ok = report(scan_kernel(library, target_os), os.path.basename(library))
     managed_root = os.path.dirname(payload) if target_os == 'win' else payload
     dll = next((name for name in sorted(os.listdir(managed_root))
-                if name.endswith('.KernelHost.dll')), None) if os.path.isdir(managed_root) else None
+                if name.endswith('.KernelHost.dll') or
+                (target_os == 'win' and name == 'arupa_kernel_host_managed.dll')),
+               None) if os.path.isdir(managed_root) else None
     if dll:
         ok = report(scan_host_dll(os.path.join(managed_root, dll)), dll) and ok
-        if target_os == 'win' and not os.path.isfile(os.path.join(managed_root, 'NomadBrowser.Windows.KernelHost.exe')):
+        if target_os == 'win' and not os.path.isfile(os.path.join(managed_root, 'arupa_kernel_host.exe')):
             print('    ✘ 缺少 Windows 原生 KernelHost 入口')
             ok = False
     else:
-        print('    ✘ 找不到 *KernelHost.dll（托管护栏无从校验）')
+        print('    ✘ 找不到托管 KernelHost DLL（托管护栏无从校验）')
         ok = False
     if os.path.isfile(host):
         print(f'    ✔ 子进程薄壳 {os.path.basename(host)} 就位 ({os.path.getsize(host)}B)')

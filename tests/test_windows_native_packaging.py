@@ -39,8 +39,12 @@ class WindowsNativePackagingTests(unittest.TestCase):
             out = root / 'out'
             out.mkdir()
             (out / 'arupa_kernel.dll').write_bytes(fixtures.pe_fixture(sorted(fixtures.gate.REQUIRED)))
+            # A stale full static host may exist in out/, but the DLL SDK must
+            # ship only the dedicated browser-process bootstrap.
+            (out / 'arupa_desktop.exe').write_bytes(
+                fixtures.pe_fixture(sorted(fixtures.gate.NATIVE_REQUIRED)))
             if host_bytes is not None:
-                (out / 'arupa_desktop.exe').write_bytes(host_bytes)
+                (out / 'arupa_kernel_host.exe').write_bytes(host_bytes)
             if child_bytes is True:
                 child_bytes = fixtures.pe_fixture(sorted(fixtures.gate.BOOTSTRAP_REQUIRED))
             if child_bytes is not None:
@@ -75,18 +79,20 @@ class WindowsNativePackagingTests(unittest.TestCase):
             check(result, delivery)
 
     def test_production_delivery_excludes_stale_static_host_and_keeps_dll(self):
-        host = fixtures.pe_fixture(sorted(fixtures.gate.NATIVE_REQUIRED))
+        host = fixtures.pe_fixture(sorted(fixtures.gate.BOOTSTRAP_REQUIRED))
         def check(result, delivery):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertFalse((delivery / 'kernel/arupa_desktop.exe').exists())
             self.assertTrue((delivery / 'kernel/arupa_kernel.dll').is_file())
+            self.assertTrue((delivery / 'kernel/arupa_kernel_host.exe').is_file())
             report = json.loads((delivery / 'transfer-abi.json').read_text(encoding='utf-8'))
             self.assertEqual(report['childBootstrap']['staticAbi'], 'passed')
+            self.assertEqual(report['childBootstrap']['browserBootstrap']['staticAbi'], 'passed')
             self.assertNotIn('kernel/arupa_desktop.exe', (delivery / 'SHA256SUMS.txt').read_text(encoding='utf-8'))
         self.package(host, check)
 
     def test_only_runtime_gen_paks_are_delivered(self):
-        host = fixtures.pe_fixture(sorted(fixtures.gate.NATIVE_REQUIRED))
+        host = fixtures.pe_fixture(sorted(fixtures.gate.BOOTSTRAP_REQUIRED))
         def check(result, delivery):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             kernel = delivery / 'kernel'
@@ -104,7 +110,7 @@ class WindowsNativePackagingTests(unittest.TestCase):
         self.package(host, check)
 
     def test_missing_required_extension_pak_rejects_partial_delivery(self):
-        host = fixtures.pe_fixture(sorted(fixtures.gate.NATIVE_REQUIRED))
+        host = fixtures.pe_fixture(sorted(fixtures.gate.BOOTSTRAP_REQUIRED))
         for relative in RUNTIME_GEN_PAKS[2:]:
             with self.subTest(resource=relative):
                 def check(result, delivery):
@@ -115,7 +121,7 @@ class WindowsNativePackagingTests(unittest.TestCase):
 
     def test_missing_or_invalid_child_bootstrap_cannot_leave_a_delivery(self):
         invalid_exports = fixtures.pe_fixture(['arupa_free'])
-        wrong_arch = fixtures.pe_fixture(sorted(fixtures.gate.NATIVE_REQUIRED))
+        wrong_arch = fixtures.pe_fixture(sorted(fixtures.gate.BOOTSTRAP_REQUIRED))
         struct.pack_into('<H', wrong_arch, 0x84, 0xAA64)
         for host in (None, invalid_exports, wrong_arch):
             with self.subTest(kind='missing' if host is None else 'invalid'):
