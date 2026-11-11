@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install a verified dual-ABI Arupa delivery into the Android host checkout.
+"""Install a verified Arupa delivery into the Android host checkout.
 
 The runtime manifest is written last. Existing host assets are backed up under
 nomad_android/.scratch/kernel-delivery-backup/<old-id>/ before replacement.
@@ -37,6 +37,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stage", type=Path, help="Unzipped arupa-android-*-static-N delivery")
     parser.add_argument("host", type=Path, help="nomad_android checkout")
+    parser.add_argument("--arch", choices=("all", "arm64", "x64"), default="all",
+                        help="Install only the supplied ABI; other ABI delivery ids stay unchanged")
     args = parser.parse_args()
     stage = args.stage.resolve()
     host = args.host.resolve()
@@ -49,8 +51,13 @@ def main() -> None:
     old_id = runtime["kernelDeliveryId"]
 
     transfers: dict[Path, Path] = {}
-    for arch in ("arm64", "x64"):
+    arches = ("arm64", "x64") if args.arch == "all" else (args.arch,)
+    for arch in arches:
         kernel = stage / "kernel" / arch
+        marker = kernel / ".arupa-delivery-id"
+        if marker.read_text(encoding="utf-8").strip() != delivery_id:
+            raise SystemExit(f"Delivery identity mismatch: {marker}")
+        transfers[host / "app/libs/kernel" / arch / marker.name] = marker
         for name in ("arupa-kernel.aar", "arupa_kernel.pak", "snapshot_blob_64.bin"):
             source = kernel / name
             expected = locked.get(f"{arch}/{name}")
@@ -67,18 +74,17 @@ def main() -> None:
             if digest(snapshot) != expected:
                 raise SystemExit(f"Snapshot digest mismatch: {snapshot}")
             transfers[host / "app/kernel-assets" / arch / snapshot.name] = snapshot
-    arm_resource = stage / "kernel/arm64/arupa_kernel_resources.apk"
-    x64_resource = stage / "kernel/x64/arupa_kernel_resources.apk"
-    for arch, source in (("arm64", arm_resource), ("x64", x64_resource)):
+    resources = [stage / "kernel" / arch / "arupa_kernel_resources.apk" for arch in arches]
+    for arch, source in zip(arches, resources):
         if digest(source) != locked.get(f"{arch}/arupa_kernel_resources.apk"):
             raise SystemExit(f"Resource APK digest mismatch: {source}")
-    if digest(arm_resource) != digest(x64_resource):
+    if len({digest(source) for source in resources}) != 1:
         raise SystemExit("Cross-ABI Chromium resource APK mismatch")
-    icu = stage / "kernel/arm64/icudtl.dat"
-    if digest(icu) != locked.get("arm64/icudtl.dat"):
-        raise SystemExit("arm64 ICU digest mismatch")
-    if digest(icu) != digest(stage / "kernel/x64/icudtl.dat"):
-        raise SystemExit("Cross-ABI ICU data mismatch")
+    icu = stage / "kernel" / arches[0] / "icudtl.dat"
+    for arch in arches:
+        candidate = stage / "kernel" / arch / "icudtl.dat"
+        if digest(candidate) != locked.get(f"{arch}/icudtl.dat") or digest(candidate) != digest(icu):
+            raise SystemExit(f"{arch} ICU digest mismatch")
     transfers[host / "app/src/main/assets/icudtl.dat"] = icu
     transfers[host / "tools/ci/kernel-capability-manifest.json"] = capability_file
 
@@ -94,14 +100,16 @@ def main() -> None:
         atomic_copy(source, target)
 
     runtime["kernelDeliveryId"] = delivery_id
-    runtime["kernelDeliveryIds"] = {"arm64": delivery_id, "x64": delivery_id}
+    runtime.setdefault("kernelDeliveryIds", {})
+    for arch in arches:
+        runtime["kernelDeliveryIds"][arch] = delivery_id
     for relative in list(runtime["files"]):
         if relative.startswith(("app/libs/kernel/", "app/kernel-assets/")) or relative == "app/src/main/assets/icudtl.dat":
             path = host / relative
             if not path.is_file():
                 raise SystemExit(f"Host runtime asset missing after install: {path}")
             runtime["files"][relative] = digest(path)
-    runtime["kernelResourceApkSha256"] = digest(arm_resource)
+    runtime["kernelResourceApkSha256"] = digest(resources[0])
     runtime["kernelCapabilityManifestSha256"] = digest(
         host / runtime["kernelCapabilityManifest"])
     output = json.dumps(runtime, ensure_ascii=False, indent=2) + "\n"

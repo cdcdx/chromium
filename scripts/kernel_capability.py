@@ -469,6 +469,7 @@ def kernel_edge_android_api_facts() -> dict:
         WORKSPACE_ROOT / "src/chrome/common/extensions/api/sessions.json",
         WORKSPACE_ROOT / "src/chrome/common/extensions/api/declarative_content.json",
         WORKSPACE_ROOT / "src/chrome/common/extensions/api/permissions.json",
+        WORKSPACE_ROOT / "src/chrome/common/extensions/api/browser_action.json",
     ]
     methods = set()
     namespaces = set()
@@ -570,9 +571,32 @@ def verify_edge_android_api_routes(routing: dict) -> dict:
         SRC / ROOT / "plugin/arupa_extensions_api_provider.cc")
     unavailable_members = set(re.findall(
         r'ARUPA_API_UNAVAILABLE\(\s*"([^"]+)"\s*\)', provider))
+    legacy_action_aliases = {
+        f"browserAction.{method}" for method in (
+            "setTitle", "getTitle", "setIcon", "setPopup", "getPopup",
+            "setBadgeText", "getBadgeText", "setBadgeBackgroundColor",
+            "getBadgeBackgroundColor", "enable", "disable")
+    }
+    host_source = _read_source(EXT_API_HOST)
+    if not all((
+            'name.starts_with("browserAction.")' in host_source,
+            'extension->manifest_version() == 2' in host_source,
+            'manifest->contains("browser_action")' in host_source,
+            'HandleKernelOwnedAction(who_, extension_id' in host_source,
+            all(f'"{method}"' in host_source for method in (
+                "setTitle", "getTitle", "setIcon", "setPopup", "getPopup",
+                "setBadgeText", "getBadgeText", "setBadgeBackgroundColor",
+                "getBadgeBackgroundColor", "enable", "disable")),
+            all(_has_prefix(routing["kernel_owned_bridge_prefixes"],
+                            "action." + alias.split(".", 1)[1])
+                for alias in legacy_action_aliases),
+    )):
+        err("MV2 browserAction aliases must route only manifest-authorized MV2 "
+            "calls to the implemented action methods.")
     missing = [
         method for method in facts["methods"]
         if method not in unavailable_members
+        if method not in legacy_action_aliases
         if method not in exact_host_methods
         and not _has_prefix(routing["kernel_owned_bridge_prefixes"], method)
     ]
@@ -605,8 +629,32 @@ def verify_edge_android_api_routes(routing: dict) -> dict:
             err(f"Edge Android API {namespace} is not bound to {dependency}.")
         if not re.search(perm_pattern, provider):
             err(f"Edge Android permission feature {namespace} is not registered.")
+    # MV2's browserAction is intentionally a narrow alias of the Android
+    # toolbar state. It must never become a second MV3 action surface, and it
+    # must only exist for packages that declared browser_action. Keep the
+    # unsupported legacy members hidden even for MV2.
+    browser_action_feature = re.search(
+        r'ApiFeatureBrowserAction\(\)\s*\{(?P<body>.*?)\n\}', provider,
+        re.S)
+    browser_action_body = browser_action_feature.group("body") if browser_action_feature else ""
+    if not all((
+            'ARUPA_API_BROWSER_ACTION();' in provider,
+            '"browserAction"' in browser_action_body,
+            '.min_manifest_version = 2' in browser_action_body,
+            '.max_manifest_version = 2' in browser_action_body,
+            'kBrowserActionManifestDep' in browser_action_body,
+            '"manifest:browser_action"' in provider,
+            'ARUPA_API_LEGACY_TABS();' in provider,
+            '"//chrome/common/extensions/api/browser_action.json"' in _read_source(
+                SRC / ROOT / "plugin/api/BUILD.gn"),
+            'ARUPA_API_UNAVAILABLE("browserAction.openPopup")' in provider,
+            'ARUPA_API_UNAVAILABLE("browserAction.onClicked")' in provider,
+            'ARUPA_API_UNAVAILABLE("browserAction")' not in provider,
+    )):
+        err("MV2 browserAction must be manifest-bound, MV2-only, schema-backed, "
+            "and must hide unsupported members; MV3 must remain on action.")
     for member in (
-            "browserAction", "pageAction", "webNavigation.onTabReplaced",
+            "pageAction", "webNavigation.onTabReplaced",
             "permissions.addHostAccessRequest",
             "permissions.removeHostAccessRequest"):
         if not re.search(rf'ARUPA_API_UNAVAILABLE\(\s*"{re.escape(member)}"\s*\)',
@@ -1833,10 +1881,15 @@ def kernel_sw_facts() -> dict:
             '(*incognito ? "incognito" : "regular")' in ext_api_host and
             "getExtensionEventContextForBook" in java_bridge),
         "java_event_facade_mints_v2_context": (
-            "buildExtensionEventContextLocked(id, incognito)" in java_bridge and
-            'context.put("source", "android-host")' in java_bridge and
+            "buildExtensionEventContextLocked(template)" in java_bridge and
+            'context.put("source", "android-host-thread-" + Thread.currentThread().getId())' in java_bridge and
             'context.put("sourceGeneration", sExtEventSourceGeneration)' in java_bridge and
             'context.put("sequence", Long.toString(++sExtEventSequence))' in java_bridge and
+            re.search(r"synchronized \(sExtEventSourceLock\) \{\s*"
+                      r"context = buildExtensionEventContextLocked\(template\);\s*\}\s*"
+                      r"if \(context\.isEmpty\(\)\) return EXT_EVENT_CONTEXT_INVALID;\s*"
+                      r"return ArupaPluginBridgeJni\.get\(\)\.fireExtEventWithWakeV2\(",
+                      java_bridge) is not None and
             "fireExtEventWithWakeV2(" in java_bridge and
             "fireExtEventV2(" in java_bridge),
         "capability_book_switch_keeps_contexts": (
