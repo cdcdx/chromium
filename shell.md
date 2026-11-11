@@ -66,8 +66,20 @@ git branch -D flex/desktop/154.0.8037.21
 git checkout -b flex/desktop/154.0.8037.21
 git apply ../patches/src-desktop.diff
 
+git fetch gogs refs/heads/android/154.0.8037.21:refs/remotes/gogs/android/154.0.8037.21
+git branch --set-upstream-to=gogs/android/154.0.8037.21 android/154.0.8037.21
+git push gogs HEAD:refs/heads/android/154.0.8037.21
+git pull gogs
+
+git fetch gogs refs/heads/desktop/154.0.8037.21:refs/remotes/gogs/desktop/154.0.8037.21
+git branch --set-upstream-to=gogs/desktop/154.0.8037.21 desktop/154.0.8037.21
+git push gogs HEAD:refs/heads/desktop/154.0.8037.21
+git pull gogs
+
 # 禁用自动合并
 git config pull.rebase false
+# 启用自动合并
+git config pull.rebase true
 
 # 标记版本
 git tag -a v1.2.0 -m "Release v1.2.0"
