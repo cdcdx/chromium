@@ -34,17 +34,23 @@
 bash fetch.sh pull
 bash fetch.sh push
 bash fetch.sh push --dry-run
-# 使用 .env 指定的本地/内网地址（而不是分支 upstream）
+# 使用 .env 指定的远端/上游地址（而不是分支 upstream）
+bash fetch.sh pull --remote
+bash fetch.sh push --remote
+# 使用 .env 指定的本地/内网地址
 bash fetch.sh pull --local
 bash fetch.sh push --local
 ```
 
 Windows 对应 `./fetch.ps1 pull` / `./fetch.ps1 push`。
-两个命令单独执行，`--remote`（默认）按各仓库当前分支配置的 upstream 拉取或推送，不切换分支，不自动提交。
-`--local` 改为按仓库目录查 `.env` 的 `<仓库>_local_src`（`src` 用 `chromium_local_src`，
-`mivpn-plugin` / `mivpn-sdk` 分别用 `mivpn_plugin_local_src` / `mivpn_client_local_src`），
-直接以该地址执行 fetch/pull/push，不修改仓库的 remote 或 upstream；未配置该键的仓库跳过并在汇总里列出。
-`--local` 下 push 不再排除 `src`、`depot_tools`，是否参与只取决于是否配置了地址。
+两个命令单独执行。不加参数时按各仓库当前分支配置的 upstream 拉取或推送，不切换分支，不自动提交。
+`--remote` 改为按仓库目录查 `.env` 的 `<仓库>_src`（`src` 用 `chromium_src`，
+`mivpn-plugin` / `mivpn-sdk` 分别用 `mivpn_plugin_src` / `mivpn_client_src`）；
+`--local` 查 `<仓库>_local_src`（`src` 用 `chromium_local_src`，
+`mivpn-plugin` / `mivpn-sdk` 分别用 `mivpn_plugin_local_src` / `mivpn_client_local_src`）。
+两者都直接以该地址执行 fetch/pull/push，不修改仓库的 remote 或 upstream；未配置该键的仓库跳过并在汇总里列出。
+`--local` 下 push 不再排除 `src`、`depot_tools`，是否参与只取决于是否配置了地址；
+`--remote` 与默认模式仍排除这两个上游/工具仓库。
 `pull` 仅允许快进，工作区有修改时拒绝；`push` 只推送当前 HEAD 到 upstream 分支，不强推或附带 tags。
 `push` 跳过 `src`、`depot_tools` 这类上游/工具仓库（它们由 `fetch depot_tools` / `fetch chromium` 管理），
 汇总里按"跳过"计数、不算错误；`pull`、`log`、`branch` 仍包含它们。

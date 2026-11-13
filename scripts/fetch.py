@@ -822,10 +822,10 @@ def build_parser():
     p.add_argument("--dry-run", action="store_true", help="仅打印计划，不写文件、不联网")
     sync = p.add_mutually_exclusive_group()
     sync.add_argument("--local", dest="sync_target", action="store_const", const="local",
-                      help="pull / push 使用 .env 的 <仓库>_local_src 指定地址，而不是分支 upstream")
+                      help="pull / push 使用 .env 的 <仓库>_local_src 指定地址")
     sync.add_argument("--remote", dest="sync_target", action="store_const", const="remote",
-                      help="pull / push 使用分支 upstream（默认）")
-    p.set_defaults(sync_target="remote")
+                      help="pull / push 使用 .env 的 <仓库>_src 指定地址")
+    p.set_defaults(sync_target="config")
     return p
 
 
@@ -835,20 +835,22 @@ def main(argv=None):
     args = parser.parse_args(argv)
     DRY_RUN = args.dry_run
     requested = args.targets or ["all"]
-    if args.sync_target == "local" and not set(requested) & {"pull", "push"}:
-        parser.error("--local 仅用于 pull / push")
+    if args.sync_target != "config" and not set(requested) & {"pull", "push"}:
+        parser.error("--local / --remote 仅用于 pull / push")
     if set(requested) & {"pull", "push"}:
         if len(requested) != 1 or args.save or args.install_host_deps or args.vs_installer:
             parser.error("pull / push 必须单独执行，不能与其他动作混用")
         import repositories
-        local_src = None
-        if args.sync_target == "local":
+        url_src = None
+        if args.sync_target != "config":
             cfg = load_config()
+            key = repositories.local_src_key if args.sync_target == "local" else repositories.src_key
 
-            def local_src(name, cfg=cfg):
-                return cget(cfg, repositories.local_src_key(name))
+            def url_src(name, cfg=cfg, key=key):
+                return cget(cfg, key(name))
 
-        return repositories.sync(Path.cwd(), requested[0], args.dry_run, local_src=local_src)
+        return repositories.sync(Path.cwd(), requested[0], args.dry_run, url_src=url_src,
+                                 mode=args.sync_target)
     if set(requested) & {"log", "branch"}:
         if set(requested) - {"log", "branch"} or args.save or args.install_host_deps or args.vs_installer:
             parser.error("log / branch 是只读命令，不能与拉取、保存或安装动作混用")
