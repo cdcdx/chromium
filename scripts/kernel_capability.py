@@ -722,8 +722,12 @@ def verify_round2_host_contract(routing: dict) -> dict:
                       "management.", "sessions.", "storage.",
                       "contentSettings.", "declarativeNetRequest.",
                       "nomad.", "nomadTransfer.")
-    bad_events = [e for e in routing["host_fireable_events"]
-                  if not any(e.startswith(p) for p in event_families)]
+    exact_events = {"runtime.onUpdateAvailable"}
+    bad_events = [
+        e for e in routing["host_fireable_events"]
+        if not (any(e.startswith(p) for p in event_families) or
+                (e in exact_events and f'event_name == "{e}"' in host))
+    ]
     if bad_events:
         err("宿主事件缺参数 validator family:\n  " +
             "\n  ".join(bad_events))
@@ -1834,8 +1838,14 @@ def kernel_sw_facts() -> dict:
         # runtime.onStartup：Chrome 语义是每个**浏览器会话**一次，不是每次 SW 启动都发
         # （"每次启动都发"会让扩展把 idle 回收后的重启误判成浏览器启动）。
         "onstartup_once_per_session": (
-            "bool MarkStartupReported(" in sw_service and
-            "else if (MarkStartupReported(extension_id))" in sw_service),
+            "void DispatchExtensionSessionStartup(" in sw_service and
+            "PersistentStartupWorkerSubscription(id) == false" in sw_service and
+            "RecordEvaluatedStartupWorkerListener(extension_id, service_worker_version_id)" in sw_service and
+            "HasLiveStartupWorkerListener(key.extension_id, worker_version)" in sw_service and
+            "if (!runtime.startup_delivery.empty()) return;" in sw_service and
+            "void StartExtensionBrowserSession()" in loader_bridge and
+            "if (started || !IsExtensionRegistryReady()) return;" in loader_bridge and
+            'DispatchEvent("runtime.onStartup"' not in sw_service),
         # 注册失败要有界自愈：慢设备/冷启动首次失败很常见，只打日志会让扩展在本进程内
         # 一直停在"未注册"，宿主随后按启用失败回滚停用。
         "register_retry_bounded": (
@@ -1907,8 +1917,7 @@ def kernel_sw_facts() -> dict:
 def verify_sw_contract(facts: dict) -> int:
     failures = {
         "onstartup_once_per_session":
-            "runtime.onStartup 没有按「每会话一次」去重 —— 每次 SW 启动都会发，扩展会把"
-            "idle 回收后的重启误判成浏览器启动。",
+            "runtime.onStartup 缺少独立的浏览器会话调度、订阅过滤或会话去重。",
         "register_retry_bounded":
             "SW 注册失败没有有界重试 —— 慢设备首次失败后该扩展会一直停在未注册，宿主按"
             "启用失败回滚停用。",
