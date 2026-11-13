@@ -134,6 +134,12 @@ def kernel_delivery_provenance(path: Path) -> dict:
             "source": value["source"], "kernelArtifacts": value["artifacts"]}
 
 
+def _is_delivery_intermediate(name: str) -> bool:
+    """dotnet/obj、dotnet/bin 是 IDE 或设计时编译就地产生的中间产物，永不出包。"""
+    parts = Path(name).parts
+    return len(parts) > 2 and parts[0] == "dotnet" and parts[1] in ("obj", "bin")
+
+
 def verify_delivery_checksums(path: Path) -> str:
     """Check every shipped regular file, including files added after sealing."""
     sums = path / "SHA256SUMS.txt"
@@ -150,10 +156,13 @@ def verify_delivery_checksums(path: Path) -> str:
         relative = Path(name)
         if relative.is_absolute() or ".." in relative.parts or name in listed:
             raise RuntimeError(f"unsafe/duplicate SHA256SUMS path: {name}")
+        if _is_delivery_intermediate(name):
+            continue
         listed[name] = match[1].lower()
     actual = {p.relative_to(path).as_posix() for p in path.rglob("*")
               if p.is_file() and not p.is_symlink() and
-              p.relative_to(path).as_posix() not in ("SHA256SUMS.txt", "MANIFEST.md")}
+              p.relative_to(path).as_posix() not in ("SHA256SUMS.txt", "MANIFEST.md") and
+              not _is_delivery_intermediate(p.relative_to(path).as_posix())}
     if set(listed) != actual:
         added = sorted(actual - set(listed))[:5]
         missing = sorted(set(listed) - actual)[:5]

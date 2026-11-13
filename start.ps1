@@ -6,7 +6,7 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $One = Join-Path $Root 'one.ps1'
 $Jobs = 8
 
-$env:NomadApiEnvironment='test'
+# $env:NomadApiEnvironment='test'
 
 # 全部参数先转字符串：$args 里的裸数字可能是数值类型；命令与配置按小写解析，
 # 与 start.sh 的 lower() 归一化一致

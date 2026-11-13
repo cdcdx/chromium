@@ -3,7 +3,7 @@
 # 用法: ./start.sh [arupa|nomad|publish|all] [release|debug]
 set -euo pipefail
 
-export NomadApiEnvironment=test
+# export NomadApiEnvironment=test
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ONE="$ROOT/one.sh"
