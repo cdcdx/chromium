@@ -250,10 +250,9 @@ KERNELHOST_PROJ = {
     'linux': LINUX_KERNELHOST_PROJ,
     'win': ('Windows', 'NomadBrowser.Windows.KernelHost', 'NomadBrowser.Windows.KernelHost.csproj'),
 }
-WINDOWS_KERNELHOST_EXTRA_SOURCES = (
-    'NomadBrowser.Arupa/ArupaNativeSkills.cs',
-    'NomadBrowser.Foundation/Contracts/INativeExtensionSkills.cs',
-)
+# 仅允许 Windows 独有的宿主编译源。技能实现与接口已改为三端共享（ArupaNativeSkills
+# 在 Linux 侧条件编译为空），不能再列入此表，否则会被从 Windows 集合里减掉而误报缺失。
+WINDOWS_KERNELHOST_EXTRA_SOURCES = ()
 
 
 def kernelhost_sources(project):
@@ -1049,12 +1048,16 @@ def desktop_provenance(root, args, target_os, arch, version):
 
 
 def delivery_base(identity):
-    """构建目录与交付目录的公共名字：nomad-<os>-<arch>-<version>-<release|debug>。
+    """构建目录与交付目录的公共名字：nomad-<os>-<arch>-<version>-<release|debug>[-prod]。
 
     统一用产品名 nomad（不再带 nomad_desktop / nomad_android 的项目名），桌面与 Android
-    靠 os 字段区分，release/debug 靠 variant 区分；交付目录名再追加 -<序号>。"""
-    return (f"nomad-{identity['os']}-{identity['arch']}-"
+    靠 os 字段区分，release/debug 靠 variant 区分；交付目录名再追加 -<序号>。
+    生产包额外带 -prod 后缀，避免与默认的测试包互相覆盖或清理。"""
+    name = (f"nomad-{identity['os']}-{identity['arch']}-"
             f"{identity['version']}-{identity['variant']}")
+    if identity.get('env', 'test') != 'test':
+        name += f"-{identity['env']}"
+    return name
 
 
 def package(args, output, identity, *, source_root=None):
@@ -1176,8 +1179,14 @@ def run(root, args, project, target_os, arches, version, actions):
         F.err('--args 仅用于 Arupa 内核；浏览器通过交付件消费内核')
     if project == 'nomad_android' and args.delivery:
         F.err('Android 请将内核交付接入 app/libs/kernel/<arch> 并更新 runtime-manifest.json；--delivery 用于 PC')
+    # 环境由构建入口统一指定（默认 test），覆盖 start.sh 预设值；bundle / updater /
+    # KernelHost 等嵌套 dotnet 进程都从环境变量继承，无需逐条传 -p。
+    # 注意 CLI 用 test/prod 命名产物目录，而 MSBuild 只接受 Test/Production，两者需显式映射。
+    env = 'prod' if getattr(args, 'env', 'test') == 'prod' else 'test'
+    os.environ['NomadApiEnvironment'] = 'Production' if env == 'prod' else 'test'
     for arch in arches:
-        identity = {'project': project, 'os': target_os, 'arch': arch, 'version': version, 'variant': args.variant}
+        identity = {'project': project, 'os': target_os, 'arch': arch, 'version': version,
+                    'variant': args.variant, 'env': env}
         # 构建目录与交付目录同名（交付再追加 -<序号>），便于按同一个名字定位产物。
         output = root / 'out' / delivery_base(identity)
         if 'build' in actions:

@@ -43,6 +43,8 @@ def build_parser():
     p.add_argument("--delivery", type=Path, help="PC 浏览器使用的桌面内核交付包")
     p.add_argument("--pc-project", type=Path, help="PC 浏览器主 csproj；默认按系统定位")
     p.add_argument("--variant", choices=("debug", "release"), default="release", help="浏览器构建配置")
+    p.add_argument("--env", choices=("test", "prod"), default="test",
+                   help="浏览器后端环境：test 编译测试包（默认），prod 编译生产包；产物目录会加 -prod 后缀")
     p.add_argument("--no-web", action="store_true", help="PC 浏览器复用已有 WebUI 资源")
     p.add_argument("-y", "--yes", action="store_true", help="发现其它编译进程时自动关闭而不逐一确认")
     p.add_argument("--dotnet", help="PC 浏览器的 dotnet 可执行文件；默认 dotnet_path 配置或 PATH")
@@ -478,6 +480,8 @@ def main(argv=None):
     # 浏览器工程与内核工程按前缀区分：arupa_* 是内核，nomad_* 是浏览器外壳。
     is_browser = project in ("nomad_desktop", "nomad_android")
     is_android = project in ("arupa_android", "nomad_android")
+    if args.env == "prod" and not is_browser:
+        p.error("--env 仅用于 nomad_* 浏览器工程")
     target_os = args.os or ("android" if is_android else F.HOST_OS)
     target_os = normalize_os(target_os)
     if target_os not in MATRIX or is_android != (target_os == "android"):
