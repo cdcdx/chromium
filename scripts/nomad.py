@@ -713,15 +713,23 @@ def prepare_update_sdk(repo, dotnet):
         return
     target = repo / 'artifacts' / 'update-sdk' / 'packages'
     cache = global_packages_directory(dotnet, repo)
+    target.mkdir(parents=True, exist_ok=True)
+    # nomad_updateserver/start.sh 用 dotnet pack 直接输出到这个目录，文件名沿用
+    # PackageId 的大小写（NomadBrowser.Update.Agent.0.1.19.nupkg）；统一改成小写，
+    # 与 NuGet 全局缓存及下面的文件名约定保持一致。
+    for item in target.glob('*.nupkg'):
+        if item.name != item.name.lower():
+            item.rename(target / item.name.lower())
 
-    def present(root):
-        return all((root / f'{name.lower()}.{version}.nupkg').is_file() for name in UPDATE_SDK_PACKAGES)
+    def present():
+        return all((target / f'{name.lower()}.{version}.nupkg').is_file()
+                   for name in UPDATE_SDK_PACKAGES)
 
     def cached():
         return all((cache / name.lower() / version / f'{name.lower()}.{version}.nupkg').is_file()
                    for name in UPDATE_SDK_PACKAGES)
 
-    if not present(target):
+    if not present():
         feed = os.environ.get('NOMAD_UPDATE_SDK_FEED', '').strip()
         if not feed:
             F.err(f'缺少独立更新 SDK {version}: {", ".join(UPDATE_SDK_PACKAGES)}\n'
@@ -735,7 +743,6 @@ def prepare_update_sdk(repo, dotnet):
         F.log(f'预热 NuGet 全局缓存（本地 feed: {target}）')
         restore_update_sdk(dotnet, version,
                            [('update-sdk-local', str(target)), ('nuget.org', 'https://api.nuget.org/v3/index.json')])
-    target.mkdir(parents=True, exist_ok=True)
     for name in UPDATE_SDK_PACKAGES:
         source = cache / name.lower() / version / f'{name.lower()}.{version}.nupkg'
         destination = target / source.name
