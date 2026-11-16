@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 编译入口（macOS / Linux）—— 与 start.ps1 功能一一对应，仅转发到 build.sh
-# 用法: ./start.sh [arupa|nomad|publish|all] [release|debug]
+# 用法: ./start.sh [arupa|nomad|publish|all] [release|debug] [test|prod]
 set -euo pipefail
 
 # export NomadApiEnvironment=test
@@ -52,20 +52,43 @@ publish_arupa() {
 }
 
 build_nomad() {
-    local variant="$1"
-    step "nomad build ($variant)" nomad_desktop build --variant "$variant"
-    step "nomad package ($variant)" nomad_desktop package --variant "$variant"
+    local variant="$1" env_name="$2"
+    step "nomad build ($variant, $env_name)" nomad_desktop build --variant "$variant" --env "$env_name"
+    step "nomad package ($variant, $env_name)" nomad_desktop package --variant "$variant" --env "$env_name"
+}
+
+# 与 build.py 的 choices 保持一致；非法值立刻报错，避免构建到一半才失败
+check_variant() {
+    case "$1" in
+        release|debug) ;;
+        *)
+            printf '[ERROR] 未知构建配置: %s（可选 release / debug）\n' "$1" >&2
+            exit 1
+            ;;
+    esac
+}
+
+check_env() {
+    case "$1" in
+        test|prod) ;;
+        *)
+            printf '[ERROR] 未知后端环境: %s（可选 test / prod）\n' "$1" >&2
+            exit 1
+            ;;
+    esac
 }
 
 usage() {
     cat <<'EOF'
-用法: ./start.sh [命令]
+用法: ./start.sh [命令] [构建配置] [后端环境]
 
-  arupa                  编译 + 打包 arupa 内核
-  nomad [release|debug]  编译 + 打包 nomad（默认 release）
-  publish                推送 arupa 交付包
-  all                    编译 arupa + nomad（默认）
-  help                   显示本帮助
+  arupa                            编译 + 打包 arupa 内核
+  nomad [release|debug] [test|prod] 编译 + 打包 nomad（默认 release + test）
+  publish                          推送 arupa 交付包
+  all [release|debug] [test|prod]   编译 arupa + nomad（默认 release + test）
+  help                             显示本帮助
+
+后端环境 prod 会以 --env prod 传递，生成生产包（产物目录带 -prod 后缀）。
 EOF
 }
 
@@ -83,24 +106,23 @@ case "$cmd" in
         ;;
     nomad)
         variant="$(lower "${2:-release}")"
-        case "$variant" in
-            release|debug)
-                acquire_build_lock
-                build_nomad "$variant"
-                ;;
-            *)
-                printf '[ERROR] 未知构建配置: %s（可选 release / debug）\n' "$variant" >&2
-                exit 1
-                ;;
-        esac
+        env_name="$(lower "${3:-test}")"
+        check_variant "$variant"
+        check_env "$env_name"
+        acquire_build_lock
+        build_nomad "$variant" "$env_name"
         ;;
     publish)
         publish_arupa
         ;;
     all)
+        variant="$(lower "${2:-release}")"
+        env_name="$(lower "${3:-test}")"
+        check_variant "$variant"
+        check_env "$env_name"
         acquire_build_lock
         build_arupa
-        build_nomad release
+        build_nomad "$variant" "$env_name"
         ;;
     help|-h|--help)
         usage
