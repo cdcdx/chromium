@@ -706,7 +706,7 @@ def verify_round2_host_contract(routing: dict) -> dict:
         "system.memory.", "fontSettings.", "power.", "sidePanel.",
         "cookies.", "storage.sync.", "storage.managed.",
         "types.ChromeSetting.",
-        "nomadTransfer.", "nomad.", "extension.", "windows.",
+        "nomadTransfer.", "mivpn.", "nomad.", "extension.", "windows.",
         "browsingData.", "management.", "declarativeNetRequest.",
         "contentSettings.", "permissions.", "runtime.")
     unclassified = [m for m in exact_methods
@@ -721,7 +721,7 @@ def verify_round2_host_contract(routing: dict) -> dict:
                       "sidePanel.", "windows.",
                       "management.", "sessions.", "storage.",
                       "contentSettings.", "declarativeNetRequest.",
-                      "nomad.", "nomadTransfer.")
+                      "nomad.", "nomadTransfer.", "mivpn.")
     exact_events = {"runtime.onUpdateAvailable"}
     bad_events = [
         e for e in routing["host_fireable_events"]
