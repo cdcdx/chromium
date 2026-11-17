@@ -700,18 +700,46 @@ def restore_update_sdk(dotnet, version, sources, credentials=None):
             F.err('独立更新 SDK 还原失败（{0}）:\n{1}'.format(version, detail[-4000:]))
 
 
+def copy_bundled_update_sdk(bundled, target, version):
+    """把仓库钉版的 Dependencies/UpdateSdk/<version> 包复制到本地 feed。
+
+    有 manifest.json 时按它校验大小和 sha256（与 Scripts/ci/prepare-update-sdk.mjs
+    的校验一致），目标文件名统一小写，兼容 nuget.config 与全局缓存约定。"""
+    manifest_file = bundled / 'manifest.json'
+    entries = {}
+    if manifest_file.is_file():
+        manifest = json.loads(manifest_file.read_text(encoding='utf-8'))
+        if manifest.get('version') != version:
+            F.err(f'Dependencies/UpdateSdk/{version}/manifest.json 的版本是 {manifest.get("version")}，'
+                  f'与 Config/UpdateSdk.props 的 {version} 不一致')
+        entries = {item['name']: item for item in manifest.get('files', [])}
+    found = {item.name: item for item in bundled.glob('*.nupkg')}
+    for name in UPDATE_SDK_PACKAGES:
+        expected = f'{name}.{version}.nupkg'
+        source = next((item for key, item in found.items() if key.lower() == expected.lower()), None)
+        if source is None:
+            return False
+        entry = entries.get(source.name)
+        if entry:
+            data = source.read_bytes()
+            if len(data) != entry.get('size') or hashlib.sha256(data).hexdigest() != entry.get('sha256'):
+                F.err(f'Dependencies/UpdateSdk/{version}/{source.name} 与 manifest.json 记录的大小或 sha256 不匹配')
+        shutil.copy2(source, target / expected.lower())
+    return True
+
+
 def prepare_update_sdk(repo, dotnet):
     """补齐独立更新 SDK 包：本地 feed + 全局 NuGet 缓存。
 
     v1.3.0 起更新器改为消费 backend 发布的 NomadBrowser.Update.* 包，而本仓库的
     restore 走 build/nuget.config（只有 nuget.org）—— 私有包只能在全局缓存里命中。
-    backend 的 prepare-update-sdk.ps1 需要 pwsh 和源码/源配置，这里直接用
-    NOMAD_UPDATE_SDK_FEED（私有源再加 NOMAD_UPDATE_SDK_CREDENTIALS）把包取下来，
-    同时把 nupkg 落进 artifacts/update-sdk/packages 供仓库 nuget.config 使用。"""
+    包来源依次为：Dependencies/UpdateSdk/<version>（仓库钉版，manifest 校验）、
+    NOMAD_UPDATE_SDK_FEED（私有源再加 NOMAD_UPDATE_SDK_CREDENTIALS）、已有本地 feed。"""
     version = update_sdk_version(repo)
     if not version or F.DRY_RUN:
         return
     target = repo / 'artifacts' / 'update-sdk' / 'packages'
+    bundled = repo / 'Dependencies' / 'UpdateSdk' / version
     cache = global_packages_directory(dotnet, repo)
     target.mkdir(parents=True, exist_ok=True)
     # nomad_updateserver/start.sh 用 dotnet pack 直接输出到这个目录，文件名沿用
@@ -729,13 +757,15 @@ def prepare_update_sdk(repo, dotnet):
         return all((cache / name.lower() / version / f'{name.lower()}.{version}.nupkg').is_file()
                    for name in UPDATE_SDK_PACKAGES)
 
+    if not present() and bundled.is_dir() and copy_bundled_update_sdk(bundled, target, version):
+        F.log(f'使用仓库自带 SDK {version}: {bundled}')
     if not present():
         feed = os.environ.get('NOMAD_UPDATE_SDK_FEED', '').strip()
         if not feed:
             F.err(f'缺少独立更新 SDK {version}: {", ".join(UPDATE_SDK_PACKAGES)}\n'
                   f'  release 出包用的 build/nuget.config 只挂 nuget.org，这些私有包只能在全局缓存里命中。\n'
-                  f'  请设置 NOMAD_UPDATE_SDK_FEED（私有源再加 NOMAD_UPDATE_SDK_CREDENTIALS），'
-                  f'或把 prepare-update-sdk.ps1 生成的 .nupkg 放进 {target}')
+                  f'  请把四个包（附 manifest.json）放进 {bundled}，或设置 NOMAD_UPDATE_SDK_FEED'
+                  f'（私有源再加 NOMAD_UPDATE_SDK_CREDENTIALS），或直接放进 {target}')
         F.log(f'还原独立更新 SDK {version}: {feed}')
         restore_update_sdk(dotnet, version, [('update-sdk', feed)],
                            os.environ.get('NOMAD_UPDATE_SDK_CREDENTIALS'))
