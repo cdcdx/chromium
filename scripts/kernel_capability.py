@@ -708,7 +708,7 @@ def verify_round2_host_contract(routing: dict) -> dict:
         "types.ChromeSetting.",
         "nomadTransfer.", "mivpn.", "nomad.", "extension.", "windows.",
         "browsingData.", "management.", "declarativeNetRequest.",
-        "contentSettings.", "permissions.", "runtime.")
+        "contentSettings.", "permissions.", "runtime.", "webstorePrivate.")
     unclassified = [m for m in exact_methods
                     if not any(m.startswith(p) for p in result_families)]
     if unclassified:
