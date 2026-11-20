@@ -1,5 +1,8 @@
 # 系统公共配置；target_cpu 和 is_component_build 由构建入口按参数替换。
 target_os = "android"
+# Keep the native loader contract consistent with the API 26 AAR manifest.
+default_min_sdk_version = 26
+android_ndk_api_level = 26
 target_cpu = "arm64"
 # android只有静态构建
 is_component_build = false

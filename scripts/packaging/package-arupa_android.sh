@@ -248,6 +248,11 @@ for cpu in "${ARCHS[@]}"; do
   # AAR（唯一交付件：jni/<abi>/libarupakernel.so + classes.jar + assets/资源 apk）
   aar="${OUT}/apks/arupa-kernel.aar"
   [[ -f "${aar}" ]] || err "缺 ${aar}（ninja 目标 chrome/browser/arupa_android/aar:arupa_kernel_aar 没编）"
+  # Verify the actual AAR (all JNI libraries), not only its declared minSdk.
+  python3 "${ROOT_DIR}/scripts/android_native_compatibility.py" \
+    --aar "${aar}" --args "${OUT}/args.gn" \
+    --output "${dest}/platform-compatibility.json" \
+    || err "Android 原生兼容门禁失败（最低 API / 系统依赖 / 16KB ELF）"
   cp -f "${aar}" "${dest}/arupa-kernel.aar"
   log "  arupa-kernel.aar            $(du -h "${aar}" | cut -f1)"
 
